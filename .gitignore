@@ -1,0 +1,45 @@
+# JavaScript / TypeScript
+node_modules/
+.bun/
+dist/
+build/
+coverage/
+*.tsbuildinfo
+
+# Rust / Tauri
+target/
+**/target/
+
+# 构建与发布产物
+artifacts/
+release/
+*.exe
+*.msi
+*.msix
+*.dmg
+*.AppImage
+*.deb
+*.rpm
+
+# 环境变量与凭证
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# 本地会话、缓存与日志
+.aizen/
+.private/
+sessions/
+*.log
+*.tmp
+*.cache
+
+# 编辑器与操作系统
+.worktrees/
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+Desktop.ini
