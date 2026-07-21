@@ -7,8 +7,9 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent"
-import { DEFAULT_VIEW } from "../../core/src/default-view.ts"
-import { startMockServer } from "../../../tests/contract/mock-server.ts"
+import { startMockServer } from "../../tests/contract/mock-server.ts"
+
+const gateViewText = "AizenAssistant 架构门禁视图"
 
 export async function checkPiSdk(): Promise<string> {
   let inlineExtensionLoaded = false
@@ -33,12 +34,12 @@ export async function checkPiSdk(): Promise<string> {
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    systemPromptOverride: () => DEFAULT_VIEW,
+    systemPromptOverride: () => gateViewText,
   })
   await loader.reload()
 
   if (!inlineExtensionLoaded) throw new Error("内联扩展工厂未执行")
-  if (loader.getSystemPrompt() !== DEFAULT_VIEW) throw new Error("内置视图未进入 ResourceLoader")
+  if (loader.getSystemPrompt() !== gateViewText) throw new Error("内置视图未进入 ResourceLoader")
 
   const modelRuntime = await ModelRuntime.create()
   const model = modelRuntime.getModels().find((m) => m.provider === "anthropic" && m.id === "claude-sonnet-4-6")

@@ -1,7 +1,7 @@
 import { PhotonImage } from "@silvia-odwyer/photon-node"
-import { type GateReport, check } from "../../../packages/core/src/gate-types.ts"
-import { checkPiSdk, checkMockServer } from "../../../packages/pi-adapter/src/gate.ts"
-import { checkOpenTui } from "../../../packages/tui-kit/src/gate.ts"
+import { type GateReport, check } from "../../packages/core/gate-types.ts"
+import { checkPiSdk, checkMockServer } from "../../packages/pi-adapter/gate.ts"
+import { checkOpenTui } from "../../packages/tui-kit/gate.ts"
 
 function checkPhoton(): string {
   const image = new PhotonImage(new Uint8Array([255, 0, 0, 255]), 1, 1)

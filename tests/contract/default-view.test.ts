@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { DEFAULT_VIEW } from "../../packages/core/src/default-view.ts"
+import { DEFAULT_VIEW } from "./fixtures/default-view.ts"
 
 test("内置视图以文本资源导入", () => {
   expect(DEFAULT_VIEW).toContain("AizenAssistant 架构门禁")
