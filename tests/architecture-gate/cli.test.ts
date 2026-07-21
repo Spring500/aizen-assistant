@@ -10,4 +10,5 @@ test("CLI 输出单行 JSON 门禁报告", () => {
   expect(report.checks.piSdk.passed).toBeTrue()
   expect(report.checks.openTui.passed).toBeTrue()
   expect(report.checks.photonWasm.passed).toBeTrue()
+  expect(report.checks.mockServer.passed).toBeTrue()
 })

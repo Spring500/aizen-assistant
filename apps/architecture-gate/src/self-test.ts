@@ -11,12 +11,14 @@ import { createTestRenderer } from "@opentui/core/testing"
 import { TextRenderable } from "@opentui/core"
 import { PhotonImage } from "@silvia-odwyer/photon-node"
 import { DEFAULT_VIEW } from "./default-view.ts"
+import { startMockServer } from "./mock-server.ts"
 
 export type GateCheck = { passed: boolean; detail: string }
 export type GateReport = {
   piSdk: GateCheck
   openTui: GateCheck
   photonWasm: GateCheck
+  mockServer: GateCheck
 }
 
 async function check(name: string, operation: () => Promise<string> | string): Promise<GateCheck> {
@@ -109,11 +111,43 @@ function checkPhoton(): string {
   }
 }
 
+async function checkMockServer(): Promise<string> {
+  const expectedText = "架构门禁 Mock 链路通过"
+  const mock = startMockServer(expectedText)
+  try {
+    const body = JSON.stringify({
+      model: "claude-sonnet-4-6",
+      messages: [{ role: "user", content: "test" }],
+      max_tokens: 10,
+      stream: true,
+    })
+    const response = await fetch(`${mock.url}/v1/messages`, {
+      method: "POST",
+      headers: {
+        "x-api-key": "dummy",
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json",
+      },
+      body,
+    })
+    if (!response.ok) throw new Error(`Mock 返回 HTTP ${response.status}`)
+
+    const text = await response.text()
+    if (!text.includes(expectedText)) {
+      throw new Error(`Mock 响应不匹配，期望包含 "${expectedText}"，实际前 200 字符为 "${text.substring(0, 200)}"`)
+    }
+    return `Mock HTTP stream=true; expectedText="${expectedText}"`
+  } finally {
+    mock.stop()
+  }
+}
+
 export async function runSelfTest(): Promise<GateReport> {
   return {
     piSdk: await check("piSdk", checkPiSdk),
     openTui: await check("openTui", checkOpenTui),
     photonWasm: await check("photonWasm", checkPhoton),
+    mockServer: await check("mockServer", checkMockServer),
   }
 }
 
