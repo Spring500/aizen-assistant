@@ -1,3 +1,5 @@
+export {}
+
 const hook = Bun.file(".githooks/pre-push")
 if (!(await hook.exists())) throw new Error("pre-push 钩子不存在")
 
