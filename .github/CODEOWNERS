@@ -1,0 +1,5 @@
+* @Spring500
+/packages/core/ @Spring500
+/packages/pi-adapter/ @Spring500
+/packages/protocol/ @Spring500
+/.github/ @Spring500
