@@ -1,14 +1,31 @@
 import { expect, test } from "bun:test"
+import { startMockServer } from "../../apps/architecture-gate/src/mock-server.ts"
 
-test("CLI 输出单行 JSON 门禁报告", () => {
-  const result = Bun.spawnSync({ cmd: ["bun", "run", "apps/architecture-gate/src/main.ts", "--self-test"] })
-  expect(result.exitCode).toBe(0)
-  const output = new TextDecoder().decode(result.stdout).trim().split(/\r?\n/).at(-1)
-  expect(output).toBeDefined()
-  const report = JSON.parse(output ?? "{}")
-  expect(report.passed).toBeTrue()
-  expect(report.checks.piSdk.passed).toBeTrue()
-  expect(report.checks.openTui.passed).toBeTrue()
-  expect(report.checks.photonWasm.passed).toBeTrue()
-  expect(report.checks.mockServer.passed).toBeTrue()
-})
+const expectedText = "架构门禁 CLI 端到端通过"
+
+test("编译产物 --prompt 模式对接 mock 并通过 pi provider 返回正确文本", async () => {
+  const mock = startMockServer(expectedText)
+  try {
+    const proc = Bun.spawn({
+      cmd: [
+        "./dist/aizen-architecture-gate.exe",
+        "--prompt",
+        "--base-url",
+        mock.url,
+        "--api-key",
+        "dummy",
+        "--message",
+        "hello",
+      ],
+    })
+    const exitCode = await proc.exited
+    const stdout = await new Response(proc.stdout).text()
+    const stderr = await new Response(proc.stderr).text()
+    if (exitCode !== 0) {
+      throw new Error(`exit=${exitCode} stderr=${stderr}`)
+    }
+    expect(stdout.trim()).toBe(expectedText)
+  } finally {
+    mock.stop()
+  }
+}, 30000)
