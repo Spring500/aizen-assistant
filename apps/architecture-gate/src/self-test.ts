@@ -23,7 +23,7 @@ async function check(name: string, operation: () => Promise<string> | string): P
   try {
     return { passed: true, detail: await operation() }
   } catch (error) {
-    const detail = error instanceof Error ? error.stack ?? error.message : String(error)
+    const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
     return { passed: false, detail: `${name}: ${detail}` }
   }
 }
