@@ -1,7 +1,8 @@
-import { existsSync, mkdirSync, copyFileSync, rmSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs"
+import { randomUUID } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { randomUUID } from "node:crypto"
+import { startMockServer } from "../contract/mock-server.ts"
 
 const exePath = "dist/aizen-tui.exe"
 if (!existsSync(exePath)) {
@@ -14,32 +15,30 @@ mkdirSync(sandbox)
 const executable = join(sandbox, "aizen-tui.exe")
 copyFileSync(exePath, executable)
 
+const mockResponseText = "分发验证：单文件无外部运行时"
+const mock = startMockServer(mockResponseText)
+
 try {
   const systemRoot = process.env.SystemRoot ?? "C:\\Windows"
-  const result = Bun.spawnSync({
-    cmd: [executable, "--self-test"],
+  const proc = Bun.spawn({
+    cmd: [executable, "--base-url", mock.url, "--api-key", "dummy", "--message", "hello"],
     env: { PATH: `${systemRoot}\\System32`, SystemRoot: systemRoot },
+    stdin: "ignore",
   })
+  const exitCode = await proc.exited
+  const stdout = (await new Response(proc.stdout).text()).trim()
+  const stderr = await new Response(proc.stderr).text()
 
-  if (result.exitCode !== 0) {
-    console.error("自检失败")
+  if (exitCode !== 0) {
+    console.error(`自检失败：exit=${exitCode} stderr=${stderr}`)
     process.exit(1)
   }
 
-  const output = new TextDecoder().decode(result.stdout).trim()
-  const lines = output.split(/\r?\n/)
-  const lastLine = lines[lines.length - 1]
-  if (!lastLine) {
-    console.error("产物无输出")
-    process.exit(1)
-  }
-  const report = JSON.parse(lastLine)
-  if (!report.passed) {
-    console.error("存在失败检查")
+  if (stdout !== mockResponseText) {
+    console.error(`输出不匹配，期望 "${mockResponseText}"，实际 "${stdout}"`)
     process.exit(1)
   }
 
-  const { readdirSync } = await import("node:fs")
   const files = readdirSync(sandbox)
   if (files.length !== 1 || files[0] !== "aizen-tui.exe") {
     console.error("产物依赖同目录附加文件")
@@ -48,5 +47,6 @@ try {
 
   console.log("单文件无外部运行时验证通过")
 } finally {
+  mock.stop()
   rmSync(sandbox, { recursive: true, force: true })
 }
