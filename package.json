@@ -15,7 +15,9 @@
     "lint": "biome lint .",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
-    "verify": "bun run check:config && bun run format:check && bun run lint && bun run typecheck && bun test"
+    "verify": "bun run check:config && bun run format:check && bun run lint && bun run typecheck && bun test",
+    "hooks:install": "git config core.hooksPath .githooks",
+    "hooks:test": "bun run scripts/repo/test-pre-push.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
