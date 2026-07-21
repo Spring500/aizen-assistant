@@ -1,14 +1,14 @@
 $ErrorActionPreference = "Stop"
-$source = Join-Path $PSScriptRoot "..\..\dist\aizen-architecture-gate.exe"
+$source = Join-Path $PSScriptRoot "..\..\dist\aizen-tui.exe"
 if (-not (Test-Path -LiteralPath $source)) {
   throw "架构门禁产物不存在：$source"
 }
 
-$sandbox = Join-Path $env:TEMP ("aizen-architecture-gate-" + [guid]::NewGuid())
+$sandbox = Join-Path $env:TEMP ("aizen-tui-" + [guid]::NewGuid())
 $oldPath = $env:PATH
 try {
   New-Item -ItemType Directory -Path $sandbox | Out-Null
-  $executable = Join-Path $sandbox "aizen-architecture-gate.exe"
+  $executable = Join-Path $sandbox "aizen-tui.exe"
   Copy-Item -LiteralPath $source -Destination $executable
 
   $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
@@ -32,7 +32,7 @@ try {
   }
 
   $files = @(Get-ChildItem -File -LiteralPath $sandbox)
-  if ($files.Count -ne 1 -or $files[0].Name -ne "aizen-architecture-gate.exe") {
+  if ($files.Count -ne 1 -or $files[0].Name -ne "aizen-tui.exe") {
     throw "产物依赖同目录附加文件"
   }
 

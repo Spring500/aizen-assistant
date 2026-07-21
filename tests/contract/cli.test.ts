@@ -1,22 +1,13 @@
 import { expect, test } from "bun:test"
-import { startMockServer } from "../../apps/architecture-gate/src/mock-server.ts"
+import { startMockServer } from "./mock-server.ts"
 
 const expectedText = "架构门禁 CLI 端到端通过"
 
-test("编译产物 --prompt 模式对接 mock 并通过 pi provider 返回正确文本", async () => {
+test("编译产物 --plain 模式对接 mock 并通过 pi provider 返回正确文本", async () => {
   const mock = startMockServer(expectedText)
   try {
     const proc = Bun.spawn({
-      cmd: [
-        "./dist/aizen-architecture-gate.exe",
-        "--prompt",
-        "--base-url",
-        mock.url,
-        "--api-key",
-        "dummy",
-        "--message",
-        "hello",
-      ],
+      cmd: ["./dist/aizen-tui.exe", "--base-url", mock.url, "--api-key", "dummy", "--message", "hello"],
     })
     const exitCode = await proc.exited
     const stdout = await new Response(proc.stdout).text()

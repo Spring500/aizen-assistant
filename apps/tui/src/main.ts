@@ -1,13 +1,23 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent"
+import { runSelfTest, isGatePassed } from "./gate.ts"
 
 const args = process.argv.slice(2)
+
+if (args.includes("--self-test")) {
+  const checks = await runSelfTest()
+  const passed = isGatePassed(checks)
+  console.log(JSON.stringify({ passed, checks }))
+  if (!passed) process.exitCode = 1
+  process.exit()
+}
 
 const baseUrl = args[args.indexOf("--base-url") + 1]
 const apiKey = args[args.indexOf("--api-key") + 1] ?? process.env.ANTHROPIC_API_KEY
 const message = args[args.indexOf("--message") + 1]
 
 if (!baseUrl || !apiKey || !message) {
-  console.error("用法：aizen-architecture-gate.exe --prompt --base-url <url> --api-key <key> --message <text>")
+  console.error("用法：aizen-tui.exe --plain --base-url <url> --api-key <key> --message <text>")
+  console.error("  aizen-tui.exe --self-test")
   console.error("  --api-key 可选填，也可通过环境变量 ANTHROPIC_API_KEY 传入")
   process.exit(2)
 }
