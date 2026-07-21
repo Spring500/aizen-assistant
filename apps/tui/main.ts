@@ -1,46 +1,54 @@
-import { ModelRuntime } from "@earendil-works/pi-coding-agent"
-import { runSelfTest, isGatePassed } from "./gate.ts"
+import { completeOnce, type CompleteOnceResult } from "../../packages/pi-adapter/complete.ts"
+import { createInteractiveRenderer, promptLine } from "../../packages/tui-kit/interactive.ts"
 
 const args = process.argv.slice(2)
 
-if (args.includes("--self-test")) {
-  const checks = await runSelfTest()
-  const passed = isGatePassed(checks)
-  console.log(JSON.stringify({ passed, checks }))
-  if (!passed) process.exitCode = 1
-  process.exit()
+function getFlagValue(flag: string): string | undefined {
+  const index = args.indexOf(flag)
+  return index === -1 ? undefined : args[index + 1]
 }
 
-const baseUrl = args[args.indexOf("--base-url") + 1]
-const apiKey = args[args.indexOf("--api-key") + 1] ?? process.env.ANTHROPIC_API_KEY
-const message = args[args.indexOf("--message") + 1]
+function reportAndExit(result: CompleteOnceResult): never {
+  if (!result.text) {
+    console.error(JSON.stringify({ stopReason: result.stopReason, errorMessage: result.errorMessage }))
+    process.exit(1)
+  }
+  console.log(result.text)
+  process.exit(0)
+}
+
+if (args.length === 0) {
+  // 交互模式：通过 OpenTUI 分步收集 base-url / api-key / message，用于验证
+  // OpenTUI 在编译后的单文件 exe 中能否接收真实键盘输入。
+  const renderer = await createInteractiveRenderer()
+  const baseUrl = await promptLine(renderer, "prompt-base-url", "Base URL: ")
+  const apiKey = await promptLine(renderer, "prompt-api-key", "API Key: ", { mask: true })
+  const message = await promptLine(renderer, "prompt-message", "Message: ")
+  renderer.destroy()
+
+  try {
+    reportAndExit(await completeOnce(baseUrl, apiKey, message))
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exit(1)
+  }
+}
+
+const baseUrl = getFlagValue("--base-url")
+const apiKey = getFlagValue("--api-key") ?? process.env.ANTHROPIC_API_KEY
+const message = getFlagValue("--message")
 
 if (!baseUrl || !apiKey || !message) {
-  console.error("用法：aizen-tui.exe --plain --base-url <url> --api-key <key> --message <text>")
-  console.error("  aizen-tui.exe --self-test")
+  console.error("用法：")
+  console.error("  aizen-tui.exe")
+  console.error("  aizen-tui.exe --base-url <url> --api-key <key> --message <text>")
   console.error("  --api-key 可选填，也可通过环境变量 ANTHROPIC_API_KEY 传入")
   process.exit(2)
 }
 
-const modelRuntime = await ModelRuntime.create()
-const sourceModel = modelRuntime.getModels().find((m) => m.provider === "anthropic" && m.id === "claude-sonnet-4-6")
-if (!sourceModel) {
-  console.error("固定测试模型不存在")
+try {
+  reportAndExit(await completeOnce(baseUrl, apiKey, message))
+} catch (error) {
+  console.error(error instanceof Error ? error.message : String(error))
   process.exit(1)
 }
-
-sourceModel.baseUrl = baseUrl
-process.env.ANTHROPIC_API_KEY = apiKey
-
-const result = await modelRuntime.complete(
-  sourceModel,
-  { messages: [{ role: "user" as const, content: message, timestamp: Date.now() }] },
-  { auth: { apiKey } },
-)
-
-const responseText = result.content?.[0] && "text" in result.content[0] ? result.content[0].text : ""
-if (!responseText) {
-  console.error(JSON.stringify({ stopReason: result.stopReason, errorMessage: result.errorMessage }))
-  process.exit(1)
-}
-console.log(responseText)

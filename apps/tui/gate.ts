@@ -27,5 +27,5 @@ export async function runSelfTest(): Promise<GateReport> {
 }
 
 export function isGatePassed(report: GateReport): boolean {
-  return Object.values(report).every((item) => item.passed)
+  return report.piSdk.passed && report.openTui.passed && report.photonWasm.passed && report.mockServer.passed
 }
