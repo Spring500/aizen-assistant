@@ -1,4 +1,4 @@
-// TUI 生产入口。M1 阶段只有三种运行方式：
+// TUI 生产入口，三种运行方式：
 //   1. --plain：非交互模式，读取 --base-url/--api-key/--message，发一次
 //      请求、打印结果、退出（供日志、管道、CI 使用）。
 //   2. 不带任何参数：OpenTUI 交互模式，分步收集同样三项参数。
@@ -55,9 +55,10 @@ async function runOnce(baseUrl: string, apiKey: string, message: string): Promis
 }
 
 if (isPlain) {
-  // --plain：非交互输出，供日志、管道、CI 使用（见方案与路线图 §3.4）。
-  // M1 阶段的行为是"读取三个参数、发一次请求、打印结果、退出"；M2 重做
-  // TUI 时，--plain 的语义不变，但底层会换成走真实的流式 prompt。
+  // --plain 是非交互、脚本友好的入口：读三个参数、发一次请求、打印结果、
+  // 退出，没有任何交互等待，适合日志、管道、CI 场景。这个"非交互"的
+  // 定位是稳定的；如果以后请求逻辑换成支持流式输出，--plain 仍然只在
+  // 请求结束后一次性打印最终结果，不会变成交互式等待。
   const baseUrl = getFlagValue("--base-url")
   const apiKey = getFlagValue("--api-key") ?? process.env.ANTHROPIC_API_KEY
   const message = getFlagValue("--message")
@@ -69,8 +70,8 @@ if (isPlain) {
   printUsageAndExit()
 } else {
   // 默认：OpenTUI 交互模式。分步收集 base-url / api-key（遮盖显示）/
-  // message，用于验证 OpenTUI 在编译后的单文件 exe 中能否接收真实键盘
-  // 输入。M2 会把这里扩展成真正的聊天界面。
+  // message，验证 OpenTUI 在编译后的单文件 exe 中能接收真实键盘输入。
+  // 目前只是"问完三项就发一次请求"，还不是完整的多轮聊天界面。
   const renderer = await createInteractiveRenderer()
   const baseUrl = await promptLine(renderer, "prompt-base-url", "Base URL: ")
   const apiKey = await promptLine(renderer, "prompt-api-key", "API Key: ", { mask: true })

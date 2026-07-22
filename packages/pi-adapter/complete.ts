@@ -1,7 +1,7 @@
 import { ModelRuntime } from "@earendil-works/pi-coding-agent"
 
-// M1 阶段固定使用这一个模型：--plain/交互模式都还没有做模型选择功能，
-// 先用一个确定的模型把请求链路跑通。
+// 目前没有模型选择功能：--plain 和交互模式都还不支持用户挑选模型，
+// 先固定用这一个模型把请求链路跑通。
 const fixedModelId = "claude-sonnet-4-6"
 
 export type CompleteOnceResult = {
