@@ -4,6 +4,8 @@
     "module": "Preserve",
     "moduleResolution": "Bundler",
     "strict": true,
+    // 绕过 pi SDK 传递依赖的类型不兼容（Bun vs Node：undici、eventemitter、fetch 等 .d.ts 冲突）
+    "skipLibCheck": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "verbatimModuleSyntax": true,
