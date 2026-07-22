@@ -16,19 +16,15 @@ const executable = join(sandbox, "aizen-tui.exe")
 copyFileSync(exePath, executable)
 
 const mockResponseText = "分发验证：单文件无外部运行时"
-const mock = startMockServer(mockResponseText)
+const mock = await startMockServer(mockResponseText)
 
 try {
   const systemRoot = process.env.SystemRoot ?? "C:\\Windows"
-  // 必须用 Bun.spawn（异步），不能用 Bun.spawnSync。
-  // spawnSync 会同步阻塞本进程的整个 JS 主线程；本进程同时用 Bun.serve
-  // 跑着上面的 mock server，一旦阻塞，mock server 的请求回调就没有机会
-  // 执行——子进程发出的 HTTP 请求永远等不到响应，父进程又要等子进程退出
-  // 才能解除阻塞，形成死锁（父等子、子等父）。已实测验证：换成
-  // spawnSync 会在本地和 CI 上永久挂起，与 Windows/Bun 版本无关，是单
-  // 线程事件循环下的必然结果，不是 Bun 的缺陷。详见 REVIEW_PLAN 缺陷 9。
+  // 用 Bun.spawn（异步）而非 Bun.spawnSync：mock server 已经跑在独立
+  // Worker 线程里（见 mock-server.ts），本身不会被这里的同步阻塞影响；
+  // 选异步纯粹是不阻塞本进程主线程的一般实践，非规避死锁的硬性要求。
   const proc = Bun.spawn({
-    cmd: [executable, "--base-url", mock.url, "--api-key", "dummy", "--message", "hello"],
+    cmd: [executable, "--plain", "--base-url", mock.url, "--api-key", "dummy", "--message", "hello"],
     env: { PATH: `${systemRoot}\\System32`, SystemRoot: systemRoot },
     stdin: "ignore",
   })
