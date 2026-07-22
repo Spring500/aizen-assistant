@@ -26,9 +26,7 @@ import { startMockServer } from "./utils/mock-server.ts"
  * 这些检查测的都是第三方 SDK/库本身的能力（pi SDK 的内联扩展机制、
  * OpenTUI 的原生渲染器、Photon 的 WASM 编码），跟本项目自己写的适配层
  * （packages/pi-adapter、packages/tui-kit）代码基本无关，所以整体放在
- * tests/ 下，不掺进生产代码目录（历史上这些检查曾经散落在
- * apps/tui、packages/pi-adapter、packages/tui-kit、packages/core 四个
- * 生产目录里，容易让人误以为是产品逻辑，现已合并到这一个文件）。
+ * tests/ 下，不掺进生产代码目录，避免被误认为是产品逻辑的一部分。
  */
 
 /** 单项检查的结果：是否通过，以及成功/失败的详细信息（用于报告与调试）。 */

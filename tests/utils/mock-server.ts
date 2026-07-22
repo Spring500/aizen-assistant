@@ -9,11 +9,11 @@ export type MockServer = {
  * 套 mock 逻辑。
  *
  * 为什么放进 Worker，而不是直接在调用方所在的线程里用 Bun.serve 起服务：
- * 调用方往往需要用 Bun.spawn（或曾经用过的 Bun.spawnSync）去跑被测的编译
- * 产物。同步阻塞调用（如 Bun.spawnSync）会冻住调用方所在线程的整个事件
- * 循环——如果 mock server 也跑在那个线程上，一阻塞，mock server 的请求
- * 回调就没有机会执行，子进程的 HTTP 请求永远等不到响应，父进程又要等子
- * 进程退出才能解除阻塞，构成死锁（排查过程见 REVIEW_PLAN 缺陷 9）。
+ * 调用方往往需要用 Bun.spawn 去跑被测的编译产物。若改用同步阻塞调用（如
+ * Bun.spawnSync），会冻住调用方所在线程的整个事件循环——如果 mock
+ * server 也跑在那个线程上，一阻塞，mock server 的请求回调就没有机会
+ * 执行，子进程的 HTTP 请求永远等不到响应，父进程又要等子进程退出才能
+ * 解除阻塞，构成死锁（父等子、子等父）。
  *
  * 把 mock server 放进独立 Worker 线程后，它有自己独立的事件循环，不会被
  * 主线程上任何同步阻塞调用拖累——不只是 spawnSync，未来任何测试代码里的
