@@ -39,11 +39,13 @@ export function promptLine(
     renderer.root.add(display)
 
     let value = ""
+    // 按当前 value 重新渲染这一行；mask 模式下用等长的 "•" 代替明文。
     const render = () => {
       display.content = `${label}${options.mask ? "•".repeat(value.length) : value}`
     }
     render()
 
+    // 提交（按 Enter）时统一走这里，停止监听按键与粘贴，避免事件泄漏。
     const cleanup = () => {
       renderer.keyInput.off("keypress", onKeyPress)
       renderer.keyInput.off("paste", onPaste)

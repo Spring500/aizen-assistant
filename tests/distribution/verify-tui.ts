@@ -1,8 +1,12 @@
+// 分发验证：把 dist/aizen-tui.exe 复制到一个空白沙箱目录，只保留系统
+// System32 在 PATH 里（模拟"没有预装 Node/Bun"的用户机器），验证它能
+// 独立运行、发起 HTTP 请求并正确输出，且运行期间不依赖同目录下的任何
+// 附加文件（证明确实是单文件分发，不是漏打包）。
 import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { startMockServer } from "../contract/mock-server.ts"
+import { startMockServer } from "../utils/mock-server.ts"
 
 const exePath = "dist/aizen-tui.exe"
 if (!existsSync(exePath)) {

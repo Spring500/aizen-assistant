@@ -1,14 +1,21 @@
+// TUI 生产入口。M1 阶段只有三种运行方式：
+//   1. --plain：非交互模式，读取 --base-url/--api-key/--message，发一次
+//      请求、打印结果、退出（供日志、管道、CI 使用）。
+//   2. 不带任何参数：OpenTUI 交互模式，分步收集同样三项参数。
+//   3. 带了参数但没带 --plain：视为用法错误，报错退出（避免静默猜测意图）。
 import { completeOnce, type CompleteOnceResult } from "../../packages/pi-adapter/complete.ts"
 import { createInteractiveRenderer, promptLine } from "../../packages/tui-kit/interactive.ts"
 
 const args = process.argv.slice(2)
 const isPlain = args.includes("--plain")
 
+/** 取出 `flag` 后面紧跟的那个参数值；`flag` 不存在时返回 undefined。 */
 function getFlagValue(flag: string): string | undefined {
   const index = args.indexOf(flag)
   return index === -1 ? undefined : args[index + 1]
 }
 
+/** 打印用法说明到 stderr 并以退出码 2 结束进程（约定：参数用法错误）。 */
 function printUsageAndExit(): never {
   console.error("用法：")
   console.error("  aizen-tui.exe")
@@ -19,6 +26,11 @@ function printUsageAndExit(): never {
   process.exit(2)
 }
 
+/**
+ * 根据 completeOnce 的结果决定输出与退出码：拿到文本就打印到 stdout 并
+ * 以 0 退出；没拿到文本（请求失败/被拒绝）就把 stopReason/errorMessage
+ * 打到 stderr 并以 1 退出。这是 --plain 和交互模式共用的收尾逻辑。
+ */
 function reportAndExit(result: CompleteOnceResult): never {
   if (!result.text) {
     console.error(JSON.stringify({ stopReason: result.stopReason, errorMessage: result.errorMessage }))
@@ -28,6 +40,11 @@ function reportAndExit(result: CompleteOnceResult): never {
   process.exit(0)
 }
 
+/**
+ * 发起一次补全请求并结束进程：成功走 reportAndExit，异常（比如网络
+ * 连不上、固定模型不存在）打印错误信息后以退出码 1 结束。--plain 与
+ * 交互模式收集完参数后都调用这个函数，行为完全一致。
+ */
 async function runOnce(baseUrl: string, apiKey: string, message: string): Promise<never> {
   try {
     reportAndExit(await completeOnce(baseUrl, apiKey, message))
