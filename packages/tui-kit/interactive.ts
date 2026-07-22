@@ -1,4 +1,4 @@
-import { type CliRenderer, createCliRenderer, type KeyEvent, TextRenderable } from "@opentui/core"
+import { type CliRenderer, createCliRenderer, type KeyEvent, type PasteEvent, TextRenderable } from "@opentui/core"
 
 export type PromptOptions = {
   /** 是否用 "•" 遮盖输入内容（用于 api-key 等敏感字段） */
@@ -23,7 +23,10 @@ export function showLine(renderer: CliRenderer, id: string, content: string): vo
 /**
  * 显示一行 `label` 前缀的单行输入框，等待用户按下 Enter 后返回输入内容。
  *
- * 输入完成后该行保留在屏幕上（形成问答记录），仅停止监听按键事件。
+ * 支持逐字符输入、Backspace 删除，以及终端的粘贴（Ctrl+V / 右键粘贴等）。
+ * 粘贴内容里的换行会被剔除，因为这是单行输入框。
+ *
+ * 输入完成后该行保留在屏幕上（形成问答记录），仅停止监听按键与粘贴事件。
  */
 export function promptLine(
   renderer: CliRenderer,
@@ -41,9 +44,14 @@ export function promptLine(
     }
     render()
 
+    const cleanup = () => {
+      renderer.keyInput.off("keypress", onKeyPress)
+      renderer.keyInput.off("paste", onPaste)
+    }
+
     const onKeyPress = (key: KeyEvent) => {
       if (key.name === "return") {
-        renderer.keyInput.off("keypress", onKeyPress)
+        cleanup()
         resolve(value)
         return
       }
@@ -54,6 +62,14 @@ export function promptLine(
       }
       render()
     }
+
+    const onPaste = (event: PasteEvent) => {
+      const pastedText = new TextDecoder().decode(event.bytes).replace(/\r?\n/g, "")
+      value += pastedText
+      render()
+    }
+
     renderer.keyInput.on("keypress", onKeyPress)
+    renderer.keyInput.on("paste", onPaste)
   })
 }
