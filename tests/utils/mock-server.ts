@@ -5,7 +5,8 @@ export type MockServer = {
 
 /**
  * 在独立的 Worker 线程里启动 mock HTTP server，模拟 Anthropic Messages API
- * 的 SSE 响应。
+ * 的 SSE 响应。供架构可行性验证和 CLI 契约测试复用，避免各处重复实现同一
+ * 套 mock 逻辑。
  *
  * 为什么放进 Worker，而不是直接在调用方所在的线程里用 Bun.serve 起服务：
  * 调用方往往需要用 Bun.spawn（或曾经用过的 Bun.spawnSync）去跑被测的编译
@@ -21,6 +22,8 @@ export type MockServer = {
 export async function startMockServer(responseText: string): Promise<MockServer> {
   const worker = new Worker(new URL("./mock-server-worker.ts", import.meta.url))
 
+  // 等 worker 内部的 Bun.serve 真正开始监听后，再把端口号交给调用方——
+  // 调用方拿到 url 时，mock server 保证已经可以接收请求。
   const url = await new Promise<string>((resolve, reject) => {
     worker.onmessage = (event: MessageEvent<{ type: string; url?: string }>) => {
       if (event.data?.type === "listening" && event.data.url) {
@@ -36,6 +39,7 @@ export async function startMockServer(responseText: string): Promise<MockServer>
   return {
     url,
     stop: () => {
+      // 通知 worker 内部优雅关闭（等待在途请求完成，见 mock-server-worker.ts）。
       worker.postMessage({ type: "stop" })
       // 安全网：Bun 的 Worker 终止机制仍是实验特性（官方文档标注），若
       // worker 未能在合理时间内自行退出，强制终止，避免测试进程挂起。
