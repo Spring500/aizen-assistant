@@ -18,6 +18,10 @@ test("编译产物非交互模式对接 mock 并通过 pi provider 返回正确�
 
   const mock = startMockServer(expectedText)
   try {
+    // 必须用 Bun.spawn（异步），不能用 Bun.spawnSync：本测试进程同时用
+    // Bun.serve 跑着上面的 mock server，spawnSync 会同步阻塞本进程的
+    // JS 主线程，导致 mock server 的请求回调无法执行，子进程的 HTTP
+    // 请求永远等不到响应而死锁。已实测确认，详见 REVIEW_PLAN 缺陷 9。
     const proc = Bun.spawn({
       cmd: [exePath, "--base-url", mock.url, "--api-key", "dummy", "--message", "hello"],
     })

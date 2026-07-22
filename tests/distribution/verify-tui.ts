@@ -20,6 +20,13 @@ const mock = startMockServer(mockResponseText)
 
 try {
   const systemRoot = process.env.SystemRoot ?? "C:\\Windows"
+  // 必须用 Bun.spawn（异步），不能用 Bun.spawnSync。
+  // spawnSync 会同步阻塞本进程的整个 JS 主线程；本进程同时用 Bun.serve
+  // 跑着上面的 mock server，一旦阻塞，mock server 的请求回调就没有机会
+  // 执行——子进程发出的 HTTP 请求永远等不到响应，父进程又要等子进程退出
+  // 才能解除阻塞，形成死锁（父等子、子等父）。已实测验证：换成
+  // spawnSync 会在本地和 CI 上永久挂起，与 Windows/Bun 版本无关，是单
+  // 线程事件循环下的必然结果，不是 Bun 的缺陷。详见 REVIEW_PLAN 缺陷 9。
   const proc = Bun.spawn({
     cmd: [executable, "--base-url", mock.url, "--api-key", "dummy", "--message", "hello"],
     env: { PATH: `${systemRoot}\\System32`, SystemRoot: systemRoot },
