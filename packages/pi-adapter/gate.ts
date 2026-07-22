@@ -68,7 +68,7 @@ export async function checkPiSdk(): Promise<string> {
 
 export async function checkMockServer(): Promise<string> {
   const expectedText = "架构门禁 Mock 链路通过"
-  const mock = startMockServer(expectedText)
+  const mock = await startMockServer(expectedText)
   try {
     const result = await completeOnce(mock.url, "dummy-skip-validation", "test")
     if (!result.text.includes(expectedText)) {
