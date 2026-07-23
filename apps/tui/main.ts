@@ -1,5 +1,5 @@
-import { basename, join } from "node:path"
-import { dataDirectoryFromExecutable } from "../../packages/core/paths.ts"
+import { basename } from "node:path"
+import { resolveDataDirectory } from "../../packages/core/paths.ts"
 import { completeOnce } from "../../packages/pi-adapter/complete.ts"
 import { parseArguments, usage } from "./args.ts"
 import { runInteractiveApp } from "./interactive-app.ts"
@@ -33,14 +33,9 @@ async function main(): Promise<number> {
     console.error("交互模式需要真实终端")
     return 1
   }
-  if (!process.env.AIZEN_DATA_DIR && basename(process.execPath).toLowerCase().startsWith("bun")) {
-    console.error("源码运行交互模式时必须设置 AIZEN_DATA_DIR")
-    return 1
-  }
-  const dataDirectory = process.env.AIZEN_DATA_DIR
-    ? join(process.env.AIZEN_DATA_DIR)
-    : dataDirectoryFromExecutable(process.execPath)
   try {
+    const sourceMode = basename(process.execPath).toLowerCase().startsWith("bun")
+    const dataDirectory = resolveDataDirectory(parsed.dataDirectory, process.execPath, process.cwd(), sourceMode)
     await runInteractiveApp({ cwd: process.cwd(), dataDirectory })
     return 0
   } catch (error) {

@@ -1,8 +1,24 @@
-import { basename, dirname, join, win32 } from "node:path"
+import { basename, dirname, join, resolve, win32 } from "node:path"
 
 export function dataDirectoryFromExecutable(executablePath: string): string {
   const path = /^[A-Za-z]:[\\/]/.test(executablePath) ? win32 : { dirname, join }
   return path.join(path.dirname(executablePath), "data")
+}
+
+export function resolveDataDirectory(
+  specifiedDirectory: string | undefined,
+  executablePath: string,
+  cwd: string,
+  sourceMode: boolean,
+): string {
+  if (!specifiedDirectory) {
+    if (sourceMode) throw new Error("源码运行交互模式时必须传入 --data-dir <目录>")
+    return dataDirectoryFromExecutable(executablePath)
+  }
+  const path = /^[A-Za-z]:[\\/]/.test(cwd) ? win32 : { resolve }
+  const directory = path.resolve(cwd, specifiedDirectory)
+  if (directory === path.resolve(cwd)) throw new Error("数据目录不能是当前工作目录")
+  return directory
 }
 
 export function normalizeProjectPath(cwd: string): string {
