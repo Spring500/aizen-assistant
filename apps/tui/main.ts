@@ -4,10 +4,10 @@ import { completeOnce } from "../../packages/pi-adapter/complete.ts"
 import { parseArguments, usage } from "./args.ts"
 import { runInteractiveApp } from "./interactive-app.ts"
 
-async function main(): Promise<number> {
+export async function main(args: string[] = process.argv.slice(2)): Promise<number> {
   let parsed: ReturnType<typeof parseArguments>
   try {
-    parsed = parseArguments(process.argv.slice(2), process.env)
+    parsed = parseArguments(args, process.env)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     console.error(usage())
@@ -44,4 +44,4 @@ async function main(): Promise<number> {
   }
 }
 
-process.exitCode = await main()
+if (import.meta.main) process.exitCode = await main()
