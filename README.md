@@ -1,8 +1,8 @@
 # AizenAssistant
 
-AizenAssistant 是基于 pi SDK 构建的 AI Agent 应用。项目以无界面的 TypeScript 核心为基础，同时建设自研 TUI 与 Tauri/Vue 桌面 GUI，并支持每轮临时上下文注入和视图式提示词组织。
+AizenAssistant 是基于 pi SDK 构建的 AI Agent 应用。项目以无界面的 TypeScript 核心为基础，同时建设自研 TUI 与 Tauri/Vue 桌面 GUI，并支持每轮额外消息和视图式提示词组织。
 
-项目当前处于初始化阶段，尚未开始代码脚手架与架构可行性验证实施。
+当前已完成架构可行性验证，并建立可保存和恢复会话的自研 TUI 基础。
 
 ## 本地开发
 
@@ -11,6 +11,15 @@ bun install --frozen-lockfile
 bun run hooks:install
 bun run verify
 ```
+
+交互模式：
+
+```powershell
+$env:AIZEN_DATA_DIR = "$PWD\\.local-data"
+bun run apps/tui/main.ts
+```
+
+编译后的 `aizen-tui.exe` 默认使用 exe 同目录的 `data`。`--plain` 是单次、无状态调用，不读写该目录。
 
 协作和 PR 规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 

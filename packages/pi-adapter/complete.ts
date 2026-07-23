@@ -1,3 +1,4 @@
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai"
 import { ModelRuntime } from "@earendil-works/pi-coding-agent"
 
 // 目前没有模型选择功能：--plain 和交互模式都还不支持用户挑选模型，
@@ -21,7 +22,7 @@ export type CompleteOnceResult = {
  * 避免"查找模型 → 设置 baseUrl → 调用 complete → 提取文本"的逻辑重复。
  */
 export async function completeOnce(baseUrl: string, apiKey: string, message: string): Promise<CompleteOnceResult> {
-  const modelRuntime = await ModelRuntime.create()
+  const modelRuntime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null })
   const sourceModel = modelRuntime.getModels().find((m) => m.provider === "anthropic" && m.id === fixedModelId)
   if (!sourceModel) throw new Error("固定测试模型不存在")
 
