@@ -36,3 +36,25 @@ test("聊天视图显示标题、消息、工具状态和错误", async () => {
     setup.renderer.destroy()
   }
 })
+
+test("聊天视图明确显示认证等待状态", async () => {
+  const setup = await createTestRenderer({ width: 60, height: 10 })
+  try {
+    const view = createChatView(setup.renderer)
+    view.update({
+      cwd: "E:\\project",
+      status: "authenticating",
+      sessions: [],
+      models: [],
+      authProviders: [],
+      transcript: [],
+      activeTools: [],
+      streamingText: "",
+      streamingThinking: "",
+    })
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain("等待输入认证信息")
+  } finally {
+    setup.renderer.destroy()
+  }
+})

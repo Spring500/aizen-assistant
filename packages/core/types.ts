@@ -1,4 +1,4 @@
-import type { AuthProviderOption, ModelOption } from "./pi-port.ts"
+import type { AuthPromptOption, AuthProviderOption, ModelOption } from "./pi-port.ts"
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewReference } from "./session-format.ts"
 import type { SessionSummary } from "./session-store.ts"
 
@@ -42,7 +42,14 @@ export type CoreCommand =
 
 export type CoreEvent =
   | { type: "snapshot"; snapshot: CoreSnapshot }
-  | { type: "auth_prompt"; promptId: string; promptType: "text" | "secret" | "select"; message: string }
+  | {
+      type: "auth_prompt"
+      promptId: string
+      promptType: "text" | "secret" | "select"
+      message: string
+      placeholder?: string
+      options?: AuthPromptOption[]
+    }
 
 export type CoreCommandResult = { ok: true } | { ok: false; error: string }
 

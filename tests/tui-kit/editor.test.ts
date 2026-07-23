@@ -33,3 +33,23 @@ test("编辑器发送、中止和忙碌状态", async () => {
     setup.renderer.destroy()
   }
 })
+
+test("编辑器可在选择和认证期间隐藏", async () => {
+  const setup = await createTestRenderer({ width: 60, height: 8 })
+  try {
+    const editor = createChatEditor(setup.renderer, {
+      onSubmit: () => {},
+      onAbort: () => {},
+      onQuit: () => {},
+    })
+    editor.setVisible(false)
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).not.toContain("输入消息")
+    editor.setVisible(true)
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain("输入消息")
+    editor.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})

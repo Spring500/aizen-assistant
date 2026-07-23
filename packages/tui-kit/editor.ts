@@ -9,6 +9,7 @@ export type EditorHandlers = {
 export type ChatEditor = {
   input: TextareaRenderable
   setBusy(busy: boolean): void
+  setVisible(visible: boolean): void
   destroy(): void
 }
 
@@ -43,6 +44,11 @@ export function createChatEditor(renderer: CliRenderer, handlers: EditorHandlers
     input,
     setBusy(value) {
       busy = value
+    },
+    setVisible(value) {
+      input.visible = value
+      if (value) input.focus()
+      else input.blur()
     },
     destroy() {
       renderer.keyInput.off("keypress", onKeyPress)

@@ -75,9 +75,13 @@ export function createChatView(renderer: CliRenderer): ChatView {
         ? `错误：${snapshot.lastError}`
         : tools
           ? `工具：${tools}`
-          : snapshot.status === "idle"
-            ? "空闲"
-            : "处理中"
+          : {
+              idle: "空闲",
+              running: "处理中",
+              aborting: "正在中止",
+              authenticating: "等待输入认证信息",
+              error: "发生错误",
+            }[snapshot.status]
     },
   }
 }

@@ -279,6 +279,8 @@ export class AizenCore implements CorePort {
           promptId: event.promptId,
           promptType: event.promptType,
           message: event.message,
+          ...(event.placeholder ? { placeholder: event.placeholder } : {}),
+          ...(event.options ? { options: event.options.map((option) => ({ ...option })) } : {}),
         })
       return
     }

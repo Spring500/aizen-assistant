@@ -70,3 +70,22 @@ test("聊天界面中的认证输入清晰可见", async () => {
     setup.renderer.destroy()
   }
 })
+
+test("退出信号会取消正在等待的认证输入", async () => {
+  const setup = await createTestRenderer({ width: 40, height: 5 })
+  const controller = new AbortController()
+  let cancelled = false
+  try {
+    const pending = promptLine(setup.renderer, "auth", "API 密钥：", {
+      signal: controller.signal,
+      onCancel: () => {
+        cancelled = true
+      },
+    })
+    controller.abort()
+    expect(await pending).toBe("")
+    expect(cancelled).toBe(true)
+  } finally {
+    setup.renderer.destroy()
+  }
+})

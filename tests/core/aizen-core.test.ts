@@ -98,6 +98,34 @@ afterEach(async () => {
 })
 
 describe("核心编排", () => {
+  test("认证选择事件保留候选项", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new FakePi()
+    const core = new AizenCore({ cwd: "E:\\project", store: new SessionStore(root), pi })
+    const events: unknown[] = []
+    core.subscribe((event) => events.push(event))
+
+    for (const listener of pi.listeners) {
+      listener({
+        type: "auth_prompt",
+        promptId: "prompt",
+        promptType: "select",
+        message: "选择认证方式",
+        options: [{ id: "token", label: "令牌" }],
+      })
+    }
+
+    expect(events).toContainEqual({
+      type: "auth_prompt",
+      promptId: "prompt",
+      promptType: "select",
+      message: "选择认证方式",
+      options: [{ id: "token", label: "令牌" }],
+    })
+    await core.dispose()
+  })
+
   test("新建、发送多轮并从文件恢复", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)

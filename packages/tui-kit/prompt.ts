@@ -1,6 +1,6 @@
 import { type CliRenderer, type KeyEvent, type PasteEvent, TextRenderable } from "@opentui/core"
 
-export type PromptOptions = { mask?: boolean; onCancel?: () => void }
+export type PromptOptions = { mask?: boolean; signal?: AbortSignal; onCancel?: () => void }
 
 export function promptLine(
   renderer: CliRenderer,
@@ -21,22 +21,28 @@ export function promptLine(
     })
     renderer.root.add(display)
     let value = ""
+    let settled = false
     const render = () => {
       display.content = `${label}${options.mask ? "•".repeat(value.length) : value}`
     }
     const cleanup = () => {
       renderer.keyInput.off("keypress", onKeyPress)
       renderer.keyInput.off("paste", onPaste)
+      options.signal?.removeEventListener("abort", onAbort)
       display.destroy()
+    }
+    const finish = (cancelled: boolean) => {
+      if (settled) return
+      settled = true
+      cleanup()
+      if (cancelled) options.onCancel?.()
+      resolve(cancelled ? "" : value)
     }
     const onKeyPress = (key: KeyEvent) => {
       if (key.name === "return") {
-        cleanup()
-        resolve(value)
+        finish(false)
       } else if (key.name === "escape") {
-        cleanup()
-        options.onCancel?.()
-        resolve("")
+        finish(true)
       } else if (key.name === "backspace") {
         value = value.slice(0, -1)
         render()
@@ -49,8 +55,11 @@ export function promptLine(
       value += new TextDecoder().decode(event.bytes).replace(/\r?\n/g, "")
       render()
     }
+    const onAbort = () => finish(true)
     renderer.keyInput.on("keypress", onKeyPress)
     renderer.keyInput.on("paste", onPaste)
+    if (options.signal?.aborted) finish(true)
+    else options.signal?.addEventListener("abort", onAbort, { once: true })
     render()
   })
 }
