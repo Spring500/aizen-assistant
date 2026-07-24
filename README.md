@@ -37,6 +37,7 @@ bun run dev:tui --data-dir .aizen/另一组数据
 
 ## 项目文档
 
+- [技术路线图](docs/AizenAssistant技术路线图.md)
 - [AI Agent 行为指令](AGENTS.md)
 - [汇报指南](TALK_GUIDE.md)
 
