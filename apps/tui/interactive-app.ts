@@ -62,6 +62,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       if (value === "/quit") quit()
       else if (value === "/new") runAction(createSession)
       else if (value === "/sessions") runAction(chooseSession)
+      else if (value === "/fold") runAction(chooseFold)
       else if (value === "/model")
         runAction(async () => {
           const model = await chooseModel()
@@ -106,7 +107,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           signal: interactionController.signal,
         },
       ).then(async (value) => {
-        if (value) await core.dispatch({ type: "answer_auth_prompt", promptId: event.promptId, value })
+        if (value)
+          await core.dispatch({
+            type: "answer_auth_prompt",
+            promptId: event.promptId,
+            value,
+          })
         else await core.dispatch({ type: "cancel_auth" })
       })
     } else {
@@ -120,10 +126,56 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         signal: interactionController.signal,
         onCancel: () => void core.dispatch({ type: "cancel_auth" }),
       }).then(async (value) => {
-        if (value) await core.dispatch({ type: "answer_auth_prompt", promptId: event.promptId, value })
+        if (value)
+          await core.dispatch({
+            type: "answer_auth_prompt",
+            promptId: event.promptId,
+            value,
+          })
       })
     }
   })
+
+  async function chooseFold() {
+    beginInteraction()
+    try {
+      while (!exiting) {
+        const selected = await selectItem<
+          { type: "toggle"; id: string } | { type: "collapse_tools" } | { type: "expand_all" }
+        >(
+          renderer,
+          "fold-selector",
+          [
+            {
+              name: "折叠全部工具组",
+              description: "收起所有连续工具调用",
+              value: { type: "collapse_tools" },
+            },
+            {
+              name: "全部展开",
+              description: "展开助手回复和工具组",
+              value: { type: "expand_all" },
+            },
+            ...view.getCollapseItems().map((item) => ({
+              name: `[${item.collapsed ? "折叠" : "展开"}] ${item.name}`,
+              description: item.description,
+              value: { type: "toggle" as const, id: item.id },
+            })),
+          ],
+          {
+            title: "管理折叠（Enter 切换，Esc 返回）",
+            signal: interactionController.signal,
+          },
+        )
+        if (!selected) return
+        if (selected.type === "toggle") view.toggleCollapse(selected.id)
+        else if (selected.type === "collapse_tools") view.collapseAll(true, "tool_group")
+        else view.collapseAll(false)
+      }
+    } finally {
+      endInteraction()
+    }
+  }
 
   async function chooseModel() {
     beginInteraction()
@@ -144,7 +196,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           )
           if (!provider) return false
           authProviderName = providers.find((item) => item.id === provider)?.name
-          const login = await core.dispatch({ type: "login_api_key", providerId: provider })
+          const login = await core.dispatch({
+            type: "login_api_key",
+            providerId: provider,
+          })
           authProviderName = undefined
           if (login.ok) return true
         }
@@ -203,7 +258,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         renderer,
         "session-selector",
         [
-          { name: "新建会话", description: "使用所选模型开始空白会话", value: "__new__" },
+          {
+            name: "新建会话",
+            description: "使用所选模型开始空白会话",
+            value: "__new__",
+          },
           ...sessions.map((session) => ({
             name: session.preview,
             description: session.updatedAt,

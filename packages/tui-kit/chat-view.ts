@@ -1,12 +1,23 @@
-import { BoxRenderable, type CliRenderer, ScrollBoxRenderable, TextRenderable } from "@opentui/core"
+import { BoxRenderable, type CliRenderer, type RenderContext, TextRenderable } from "@opentui/core"
 import type { ToolCallPart, ToolMessage } from "../core/session-format.ts"
 import type { CoreSnapshot } from "../core/types.ts"
 
 export type ChatView = {
   header: TextRenderable
-  scrollBox: ScrollBoxRenderable
+  live: TextRenderable
   status: TextRenderable
   update(snapshot: CoreSnapshot): void
+  getCollapseItems(): ChatCollapseItem[]
+  toggleCollapse(id: string): boolean
+  collapseAll(collapsed: boolean, kind?: ChatCollapseItem["kind"]): boolean
+}
+
+export type ChatCollapseItem = {
+  id: string
+  kind: "assistant" | "tool_group"
+  name: string
+  description: string
+  collapsed: boolean
 }
 
 type ToolDisplay = {
@@ -22,12 +33,7 @@ type DisplayBlock =
   | { kind: "tool"; id: string; tool: ToolDisplay }
   | { kind: "tool_group"; id: string; tools: ToolDisplay[] }
 
-type RenderedBlock = {
-  kind: DisplayBlock["kind"]
-  id: string
-  fingerprint: string
-  root: TextRenderable | BoxRenderable
-}
+type CollapseTarget = Omit<ChatCollapseItem, "collapsed">
 
 const blockColors = {
   user: "#66551a",
@@ -47,7 +53,7 @@ function oneLine(value: string): string {
 }
 
 function collapsedAssistantText(content: string): string {
-  return `▶ 助手（点击展开） ${oneLine(content).slice(0, 80)}...`
+  return `▶ 助手 ${oneLine(content).slice(0, 80)}...`
 }
 
 function jsonPreview(value: unknown): string {
@@ -104,23 +110,11 @@ function toolMessageText(message: ToolMessage): string {
   return `[工具结果:${message.name}] ${outputPreview(text)}`
 }
 
-function toolDisplay(
-  call: ToolCallPart,
-  result: ToolMessage | undefined,
-  active: CoreSnapshot["activeTools"][number] | undefined,
-): ToolDisplay {
-  let resultText = `[等待结果:${call.name}]`
-  if (result) resultText = toolMessageText(result)
-  else if (active) {
-    const preview = outputPreview(active.outputPreview ?? "")
-    resultText = active.isFinished
-      ? `[工具结果:${call.name}] ${preview}`
-      : `[运行中] ${active.outputPreview ? preview : "等待输出"}`
-  }
+function toolDisplay(call: ToolCallPart, result: ToolMessage | undefined): ToolDisplay {
   return {
     id: call.callId,
     call: toolCallText(call.name, call.arguments),
-    result: resultText,
+    result: result ? toolMessageText(result) : `[等待结果:${call.name}]`,
   }
 }
 
@@ -140,8 +134,18 @@ function groupConsecutiveTools(blocks: DisplayBlock[]): DisplayBlock[] {
       tools.push(next.tool)
       index += 1
     }
-    if (tools.length === 1) grouped.push({ kind: "tool", id: tools[0]?.id ?? "tool", tool: tools[0] as ToolDisplay })
-    else grouped.push({ kind: "tool_group", id: `tools-${tools.map((tool) => tool.id).join("-")}`, tools })
+    if (tools.length === 1)
+      grouped.push({
+        kind: "tool",
+        id: tools[0]?.id ?? "tool",
+        tool: tools[0] as ToolDisplay,
+      })
+    else
+      grouped.push({
+        kind: "tool_group",
+        id: `tools-${tools.map((tool) => tool.id).join("-")}`,
+        tools,
+      })
   }
   return grouped
 }
@@ -152,11 +156,9 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
   for (const entry of snapshot.transcript) {
     if (entry.type !== "message") continue
     if (entry.message.role === "tool") results.set(entry.message.callId, entry.message)
-    else {
-      for (const part of entry.message.parts) if (part.kind === "tool_call") calls.add(part.callId)
-    }
+    else for (const part of entry.message.parts) if (part.kind === "tool_call") calls.add(part.callId)
   }
-  const activeTools = new Map(snapshot.activeTools.map((tool) => [tool.callId, tool]))
+
   const blocks: DisplayBlock[] = []
   for (const [entryIndex, entry] of snapshot.transcript.entries()) {
     if (entry.type === "input") {
@@ -192,7 +194,7 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
             blocks.push({
               kind: "tool",
               id: part.callId,
-              tool: toolDisplay(part, results.get(part.callId), activeTools.get(part.callId)),
+              tool: toolDisplay(part, results.get(part.callId)),
             })
           }
         }
@@ -215,25 +217,35 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
       })
     }
   }
-  for (const tool of snapshot.activeTools) {
-    if (calls.has(tool.callId)) continue
-    const call: ToolCallPart = {
-      kind: "tool_call",
-      callId: tool.callId,
-      name: tool.name,
-      arguments: tool.arguments as ToolCallPart["arguments"],
-    }
-    blocks.push({ kind: "tool", id: tool.callId, tool: toolDisplay(call, undefined, tool) })
-  }
   return groupConsecutiveTools(blocks)
 }
 
-function fingerprint(block: DisplayBlock): string {
-  return JSON.stringify(block)
+function collapseTargets(blocks: DisplayBlock[]): CollapseTarget[] {
+  const targets: CollapseTarget[] = []
+  for (const block of blocks) {
+    if (block.kind !== "assistant" && block.kind !== "tool_group") continue
+    if (block.kind === "assistant") {
+      targets.push({
+        id: block.id,
+        kind: block.kind,
+        name: "助手",
+        description: oneLine(block.content).slice(0, 80),
+      })
+      continue
+    }
+    const names = block.tools.map((tool) => tool.call.match(/^\[([^\]]+)]/)?.[1] ?? "工具")
+    targets.push({
+      id: block.id,
+      kind: block.kind,
+      name: `工具：${names.join("、")}`,
+      description: `${block.tools.length} 个连续工具调用`,
+    })
+  }
+  return targets
 }
 
-function makeBox(renderer: CliRenderer, id: string, color: string, marginBottom = 1): BoxRenderable {
-  return new BoxRenderable(renderer, {
+function makeBox(context: RenderContext, id: string, color: string, marginBottom = 1): BoxRenderable {
+  return new BoxRenderable(context, {
     id,
     width: "100%",
     height: "auto",
@@ -245,10 +257,10 @@ function makeBox(renderer: CliRenderer, id: string, color: string, marginBottom 
   })
 }
 
-function makeText(renderer: CliRenderer, id: string, content: string, color?: string): TextRenderable {
-  return new TextRenderable(renderer, {
+function makeText(context: RenderContext, id: string, content: string, color?: string): TextRenderable {
+  return new TextRenderable(context, {
     id,
-    width: "100%",
+    width: color && color !== blockColors.tool ? "auto" : "100%",
     height: "auto",
     wrapMode: color === blockColors.tool ? "none" : "word",
     truncate: color === blockColors.tool,
@@ -257,206 +269,240 @@ function makeText(renderer: CliRenderer, id: string, content: string, color?: st
   })
 }
 
-function installToggle(root: BoxRenderable, toggle: () => void): void {
-  root.onMouseDown = (event) => {
-    if (event.button !== 0) return
-    event.preventDefault()
-    event.stopPropagation()
-    toggle()
-  }
-}
-
-function createToolBox(renderer: CliRenderer, id: string, tool: ToolDisplay, marginBottom = 1): BoxRenderable {
-  const root = makeBox(renderer, id, blockColors.tool, marginBottom)
-  root.add(makeText(renderer, `${id}-text`, `${tool.call}\n${tool.result}`, blockColors.tool))
+function createToolBox(context: RenderContext, id: string, tool: ToolDisplay, marginBottom = 1): BoxRenderable {
+  const root = makeBox(context, id, blockColors.tool, marginBottom)
+  root.add(makeText(context, `${id}-text`, `${tool.call}\n${tool.result}`, blockColors.tool))
   return root
 }
 
-function createAssistantBox(
-  renderer: CliRenderer,
-  id: string,
-  stateId: string,
-  content: string,
-  collapsedState: Map<string, boolean>,
-): BoxRenderable {
-  const root = makeBox(renderer, id, blockColors.assistant)
-  const text = makeText(renderer, `${id}-text`, "", blockColors.assistant)
-  root.add(text)
-  const render = () => {
-    const collapsed = collapsedState.get(stateId) ?? false
-    text.content = collapsed ? collapsedAssistantText(content) : `▼ 助手（点击折叠）\n${content}`
-  }
-  installToggle(root, () => {
-    collapsedState.set(stateId, !(collapsedState.get(stateId) ?? false))
-    render()
-  })
-  render()
-  return root
-}
-
-function createToolGroup(
-  renderer: CliRenderer,
-  id: string,
-  stateId: string,
-  tools: ToolDisplay[],
-  collapsedState: Map<string, boolean>,
-): BoxRenderable {
-  const root = makeBox(renderer, id, blockColors.toolGroup)
-  const header = makeText(renderer, `${id}-header`, "", blockColors.toolGroup)
-  const content = new BoxRenderable(renderer, {
-    id: `${id}-content`,
-    width: "100%",
-    height: "auto",
-    flexDirection: "column",
-    paddingTop: 1,
-    backgroundColor: blockColors.toolGroup,
-  })
-  for (const [index, tool] of tools.entries()) {
-    content.add(createToolBox(renderer, `${id}-tool-${index}`, tool, index === tools.length - 1 ? 0 : 1))
-  }
-  root.add(header)
-  root.add(content)
-  if (!collapsedState.has(stateId)) collapsedState.set(stateId, true)
-  const names = tools.map((tool) => tool.call.match(/^\[([^\]]+)]/)?.[1] ?? "工具").join("、")
-  const render = () => {
-    const collapsed = collapsedState.get(stateId) ?? true
-    header.content = `${collapsed ? "▶" : "▼"} ${tools.length} 个工具调用：${names}（点击${collapsed ? "展开" : "折叠"}）`
-    content.visible = !collapsed
-  }
-  installToggle(root, () => {
-    collapsedState.set(stateId, !(collapsedState.get(stateId) ?? true))
-    render()
-  })
-  render()
-  return root
-}
-
-function createBlock(
-  renderer: CliRenderer,
+function createHistoryBlock(
+  context: RenderContext,
   index: number,
   block: DisplayBlock,
   collapsedState: Map<string, boolean>,
-): RenderedBlock {
-  const rootId = `transcript-entry-${index}`
-  let root: TextRenderable | BoxRenderable
+): TextRenderable | BoxRenderable {
+  const rootId = `history-entry-${index}`
   if (block.kind === "plain") {
-    root = new TextRenderable(renderer, {
+    return new TextRenderable(context, {
       id: rootId,
       width: "100%",
       height: "auto",
       marginBottom: 1,
       content: block.content,
     })
-  } else if (block.kind === "user") {
-    root = makeBox(renderer, rootId, blockColors.user)
-    root.add(makeText(renderer, `${rootId}-text`, block.content, blockColors.user))
-  } else if (block.kind === "assistant") {
-    root = createAssistantBox(renderer, rootId, block.id, block.content, collapsedState)
-  } else if (block.kind === "tool") {
-    root = createToolBox(renderer, rootId, block.tool)
-  } else {
-    root = createToolGroup(renderer, rootId, block.id, block.tools, collapsedState)
   }
-  return { kind: block.kind, id: block.id, fingerprint: fingerprint(block), root }
+  if (block.kind === "user") {
+    const root = makeBox(context, rootId, blockColors.user)
+    root.add(makeText(context, `${rootId}-text`, block.content, blockColors.user))
+    return root
+  }
+  if (block.kind === "assistant") {
+    const root = makeBox(context, rootId, blockColors.assistant)
+    const content = collapsedState.get(block.id) ? collapsedAssistantText(block.content) : `▼ 助手\n${block.content}`
+    root.add(makeText(context, `${rootId}-text`, content, blockColors.assistant))
+    return root
+  }
+  if (block.kind === "tool") return createToolBox(context, rootId, block.tool)
+
+  const root = makeBox(context, rootId, blockColors.toolGroup)
+  const names = block.tools.map((tool) => tool.call.match(/^\[([^\]]+)]/)?.[1] ?? "工具").join("、")
+  const collapsed = collapsedState.get(block.id) ?? true
+  root.add(
+    makeText(
+      context,
+      `${rootId}-header`,
+      `${collapsed ? "▶" : "▼"} ${block.tools.length} 个工具调用：${names}`,
+      blockColors.toolGroup,
+    ),
+  )
+  if (!collapsed) {
+    const content = new BoxRenderable(context, {
+      id: `${rootId}-content`,
+      width: "100%",
+      height: "auto",
+      flexDirection: "column",
+      paddingTop: 1,
+      backgroundColor: blockColors.toolGroup,
+    })
+    for (const [toolIndex, tool] of block.tools.entries()) {
+      content.add(
+        createToolBox(context, `${rootId}-tool-${toolIndex}`, tool, toolIndex === block.tools.length - 1 ? 0 : 1),
+      )
+    }
+    root.add(content)
+  }
+  return root
 }
 
-function updateBlocks(
-  renderer: CliRenderer,
-  scrollBox: ScrollBoxRenderable,
-  renderedBlocks: RenderedBlock[],
-  blocks: DisplayBlock[],
-  collapsedState: Map<string, boolean>,
-): void {
-  for (let index = 0; index < blocks.length; index += 1) {
-    const block = blocks[index] as DisplayBlock
-    const previous = renderedBlocks[index]
-    const nextFingerprint = fingerprint(block)
-    if (previous && previous.kind === block.kind && previous.id === block.id) {
-      if (previous.fingerprint === nextFingerprint) continue
-      if (block.kind === "tool") {
-        const text = previous.root.getRenderable(`${previous.root.id}-text`)
-        if (text instanceof TextRenderable) text.content = `${block.tool.call}\n${block.tool.result}`
-        previous.fingerprint = nextFingerprint
-        continue
-      }
-      if (block.kind === "tool_group") {
-        for (const [toolIndex, tool] of block.tools.entries()) {
-          const text = previous.root.getRenderable(`${previous.root.id}-tool-${toolIndex}-text`)
-          if (text instanceof TextRenderable) text.content = `${tool.call}\n${tool.result}`
-        }
-        previous.fingerprint = nextFingerprint
-        continue
-      }
-    }
-    previous?.root.destroyRecursively()
-    const rendered = createBlock(renderer, index, block, collapsedState)
-    renderedBlocks[index] = rendered
-    scrollBox.add(rendered.root, index)
+function liveText(snapshot: CoreSnapshot): string {
+  const active = snapshot.activeTools.at(-1)
+  if (active) {
+    const output = active.outputPreview ? outputPreview(active.outputPreview) : "等待输出"
+    return `${toolCallText(active.name, active.arguments)} | ${active.isFinished ? "完成" : "运行中"}：${output}`
   }
-  while (renderedBlocks.length > blocks.length) renderedBlocks.pop()?.root.destroyRecursively()
+  if (snapshot.streamingText) return `[助手流式] ${outputPreview(snapshot.streamingText)}`
+  if (snapshot.streamingThinking) return `[思考流式] ${outputPreview(snapshot.streamingThinking)}`
+  return ""
+}
+
+function statusText(snapshot: CoreSnapshot): string {
+  if (snapshot.lastError) return `错误：${snapshot.lastError}`
+  return {
+    idle: "空闲",
+    running: "处理中",
+    aborting: "正在中止",
+    authenticating: "等待输入认证信息",
+    error: "发生错误",
+  }[snapshot.status]
 }
 
 export function createChatView(renderer: CliRenderer): ChatView {
-  const header = new TextRenderable(renderer, { id: "header", height: 1, content: "AizenAssistant" })
-  const scrollBox = new ScrollBoxRenderable(renderer, {
-    id: "transcript-scroll",
-    flexGrow: 1,
-    scrollY: true,
-    contentOptions: { flexDirection: "column" },
+  const header = new TextRenderable(renderer, {
+    id: "header",
+    height: 1,
+    content: "AizenAssistant",
   })
-  const renderedBlocks: RenderedBlock[] = []
-  const collapsedState = new Map<string, boolean>()
-  let streamingContent = ""
-  const streaming = makeBox(renderer, "transcript-streaming", blockColors.assistant)
-  const streamingText = makeText(renderer, "transcript-streaming-text", "", blockColors.assistant)
-  const renderStreaming = () => {
-    const collapsed = collapsedState.get("transcript-streaming") ?? false
-    streamingText.content = collapsed
-      ? collapsedAssistantText(streamingContent)
-      : `▼ 助手（点击折叠）\n${streamingContent}`
-  }
-  streaming.add(streamingText)
-  installToggle(streaming, () => {
-    collapsedState.set("transcript-streaming", !(collapsedState.get("transcript-streaming") ?? false))
-    renderStreaming()
+  const live = new TextRenderable(renderer, {
+    id: "live",
+    width: "100%",
+    height: 1,
+    wrapMode: "none",
+    truncate: true,
+    content: "",
   })
-  streaming.visible = false
-  scrollBox.add(streaming)
-  const status = new TextRenderable(renderer, { id: "status", height: 1, content: "空闲" })
+  const status = new TextRenderable(renderer, {
+    id: "status",
+    height: 1,
+    content: "空闲",
+  })
   renderer.root.add(header)
-  renderer.root.add(scrollBox)
+  renderer.root.add(live)
   renderer.root.add(status)
+
+  const collapsedState = new Map<string, boolean>()
+  let blocks: DisplayBlock[] = []
+  let targets: CollapseTarget[] = []
+  let committedFingerprints: string[] = []
+  let latestSnapshot: CoreSnapshot | undefined
+  let notice = ""
+
+  const prepareCollapseState = () => {
+    targets = collapseTargets(blocks)
+    for (const target of targets) {
+      if (!collapsedState.has(target.id)) collapsedState.set(target.id, target.kind === "tool_group")
+    }
+  }
+
+  const renderedFingerprints = () => {
+    return blocks.map((block) =>
+      JSON.stringify({
+        block,
+        collapsed: collapsedState.get(block.id),
+      }),
+    )
+  }
+
+  const commitBlocks = (startIndex: number) => {
+    if (startIndex >= blocks.length) return
+    const surface = renderer.createScrollbackSurface()
+    try {
+      for (let index = startIndex; index < blocks.length; index += 1) {
+        surface.root.add(
+          createHistoryBlock(surface.renderContext, index, blocks[index] as DisplayBlock, collapsedState),
+        )
+      }
+      surface.render()
+      surface.commitRows(0, surface.height)
+    } finally {
+      surface.destroy()
+    }
+  }
+
+  const syncHistory = (forceReplay = false) => {
+    prepareCollapseState()
+    const nextFingerprints = renderedFingerprints()
+    if (
+      !forceReplay &&
+      nextFingerprints.length === committedFingerprints.length &&
+      nextFingerprints.every((value, index) => committedFingerprints[index] === value)
+    )
+      return
+
+    const canAppend =
+      !forceReplay &&
+      nextFingerprints.length >= committedFingerprints.length &&
+      committedFingerprints.every((value, index) => nextFingerprints[index] === value)
+    if (canAppend) commitBlocks(committedFingerprints.length)
+    else {
+      try {
+        renderer.resetSplitFooterForReplay({ clearSavedLines: true })
+      } catch (error) {
+        // OpenTUI 的离屏测试渲染器没有活动终端，无法执行 ANSI 清屏；仍继续提交回放快照以验证内容。
+        if (!(error instanceof Error) || error.message !== "resetSplitFooterForReplay requires an active terminal")
+          throw error
+      }
+      commitBlocks(0)
+    }
+    committedFingerprints = nextFingerprints
+  }
+
+  const refreshFooter = () => {
+    if (!latestSnapshot) return
+    const snapshot = latestSnapshot
+    const model = snapshot.currentModel
+      ? `${snapshot.currentModel.providerId}/${snapshot.currentModel.modelId}`
+      : "未选择模型"
+    header.content = `AizenAssistant | ${model} | /fold 管理折叠`
+    live.content = liveText(snapshot)
+    status.content = notice || statusText(snapshot)
+  }
+
+  const toggleCollapse = (id: string): boolean => {
+    const target = targets.find((item) => item.id === id)
+    if (!target) {
+      notice = "找不到要切换的折叠内容"
+      refreshFooter()
+      return false
+    }
+    collapsedState.set(target.id, !(collapsedState.get(target.id) ?? false))
+    notice = `已切换${target.name}，并全量回放会话`
+    syncHistory(true)
+    refreshFooter()
+    return true
+  }
+
+  const collapseAll = (collapsed: boolean, kind?: ChatCollapseItem["kind"]): boolean => {
+    let changed = false
+    for (const target of targets) {
+      if (kind && target.kind !== kind) continue
+      if ((collapsedState.get(target.id) ?? false) === collapsed) continue
+      collapsedState.set(target.id, collapsed)
+      changed = true
+    }
+    notice = changed ? `已${collapsed ? "折叠" : "展开"}所选内容，并全量回放会话` : "折叠状态没有变化"
+    if (changed) syncHistory(true)
+    refreshFooter()
+    return changed
+  }
 
   return {
     header,
-    scrollBox,
+    live,
     status,
     update(snapshot) {
-      const model = snapshot.currentModel
-        ? `${snapshot.currentModel.providerId}/${snapshot.currentModel.modelId}`
-        : "未选择模型"
-      header.content = `AizenAssistant | ${snapshot.cwd} | ${model}`
-      updateBlocks(renderer, scrollBox, renderedBlocks, displayBlocks(snapshot), collapsedState)
-      streamingContent = [
-        snapshot.streamingThinking ? `[思考] ${snapshot.streamingThinking}` : "",
-        snapshot.streamingText,
-      ]
-        .filter(Boolean)
-        .join("\n")
-      renderStreaming()
-      streaming.visible = streamingContent.length > 0
-      const tools = snapshot.activeTools.map((tool) => `${tool.name}${tool.isError ? "（失败）" : ""}`).join("、")
-      status.content = snapshot.lastError
-        ? `错误：${snapshot.lastError}`
-        : tools
-          ? `工具：${tools}`
-          : {
-              idle: "空闲",
-              running: "处理中",
-              aborting: "正在中止",
-              authenticating: "等待输入认证信息",
-              error: "发生错误",
-            }[snapshot.status]
+      latestSnapshot = snapshot
+      notice = ""
+      blocks = displayBlocks(snapshot)
+      syncHistory()
+      refreshFooter()
     },
+    getCollapseItems() {
+      return targets.map((target) => ({
+        ...target,
+        collapsed: collapsedState.get(target.id) ?? false,
+      }))
+    },
+    toggleCollapse,
+    collapseAll,
   }
 }
