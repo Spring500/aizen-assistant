@@ -1,5 +1,6 @@
 export type MockServer = {
   url: string
+  requests: () => Promise<unknown[]>
   stop: () => void
 }
 
@@ -26,12 +27,16 @@ function buildSseBody(responseText: string): string {
  * API：收到 `POST /v1/messages` 就回一段固定内容的 SSE 响应，其余请求
  * 返回 404。供 `mock-server-worker.ts` 在 worker 线程里调用。
  */
-export function createMockAnthropicServer(responseText: string): ReturnType<typeof Bun.serve> {
+export function createMockAnthropicServer(
+  responseText: string,
+  requests: unknown[] = [],
+): ReturnType<typeof Bun.serve> {
   return Bun.serve({
     port: 0,
     async fetch(request) {
       const url = new URL(request.url)
       if (request.method === "POST" && url.pathname === "/v1/messages") {
+        requests.push(await request.json())
         return new Response(buildSseBody(responseText), {
           status: 200,
           headers: { "content-type": "text/event-stream" },
@@ -44,7 +49,7 @@ export function createMockAnthropicServer(responseText: string): ReturnType<type
 
 /**
  * 在独立的 Worker 线程里启动上面的 mock server。供架构可行性验证和 CLI
- * 契约测试复用，避免各处重复实现同一套 mock 逻辑。
+ * 接口测试复用，避免各处重复实现同一套 mock 逻辑。
  *
  * 为什么放进 Worker，而不是直接在调用方所在的线程里调用
  * createMockAnthropicServer：调用方往往需要用 Bun.spawn 去跑被测的编译
@@ -62,10 +67,16 @@ export async function startMockServer(responseText: string): Promise<MockServer>
 
   // 等 worker 内部的 Bun.serve 真正开始监听后，再把端口号交给调用方——
   // 调用方拿到 url 时，mock server 保证已经可以接收请求。
+  const pendingRequests = new Map<string, (requests: unknown[]) => void>()
   const url = await new Promise<string>((resolve, reject) => {
     worker.onmessage = (event: MessageEvent<{ type: string; url?: string }>) => {
       if (event.data?.type === "listening" && event.data.url) {
         resolve(event.data.url)
+      }
+      if (event.data?.type === "requests" && "requestId" in event.data && "requests" in event.data) {
+        const data = event.data as { requestId: string; requests: unknown[] }
+        pendingRequests.get(data.requestId)?.(data.requests)
+        pendingRequests.delete(data.requestId)
       }
     }
     worker.onerror = (event) => {
@@ -76,6 +87,12 @@ export async function startMockServer(responseText: string): Promise<MockServer>
 
   return {
     url,
+    requests: () =>
+      new Promise((resolve) => {
+        const requestId = crypto.randomUUID()
+        pendingRequests.set(requestId, resolve)
+        worker.postMessage({ type: "get_requests", requestId })
+      }),
     stop: () => {
       // 通知 worker 内部优雅关闭（等待在途请求完成，见 mock-server-worker.ts）。
       worker.postMessage({ type: "stop" })

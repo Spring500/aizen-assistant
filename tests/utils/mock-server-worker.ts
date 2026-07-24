@@ -8,10 +8,12 @@ import { createMockAnthropicServer } from "./mock-server.ts"
 
 type StartMessage = { type: "start"; responseText: string }
 type StopMessage = { type: "stop" }
-type IncomingMessage = StartMessage | StopMessage
+type GetRequestsMessage = { type: "get_requests"; requestId: string }
+type IncomingMessage = StartMessage | StopMessage | GetRequestsMessage
 
 /** 当前 worker 里跑着的 HTTP server；`undefined` 表示还没收到 "start" 消息。 */
 let server: ReturnType<typeof createMockAnthropicServer> | undefined
+const requests: unknown[] = []
 
 /**
  * 处理来自主线程的两种消息：
@@ -22,8 +24,13 @@ globalThis.addEventListener("message", async (event: MessageEvent<IncomingMessag
   const message = event.data
 
   if (message.type === "start" && !server) {
-    server = createMockAnthropicServer(message.responseText)
+    server = createMockAnthropicServer(message.responseText, requests)
     postMessage({ type: "listening", url: `http://localhost:${server.port}` })
+    return
+  }
+
+  if (message.type === "get_requests") {
+    postMessage({ type: "requests", requestId: message.requestId, requests })
     return
   }
 

@@ -1,4 +1,4 @@
-// 契约测试：验证编译产物 dist/aizen-tui.exe 对外的命令行参数契约
+// 接口测试：验证编译产物 dist/aizen-tui.exe 对外的命令行参数行为
 // （--plain 非交互模式、未带 --plain 时的用法报错）确实按预期工作，而不
 // 是只验证 main.ts 的源码逻辑——这里跑的是真实编译出来的 exe。
 import { expect, test } from "bun:test"
@@ -7,7 +7,7 @@ import { startMockServer } from "../utils/mock-server.ts"
 
 const expectedText = "架构可行性验证：CLI 端到端通过"
 const exePath = "./dist/aizen-tui.exe"
-const sourcePaths = ["./apps/tui/main.ts", "./packages/pi-adapter/complete.ts", "./packages/tui-kit/interactive.ts"]
+const sourcePaths = ["./apps/tui/main.ts", "./packages/pi-adapter/complete.ts", "./packages/tui-kit/renderer.ts"]
 
 /**
  * 确认 dist/aizen-tui.exe 存在，且不早于它的任何源文件——避免开发者改了

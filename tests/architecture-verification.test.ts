@@ -1,6 +1,4 @@
-import { PhotonImage } from "@silvia-odwyer/photon-node"
-import { TextRenderable } from "@opentui/core"
-import { createTestRenderer } from "@opentui/core/testing"
+import { expect, test } from "bun:test"
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -10,7 +8,9 @@ import {
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent"
-import { expect, test } from "bun:test"
+import { TextRenderable } from "@opentui/core"
+import { createTestRenderer } from "@opentui/core/testing"
+import { PhotonImage } from "@silvia-odwyer/photon-node"
 import { completeOnce } from "../packages/pi-adapter/complete.ts"
 import { startMockServer } from "./utils/mock-server.ts"
 
@@ -59,7 +59,7 @@ const embeddedViewText = "AizenAssistant 架构可行性验证视图"
  *
  * 1. 内联扩展（inline extension）：不依赖文件系统上的扩展文件，直接把
  *    扩展工厂函数传给 DefaultResourceLoader，验证它确实被执行——这是
- *    实现"每轮临时上下文注入"和"视图式提示词组织"这两项核心定制能力
+ *    实现"每轮额外消息"和"视图式提示词组织"这两项核心定制能力
  *    将来要用到的机制，如果编译产物里失效，这两项能力就无法实现。
  * 2. 内置视图：用 systemPromptOverride 替换默认系统提示词，验证
  *    ResourceLoader 真的读到了覆盖后的内容，而不是回退到默认值。
