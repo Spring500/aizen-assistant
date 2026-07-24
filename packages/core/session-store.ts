@@ -38,33 +38,26 @@ export class SessionStore {
     this.root = root
   }
 
-  sessionDirectory(sessionId: string): string {
+  sessionFile(sessionId: string): string {
     if (!sessionId || sessionId === "." || sessionId === ".." || /[\\/]/.test(sessionId))
       throw new Error("无效的会话 ID")
-    return join(this.root, sessionId)
-  }
-
-  sessionFile(sessionId: string): string {
-    return join(this.sessionDirectory(sessionId), "conversation.jsonl")
+    return join(this.root, `${sessionId}.jsonl`)
   }
 
   async create(input: Omit<SessionHeader, "kind" | "version">): Promise<SessionHeader> {
     await mkdir(this.root, { recursive: true })
-    const directory = this.sessionDirectory(input.sessionId)
-    await mkdir(directory)
+    const path = this.sessionFile(input.sessionId)
     const header: SessionHeader = { kind: "session", version: 1, ...input }
+    const file = await open(path, "wx")
+    let written = false
     try {
-      const file = await open(this.sessionFile(input.sessionId), "wx")
-      try {
-        await file.writeFile(`${JSON.stringify(header)}\n`)
-        await file.sync()
-      } finally {
-        await file.close()
-      }
+      await file.writeFile(`${JSON.stringify(header)}\n`)
+      await file.sync()
+      written = true
       return header
-    } catch (error) {
-      await rm(directory, { recursive: true, force: true })
-      throw error
+    } finally {
+      await file.close()
+      if (!written) await rm(path, { force: true })
     }
   }
 
@@ -115,7 +108,7 @@ export class SessionStore {
     }
     const [header, ...records] = lines
     if (header?.kind !== "session") throw new Error("会话文件第一行不是文件头")
-    if (header.sessionId !== sessionId) throw new Error("会话目录与文件头 ID 不一致")
+    if (header.sessionId !== sessionId) throw new Error("会话文件名与文件头 ID 不一致")
     if (records.some((record) => record.kind === "session")) throw new Error("会话文件只能有一个文件头")
     return { header, records: records as SessionRecord[], warnings }
   }
@@ -125,9 +118,10 @@ export class SessionStore {
     const entries = await readdir(this.root, { withFileTypes: true })
     const summaries: SessionSummary[] = []
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue
-      const loaded = await this.read(entry.name)
-      const fileStatus = await stat(this.sessionFile(entry.name))
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue
+      const sessionId = entry.name.slice(0, -".jsonl".length)
+      const loaded = await this.read(sessionId)
+      const fileStatus = await stat(this.sessionFile(sessionId))
       const firstTurn = loaded.records.find((record): record is TurnStartedRecord => record.kind === "turn_started")
       summaries.push({
         sessionId: loaded.header.sessionId,

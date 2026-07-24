@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionStore } from "../../packages/core/session-store.ts"
@@ -18,9 +18,9 @@ afterEach(async () => {
 
 describe("会话存储", () => {
   test("排他新建并按调用顺序追加", async () => {
-    const { store } = await makeStore()
+    const { root, store } = await makeStore()
     const header = await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" })
-    expect(await readdir(store.sessionDirectory("s1"))).toEqual(["conversation.jsonl"])
+    expect(await readdir(root)).toEqual(["s1.jsonl"])
     await expect(
       store.create({ sessionId: "s1", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" }),
     ).rejects.toThrow()
@@ -71,7 +71,7 @@ describe("会话存储", () => {
   test("忽略损坏尾行并拒绝损坏中间行", async () => {
     const { root, store } = await makeStore()
     await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" })
-    const file = join(root, "s1", "conversation.jsonl")
+    const file = join(root, "s1.jsonl")
     await appendFile(file, '{"kind":"turn_started"')
     const tailDamaged = await store.read("s1")
     expect(tailDamaged.warnings).toHaveLength(1)
