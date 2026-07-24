@@ -93,3 +93,37 @@ test("退出信号会结束正在等待的选择", async () => {
     setup.renderer.destroy()
   }
 })
+
+test("split-footer 中选择器临时扩大显示区域并在退出后恢复", async () => {
+  const setup = await createTestRenderer({
+    width: 80,
+    height: 20,
+    screenMode: "split-footer",
+    footerHeight: 8,
+  })
+  try {
+    const pending = selectItem(
+      setup.renderer,
+      "large-selector",
+      Array.from({ length: 6 }, (_, index) => ({
+        name: `会话 ${index + 1}`,
+        description: `第 ${index + 1} 条会话`,
+        value: index,
+      })),
+      { title: "选择会话" },
+    )
+    expect(setup.renderer.footerHeight).toBe(18)
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("会话 1")
+    expect(frame).toContain("会话 4")
+
+    const parsed = parseKeypress("\x1b")
+    if (!parsed) throw new Error("无法解析 Esc")
+    setup.renderer.keyInput.emit("keypress", new KeyEvent(parsed))
+    expect(await pending).toBeUndefined()
+    expect(setup.renderer.footerHeight).toBe(8)
+  } finally {
+    setup.renderer.destroy()
+  }
+})

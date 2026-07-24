@@ -16,6 +16,10 @@ export function selectItem<T>(
   options: SelectorOptions,
 ): Promise<T | undefined> {
   return new Promise((resolve) => {
+    const previousFooterHeight = renderer.footerHeight
+    if (renderer.screenMode === "split-footer") {
+      renderer.footerHeight = Math.max(previousFooterHeight, Math.min(20, Math.max(8, renderer.terminalHeight - 2)))
+    }
     const title = new TextRenderable(renderer, {
       id: `${id}-title`,
       height: 1,
@@ -48,6 +52,7 @@ export function selectItem<T>(
       options.signal?.removeEventListener("abort", onAbort)
       selector.destroy()
       title.destroy()
+      renderer.footerHeight = previousFooterHeight
       resolve(value)
     }
     const onKeyPress = (key: KeyEvent) => {
