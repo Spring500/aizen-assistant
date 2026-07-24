@@ -98,6 +98,28 @@ afterEach(async () => {
 })
 
 describe("核心编排", () => {
+  test("核心保留工具参数并更新流式输出预览", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new FakePi()
+    const core = new AizenCore({ cwd: "E:\\project", store: new SessionStore(root), pi })
+
+    for (const listener of pi.listeners) {
+      listener({ type: "tool_started", callId: "c1", name: "bash", arguments: { command: "bun test" } })
+      listener({ type: "tool_updated", callId: "c1", name: "bash", output: "第一行\n最后一行" })
+    }
+
+    expect(core.getSnapshot().activeTools).toEqual([
+      {
+        callId: "c1",
+        name: "bash",
+        arguments: { command: "bun test" },
+        outputPreview: "第一行\n最后一行",
+      },
+    ])
+    await core.dispose()
+  })
+
   test("认证选择事件保留候选项", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)

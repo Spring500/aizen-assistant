@@ -283,10 +283,18 @@ export class AizenCore implements CorePort {
     }
     if (event.type === "text_delta") this.#snapshot.streamingText += event.delta
     if (event.type === "thinking_delta") this.#snapshot.streamingThinking += event.delta
-    if (event.type === "tool_started") this.#snapshot.activeTools.push({ callId: event.callId, name: event.name })
+    if (event.type === "tool_started")
+      this.#snapshot.activeTools.push({ callId: event.callId, name: event.name, arguments: event.arguments })
+    if (event.type === "tool_updated") {
+      const tool = this.#snapshot.activeTools.find((item) => item.callId === event.callId)
+      if (tool) tool.outputPreview = event.output
+    }
     if (event.type === "tool_finished") {
       const tool = this.#snapshot.activeTools.find((item) => item.callId === event.callId)
-      if (tool) tool.isError = event.isError
+      if (tool) {
+        tool.isFinished = true
+        tool.isError = event.isError
+      }
     }
     if (event.type === "message" && this.#currentTurnId && this.#snapshot.currentSessionId) {
       const record: SessionRecord = {
