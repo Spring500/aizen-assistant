@@ -9,7 +9,14 @@ export type TranscriptEntry =
   | { type: "message"; turnId: string; message: MessageRecord["message"] }
   | { type: "turn_end"; turnId: string; outcome: "completed" | "aborted" | "failed" }
 
-export type ActiveTool = { callId: string; name: string; isError?: boolean }
+export type ActiveTool = {
+  callId: string
+  name: string
+  arguments: unknown
+  outputPreview?: string
+  isFinished?: boolean
+  isError?: boolean
+}
 
 export type CoreSnapshot = {
   cwd: string

@@ -23,7 +23,7 @@ export type PiPortEvent =
       record: Omit<MessageRecord, "recordId" | "turnId" | "at">["message"]
     }
   | { type: "tool_started"; callId: string; name: string; arguments: unknown }
-  | { type: "tool_updated"; callId: string; name: string; update: unknown }
+  | { type: "tool_updated"; callId: string; name: string; output: string }
   | { type: "tool_finished"; callId: string; name: string; isError: boolean }
   | {
       type: "compaction"

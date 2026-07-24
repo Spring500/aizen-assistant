@@ -43,6 +43,22 @@ function modelReference(model: Model<Api>, thinkingLevel: ThinkingLevel): ModelR
   return { providerId: model.provider, modelId: model.id, api: model.api, thinkingLevel }
 }
 
+function toolResultText(result: unknown): string {
+  if (!result || typeof result !== "object" || !("content" in result) || !Array.isArray(result.content)) return ""
+  return result.content
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        !!part &&
+        typeof part === "object" &&
+        "type" in part &&
+        part.type === "text" &&
+        "text" in part &&
+        typeof part.text === "string",
+    )
+    .map((part) => part.text)
+    .join("\n")
+}
+
 export class PiSessionRuntime implements PiPort {
   readonly #modelRuntime: ModelRuntime
   readonly #listeners = new Set<(event: PiPortEvent) => void>()
@@ -126,7 +142,7 @@ export class PiSessionRuntime implements PiPort {
           type: "tool_updated",
           callId: event.toolCallId,
           name: event.toolName,
-          update: event.partialResult,
+          output: toolResultText(event.partialResult),
         })
       } else if (event.type === "tool_execution_end") {
         this.#emit({ type: "tool_finished", callId: event.toolCallId, name: event.toolName, isError: event.isError })
