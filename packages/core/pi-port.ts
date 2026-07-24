@@ -1,4 +1,4 @@
-import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewReference } from "./session-format.ts"
+import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
 
 export type ModelOption = ModelReference & {
   name: string
@@ -45,7 +45,7 @@ export type PiPortEvent =
 export type PiCreateInput = {
   cwd: string
   model: ModelReference
-  view: ViewReference
+  viewId: ViewId
 }
 
 export type PiRestoreInput = PiCreateInput & {
@@ -55,7 +55,7 @@ export type PiRestoreInput = PiCreateInput & {
 export type PiPromptInput = {
   recordId: string
   turnId: string
-  view: ViewReference
+  viewId: ViewId
   items: TurnInputItem[]
 }
 

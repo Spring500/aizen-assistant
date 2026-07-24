@@ -23,15 +23,14 @@ describe("会话格式", () => {
         kind: "view_changed",
         recordId: "r2",
         at: "2026-07-23T10:00:01.000Z",
-        view: { viewId: "empty", contentHash: "sha256:abc" },
-        reason: "selected",
+        viewId: null,
       },
       {
         kind: "turn_started",
         recordId: "r3",
         turnId: "t1",
         at: "2026-07-23T10:00:02.000Z",
-        view: { viewId: "empty", contentHash: "sha256:abc" },
+        viewId: null,
         items: [
           { source: "memory", role: "user", useLater: false, parts: [{ kind: "text", text: "只用于本轮" }] },
           { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "检查测试" }] },

@@ -9,7 +9,7 @@ describe("pi 消息转换", () => {
       recordId: "r1",
       turnId: "t1",
       at: "2026-07-23T10:00:00.000Z",
-      view: { viewId: "empty", contentHash: "sha256:abc" },
+      viewId: null,
       items: [
         { source: "memory", role: "developer", useLater: false, parts: [{ kind: "text", text: "额外内容" }] },
         { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "用户问题" }] },

@@ -35,7 +35,7 @@ describe("pi 内存会话", () => {
         recordId: "r1",
         turnId: "t1",
         at: "2026-07-23T10:00:00.000Z",
-        view: { viewId: "empty", contentHash: "sha256:abc" },
+        viewId: null,
         items: [
           { source: "memory", role: "user", useLater: false, parts: [{ kind: "text", text: "不要恢复" }] },
           { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "需要恢复" }] },
@@ -63,7 +63,7 @@ describe("pi 内存会话", () => {
       },
     ]
 
-    await runtime.restore({ cwd: directory, model, view: { viewId: "empty", contentHash: "sha256:abc" }, records })
+    await runtime.restore({ cwd: directory, model, viewId: null, records })
     const messages = runtime.inspectMessages()
     expect(JSON.stringify(messages)).not.toContain("不要恢复")
     expect(JSON.stringify(messages)).toContain("需要恢复")
@@ -87,7 +87,7 @@ describe("pi 内存会话", () => {
         recordId: "r1",
         turnId: "finished",
         at: "2026-07-23T10:00:00.000Z",
-        view: { viewId: "empty", contentHash: "sha256:abc" },
+        viewId: null,
         items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "已完成输入" }] }],
       },
       {
@@ -102,7 +102,7 @@ describe("pi 内存会话", () => {
         recordId: "r3",
         turnId: "crashed",
         at: "2026-07-23T10:00:02.000Z",
-        view: { viewId: "empty", contentHash: "sha256:abc" },
+        viewId: null,
         items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "意外中断输入" }] }],
       },
       {
@@ -120,7 +120,7 @@ describe("pi 内存会话", () => {
       },
     ]
 
-    await runtime.restore({ cwd: directory, model, view: { viewId: "empty", contentHash: "sha256:abc" }, records })
+    await runtime.restore({ cwd: directory, model, viewId: null, records })
     const messages = JSON.stringify(runtime.inspectMessages())
     expect(messages).toContain("已完成输入")
     expect(messages).not.toContain("意外中断输入")
@@ -153,7 +153,7 @@ describe("pi 内存会话", () => {
     })
     try {
       runtime.setModelBaseUrl(model.providerId, model.modelId, `http://localhost:${server.port}`)
-      await runtime.create({ cwd: directory, model, view: { viewId: "empty", contentHash: "sha256:abc" } })
+      await runtime.create({ cwd: directory, model, viewId: null })
       const messageEvents: Array<{ runtimeRef: string }> = []
       runtime.subscribe((event) => {
         if (event.type === "message") messageEvents.push(event)
@@ -161,7 +161,7 @@ describe("pi 内存会话", () => {
       await runtime.prompt({
         recordId: "turn-record",
         turnId: "turn",
-        view: { viewId: "empty", contentHash: "sha256:abc" },
+        viewId: null,
         items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "问题" }] }],
       })
 

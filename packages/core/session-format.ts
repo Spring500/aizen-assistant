@@ -1,9 +1,6 @@
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
-export type ViewReference = {
-  viewId: string
-  contentHash: string
-}
+export type ViewId = string | null
 
 export type ModelReference = {
   providerId: string
@@ -49,8 +46,7 @@ export type ViewChangedRecord = {
   kind: "view_changed"
   recordId: string
   at: string
-  view: ViewReference
-  reason: "selected" | "content_changed" | "source_missing"
+  viewId: ViewId
 }
 
 export type TurnStartedRecord = {
@@ -58,7 +54,7 @@ export type TurnStartedRecord = {
   recordId: string
   turnId: string
   at: string
-  view: ViewReference
+  viewId: ViewId
   items: TurnInputItem[]
 }
 
@@ -172,10 +168,9 @@ function jsonValue(value: unknown, label: string): JsonValue {
   return result
 }
 
-function viewReference(value: unknown): ViewReference {
-  const source = object(value, "view")
-  exact(source, ["viewId", "contentHash"], "view")
-  return { viewId: string(source.viewId, "view.viewId"), contentHash: string(source.contentHash, "view.contentHash") }
+function viewId(value: unknown): ViewId {
+  if (value === null) return null
+  return string(value, "viewId")
 }
 
 function modelReference(value: unknown): ModelReference {
@@ -326,25 +321,20 @@ export function parseSessionValue(value: unknown): SessionLine {
     }
   }
   if (kind === "view_changed") {
-    const reason = string(source.reason, "reason")
-    if (reason !== "selected" && reason !== "content_changed" && reason !== "source_missing") {
-      throw new Error(`未知的视图变化原因：${reason}`)
-    }
     return {
       kind,
-      ...baseRecord(source, ["kind", "recordId", "at", "view", "reason"]),
-      view: viewReference(source.view),
-      reason,
+      ...baseRecord(source, ["kind", "recordId", "at", "viewId"]),
+      viewId: viewId(source.viewId),
     }
   }
   if (kind === "turn_started") {
-    const base = baseRecord(source, ["kind", "recordId", "turnId", "at", "view", "items"])
+    const base = baseRecord(source, ["kind", "recordId", "turnId", "at", "viewId", "items"])
     if (!Array.isArray(source.items)) throw new Error("items 必须是数组")
     return {
       kind,
       ...base,
       turnId: string(source.turnId, "turnId"),
-      view: viewReference(source.view),
+      viewId: viewId(source.viewId),
       items: source.items.map(turnInputItem),
     }
   }

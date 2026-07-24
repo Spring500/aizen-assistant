@@ -54,8 +54,6 @@ export class SessionStore {
     await mkdir(directory)
     const header: SessionHeader = { kind: "session", version: 1, ...input }
     try {
-      await mkdir(join(directory, "views"))
-      await mkdir(join(directory, "files"))
       const file = await open(this.sessionFile(input.sessionId), "wx")
       try {
         await file.writeFile(`${JSON.stringify(header)}\n`)

@@ -1,4 +1,3 @@
-import { join } from "node:path"
 import type { PiPort, PiPortEvent } from "./pi-port.ts"
 import type { ModelReference, SessionRecord, TurnFinishedRecord, TurnStartedRecord } from "./session-format.ts"
 import type { SessionStore } from "./session-store.ts"
@@ -10,7 +9,6 @@ import {
   type CoreSnapshot,
   recordsToTranscript,
 } from "./types.ts"
-import { saveEmptyViewSnapshot } from "./view-snapshot.ts"
 
 export type AizenCoreOptions = { cwd: string; store: SessionStore; pi: PiPort }
 
@@ -140,19 +138,18 @@ export class AizenCore implements CorePort {
     const sessionId = crypto.randomUUID()
     const at = new Date().toISOString()
     await this.#store.create({ sessionId, cwd: this.#cwd, createdAt: at })
-    const view = await saveEmptyViewSnapshot(join(this.#store.sessionDirectory(sessionId), "views"))
-    const selectedView = { viewId: view.viewId, contentHash: view.contentHash }
-    const actualModel = await this.#pi.create({ cwd: this.#cwd, model, view: selectedView })
+    const viewId = null
+    const actualModel = await this.#pi.create({ cwd: this.#cwd, model, viewId })
     const records: SessionRecord[] = [
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: actualModel },
-      { kind: "view_changed", recordId: crypto.randomUUID(), at, view: selectedView, reason: "selected" },
+      { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
     ]
     for (const record of records) await this.#store.append(sessionId, record)
     this.#records = records
     this.#runtimeRecords.clear()
     this.#snapshot.currentSessionId = sessionId
     this.#snapshot.currentModel = actualModel
-    this.#snapshot.currentView = selectedView
+    this.#snapshot.currentViewId = viewId
     this.#snapshot.transcript = []
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
@@ -170,14 +167,14 @@ export class AizenCore implements CorePort {
     const actualModel = await this.#pi.restore({
       cwd: this.#cwd,
       model: modelRecord.model,
-      view: viewRecord.view,
+      viewId: viewRecord.viewId,
       records: loaded.records,
     })
     this.#records = loaded.records
     this.#runtimeRecords = new Map(loaded.records.map((record) => [record.recordId, record.recordId]))
     this.#snapshot.currentSessionId = sessionId
     this.#snapshot.currentModel = actualModel
-    this.#snapshot.currentView = viewRecord.view
+    this.#snapshot.currentViewId = viewRecord.viewId
     this.#snapshot.transcript = recordsToTranscript(loaded.records)
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
@@ -187,8 +184,8 @@ export class AizenCore implements CorePort {
 
   async #sendPrompt(text: string): Promise<void> {
     const sessionId = this.#snapshot.currentSessionId
-    const view = this.#snapshot.currentView
-    if (!sessionId || !view) throw new Error("请先新建或恢复会话")
+    const viewId = this.#snapshot.currentViewId
+    if (!sessionId || viewId === undefined) throw new Error("请先新建或恢复会话")
     if (!text.trim()) throw new Error("消息不能为空")
     const turnId = crypto.randomUUID()
     const started: TurnStartedRecord = {
@@ -196,7 +193,7 @@ export class AizenCore implements CorePort {
       recordId: crypto.randomUUID(),
       turnId,
       at: new Date().toISOString(),
-      view,
+      viewId,
       items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text }] }],
     }
     await this.#store.append(sessionId, started)
@@ -212,7 +209,7 @@ export class AizenCore implements CorePort {
     let outcome: TurnFinishedRecord["outcome"] = "completed"
     let error: TurnFinishedRecord["error"]
     try {
-      await this.#pi.prompt({ recordId: started.recordId, turnId, view, items: started.items })
+      await this.#pi.prompt({ recordId: started.recordId, turnId, viewId, items: started.items })
       if (this.#abortRequested) outcome = "aborted"
     } catch (caught) {
       outcome = this.#abortRequested ? "aborted" : "failed"

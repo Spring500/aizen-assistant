@@ -1,5 +1,5 @@
 import type { AuthPromptOption, AuthProviderOption, ModelOption } from "./pi-port.ts"
-import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewReference } from "./session-format.ts"
+import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
 import type { SessionSummary } from "./session-store.ts"
 
 export type CoreStatus = "idle" | "running" | "aborting" | "authenticating" | "error"
@@ -17,7 +17,7 @@ export type CoreSnapshot = {
   sessions: SessionSummary[]
   currentSessionId?: string
   currentModel?: ModelReference
-  currentView?: ViewReference
+  currentViewId?: ViewId
   models: ModelOption[]
   authProviders: AuthProviderOption[]
   transcript: TranscriptEntry[]

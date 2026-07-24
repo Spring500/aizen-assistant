@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { SessionStore } from "../../packages/core/session-store.ts"
@@ -20,6 +20,7 @@ describe("会话存储", () => {
   test("排他新建并按调用顺序追加", async () => {
     const { store } = await makeStore()
     const header = await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" })
+    expect(await readdir(store.sessionDirectory("s1"))).toEqual(["conversation.jsonl"])
     await expect(
       store.create({ sessionId: "s1", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" }),
     ).rejects.toThrow()
@@ -35,8 +36,7 @@ describe("会话存储", () => {
         kind: "view_changed",
         recordId: "r2",
         at: "2026-07-23T10:00:02.000Z",
-        view: { viewId: "empty", contentHash: "sha256:abc" },
-        reason: "selected",
+        viewId: null,
       }),
     ])
 
@@ -57,7 +57,7 @@ describe("会话存储", () => {
         recordId: `${sessionId}-r1`,
         turnId: `${sessionId}-t1`,
         at: "2026-07-23T10:00:01.000Z",
-        view: { viewId: "empty", contentHash: "sha256:abc" },
+        viewId: null,
         items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text }] }],
       })
       await Bun.sleep(10)
