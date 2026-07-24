@@ -74,7 +74,7 @@ describe("会话格式", () => {
     }
   })
 
-  test("接受工具结果和图片引用", () => {
+  test("接受工具结果中的内嵌图片", () => {
     const record = {
       kind: "message",
       recordId: "r1",
@@ -84,7 +84,7 @@ describe("会话格式", () => {
         role: "tool",
         callId: "c1",
         name: "read",
-        parts: [{ kind: "image", mimeType: "image/png", fileHash: "sha256:image" }],
+        parts: [{ kind: "image", mimeType: "image/png", data: "aW1hZ2U=" }],
         isError: false,
       },
     }
@@ -98,6 +98,23 @@ describe("会话格式", () => {
     expect(() =>
       parseSessionLine('{"kind":"turn_finished","turnId":"t1","at":"2026-07-23T10:00:00.000Z","outcome":"completed"}'),
     ).toThrow("recordId")
+  })
+
+  test("拒绝无效的图片 Base64", () => {
+    const record = {
+      kind: "message",
+      recordId: "r1",
+      turnId: "t1",
+      at: "2026-07-23T10:00:00.000Z",
+      message: {
+        role: "tool",
+        callId: "c1",
+        name: "read",
+        parts: [{ kind: "image", mimeType: "image/png", data: "不是 Base64" }],
+        isError: false,
+      },
+    }
+    expect(() => parseSessionLine(JSON.stringify(record))).toThrow("Base64")
   })
 
   test("拒绝非 JSON 值和 pi 内部字段", () => {

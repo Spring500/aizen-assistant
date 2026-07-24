@@ -12,7 +12,15 @@ describe("pi 消息转换", () => {
       viewId: null,
       items: [
         { source: "memory", role: "developer", useLater: false, parts: [{ kind: "text", text: "额外内容" }] },
-        { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "用户问题" }] },
+        {
+          source: "user",
+          role: "user",
+          useLater: true,
+          parts: [
+            { kind: "text", text: "用户问题" },
+            { kind: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+          ],
+        },
       ],
     }
 
@@ -21,6 +29,7 @@ describe("pi 消息转换", () => {
     expect(mapped[0]?.persistent).toBe(false)
     expect(mapped[0]?.message.content).toContain("额外内容")
     expect(mapped[1]?.persistent).toBe(true)
+    expect(mapped[1]?.message.content).toContainEqual({ type: "image", mimeType: "image/png", data: "aW1hZ2U=" })
   })
 
   test("助手消息往返保留思考、工具调用、签名和来源", () => {
@@ -56,7 +65,10 @@ describe("pi 消息转换", () => {
       role: "tool",
       callId: "c1",
       name: "bash",
-      parts: [{ kind: "text", text: "失败" }],
+      parts: [
+        { kind: "text", text: "失败" },
+        { kind: "image", mimeType: "image/png", data: "aW1hZ2U=" },
+      ],
       isError: true,
       details: { exitCode: 1 },
     }

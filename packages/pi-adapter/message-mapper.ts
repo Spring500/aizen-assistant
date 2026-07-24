@@ -22,16 +22,16 @@ export type MappedTurnInput = {
 
 function inputPartToPi(part: TextPart | ImagePart): PiTextContent | PiImageContent {
   if (part.kind === "text") return { type: "text", text: part.text }
-  return { type: "image", data: part.fileHash, mimeType: part.mimeType }
+  return { type: "image", data: part.data, mimeType: part.mimeType }
 }
 
 function piPartToCore(part: PiTextContent | PiImageContent): TextPart | ImagePart {
   if (part.type === "text") return { kind: "text", text: part.text }
-  return { kind: "image", fileHash: part.data, mimeType: part.mimeType }
+  return { kind: "image", data: part.data, mimeType: part.mimeType }
 }
 
 function inputText(item: TurnInputItem): string {
-  const content = item.parts.map((part) => (part.kind === "text" ? part.text : `[图片 ${part.fileHash}]`)).join("\n")
+  const content = item.parts.map((part) => (part.kind === "text" ? part.text : `[图片 ${part.mimeType}]`)).join("\n")
   if (item.source === "user" && item.role === "user") return content
   return `<aizen-input source="${item.source}" role="${item.role}">\n${content}\n</aizen-input>`
 }

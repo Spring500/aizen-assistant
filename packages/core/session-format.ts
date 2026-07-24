@@ -1,3 +1,5 @@
+import { Buffer } from "node:buffer"
+
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
 export type ViewId = string | null
@@ -10,7 +12,7 @@ export type ModelReference = {
 }
 
 export type TextPart = { kind: "text"; text: string }
-export type ImagePart = { kind: "image"; mimeType: string; fileHash: string }
+export type ImagePart = { kind: "image"; mimeType: string; data: string }
 export type ThinkingPart = { kind: "thinking"; text: string; signature?: string }
 export type ToolCallPart = {
   kind: "tool_call"
@@ -158,6 +160,12 @@ function optionalString(value: unknown, label: string): string | undefined {
   return value === undefined ? undefined : string(value, label)
 }
 
+function base64(value: unknown, label: string): string {
+  const result = string(value, label)
+  if (!result || Buffer.from(result, "base64").toString("base64") !== result) throw new Error(`${label} 必须是 Base64`)
+  return result
+}
+
 function jsonValue(value: unknown, label: string): JsonValue {
   if (value === null || typeof value === "string" || typeof value === "boolean") return value
   if (typeof value === "number") return finiteNumber(value, label)
@@ -192,11 +200,11 @@ function inputPart(value: unknown): TextPart | ImagePart {
     return { kind, text: string(source.text, "文字内容块.text") }
   }
   if (kind === "image") {
-    exact(source, ["kind", "mimeType", "fileHash"], "图片内容块")
+    exact(source, ["kind", "mimeType", "data"], "图片内容块")
     return {
       kind,
       mimeType: string(source.mimeType, "图片内容块.mimeType"),
-      fileHash: string(source.fileHash, "图片内容块.fileHash"),
+      data: base64(source.data, "图片内容块.data"),
     }
   }
   throw new Error(`未知的输入内容块：${kind}`)
