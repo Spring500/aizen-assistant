@@ -75,7 +75,7 @@ export class PiSessionRuntime implements PiPort {
   }
 
   static async create(options: PiSessionRuntimeOptions): Promise<PiSessionRuntime> {
-    return new PiSessionRuntime(await ModelRuntime.create(options))
+    return new PiSessionRuntime(await ModelRuntime.create({ ...options, allowModelNetwork: false }))
   }
 
   async setRuntimeApiKey(providerId: string, apiKey: string): Promise<void> {
