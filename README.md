@@ -8,6 +8,7 @@ AizenAssistant 是基于 pi SDK 构建的 AI Agent 应用。项目以无界面�
 
 ```powershell
 bun install --frozen-lockfile
+bun run verify
 ```
 
 交互模式：
