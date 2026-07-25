@@ -18,7 +18,7 @@
     "dev:tui": "bun run scripts/dev/run-tui.ts",
     "build:tui": "bun build --compile --target=bun-windows-x64 --outfile dist/aizen-tui.exe apps/tui/main.ts",
     "verify": "bun run check:config && bun run format:check && bun run lint && bun run typecheck && bun run build:tui && bun test && bun run tests/distribution/verify-tui.ts",
-    "hooks:install": "git config core.hooksPath .githooks",
+    "postinstall": "git config core.hooksPath .githooks && bun run verify",
     "hooks:test": "bun run scripts/repo/test-pre-push.ts"
   },
   "dependencies": {
