@@ -16,6 +16,7 @@ import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
 
+import { selectableModelProviders } from "../../packages/tui-kit/model-selection.ts"
 import { selectMultiple } from "../../packages/tui-kit/multi-select.ts"
 import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { createAizenRenderer, destroyRenderer } from "../../packages/tui-kit/renderer.ts"
@@ -238,19 +239,17 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       }
       while (!exiting) {
         const listed = await core.dispatch({ type: "list_models" })
-        if (!listed.ok) return undefined
-        const models = core.getSnapshot().models
-        const selected = await selectItem<(typeof models)[number] | "__authenticate__" | "__manage__">(
+        const authListed = await core.dispatch({ type: "list_auth_providers" })
+        if (!listed.ok || !authListed.ok) return undefined
+        const providers = selectableModelProviders(core.getSnapshot().models, core.getSnapshot().authProviders)
+        const provider = await selectItem<(typeof providers)[number] | "__authenticate__" | "__manage__">(
           renderer,
-          "model-selector",
+          "model-provider-selector",
           [
-            ...models.map((model) => ({
-              name: model.available ? model.name : `${model.name}（不可用）`,
-              description: model.available
-                ? `${model.providerId}/${model.modelId}`
-                : `${model.providerId}/${model.modelId} · 请先认证供应商`,
-              value: model,
-              disabled: !model.available,
+            ...providers.map((item) => ({
+              name: item.name,
+              description: `${item.models.length} 个可用模型`,
+              value: item,
             })),
             {
               name: "管理供应商和模型",
@@ -259,21 +258,32 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             },
             {
               name: "认证其它服务商",
-              description: "为内置或 models.json 中的服务商保存认证信息",
+              description: "认证后，该供应商才会出现在模型选择列表",
               value: "__authenticate__" as const,
             },
           ],
-          { title: "选择模型", signal: interactionController.signal },
+          { title: "选择供应商", signal: interactionController.signal },
         )
-        if (selected === "__manage__") {
+        if (provider === "__manage__") {
           await manageModels()
           continue
         }
-        if (selected === "__authenticate__") {
+        if (provider === "__authenticate__") {
           await authenticateProvider()
           continue
         }
-        return selected
+        if (!provider) return undefined
+        const selected = await selectItem(
+          renderer,
+          "model-selector",
+          provider.models.map((model) => ({
+            name: model.name,
+            description: `${model.providerId}/${model.modelId}`,
+            value: model,
+          })),
+          { title: `选择模型 · ${provider.name}`, signal: interactionController.signal },
+        )
+        if (selected) return selected
       }
       return undefined
     } finally {
