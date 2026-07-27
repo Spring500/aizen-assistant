@@ -350,23 +350,6 @@ function liveText(snapshot: CoreSnapshot): string {
   return metrics ? `助手回复中${metricText}` : ""
 }
 
-function formatNumber(value: number): string {
-  return Math.round(value).toLocaleString("en-US")
-}
-
-function contextText(snapshot: CoreSnapshot): string {
-  const used = snapshot.contextUsage?.used ?? 0
-  const total = snapshot.contextUsage?.total
-  return total ? `${formatNumber(used)}/${formatNumber(total)}` : `${formatNumber(used)}/未知`
-}
-
-export function sessionStatusText(snapshot: CoreSnapshot): string {
-  const model = snapshot.currentModel
-    ? `${snapshot.currentModel.providerId}/${snapshot.currentModel.modelId}`
-    : "未选择模型"
-  return `模型：${model} | 上下文：${contextText(snapshot)}`
-}
-
 function statusText(snapshot: CoreSnapshot): string {
   if (snapshot.lastError) return `错误：${snapshot.lastError}`
   return {

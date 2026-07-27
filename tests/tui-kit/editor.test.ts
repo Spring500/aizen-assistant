@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
-import { createChatEditor, shortcutText } from "../../packages/tui-kit/editor.ts"
+import { createChatEditor } from "../../packages/tui-kit/editor.ts"
+import { shortcutText } from "../../packages/tui-kit/status-bar.ts"
 
 function emitKey(renderer: Awaited<ReturnType<typeof createTestRenderer>>["renderer"], raw: string): void {
   const parsed = parseKeypress(raw)
@@ -56,19 +57,21 @@ test("编辑器支持反斜杠回车换行，并用 Enter 发送", async () => {
   }
 })
 
-test("编辑器可在选择和认证期间隐藏", async () => {
-  const setup = await createTestRenderer({ width: 60, height: 8 })
+test("编辑器可只隐藏输入框并保持底部状态栏可见", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 8 })
   try {
     const editor = createChatEditor(setup.renderer, {
       onSubmit: () => {},
       onAbort: () => {},
       onQuit: () => {},
     })
-    editor.setVisible(false)
+    editor.setShortcuts(shortcutText({ status: "idle", hasSession: true }))
+    editor.setInputVisible(false)
     await setup.renderOnce()
     expect(setup.captureCharFrame()).not.toContain("输入消息")
-    expect(setup.captureCharFrame()).not.toContain("模型：")
-    editor.setVisible(true)
+    expect(setup.captureCharFrame()).toContain("模型：未选择模型")
+    expect(setup.captureCharFrame()).toContain("Shift+Enter 或 \\+Enter 换行")
+    editor.setInputVisible(true)
     await setup.renderOnce()
     expect(setup.captureCharFrame()).toContain("输入消息")
     expect(setup.captureCharFrame()).toContain("模型：未选择模型")

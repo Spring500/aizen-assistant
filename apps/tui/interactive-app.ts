@@ -3,9 +3,9 @@ import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
-import { createChatView, sessionStatusText } from "../../packages/tui-kit/chat-view.ts"
-
-import { createChatEditor, shortcutText } from "../../packages/tui-kit/editor.ts"
+import { createChatView } from "../../packages/tui-kit/chat-view.ts"
+import { createChatEditor } from "../../packages/tui-kit/editor.ts"
+import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
 
 import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { createAizenRenderer, destroyRenderer } from "../../packages/tui-kit/renderer.ts"
@@ -75,28 +75,36 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     onAbort: () => void core.dispatch({ type: "abort" }),
     onQuit: quit,
   })
-  editor.setVisible(false)
+  editor.setInputVisible(false)
+
+  const updateStatusBar = () => {
+    const statusBar = statusBarView(core.getSnapshot())
+    editor.setStatus(statusBar.session)
+    editor.setShortcuts(statusBar.shortcuts)
+  }
+  updateStatusBar()
 
   const beginInteraction = () => {
     interactionDepth += 1
-    editor.setVisible(false)
+    editor.setInputVisible(false)
   }
   const endInteraction = () => {
     interactionDepth -= 1
     const snapshot = core.getSnapshot()
-    editor.setVisible(!exiting && interactionDepth === 0 && snapshot.status === "idle" && !!snapshot.currentSessionId)
+    editor.setInputVisible(
+      !exiting && interactionDepth === 0 && snapshot.status === "idle" && !!snapshot.currentSessionId,
+    )
   }
 
   const unsubscribe = core.subscribe((event) => {
     if (event.type === "snapshot") {
       view.update(event.snapshot)
-      editor.setStatus(sessionStatusText(event.snapshot))
-      editor.setShortcuts(
-        shortcutText({ status: event.snapshot.status, hasSession: !!event.snapshot.currentSessionId }),
-      )
+      const statusBar = statusBarView(event.snapshot)
+      editor.setStatus(statusBar.session)
+      editor.setShortcuts(statusBar.shortcuts)
       editor.setBusy(event.snapshot.status !== "idle")
 
-      editor.setVisible(
+      editor.setInputVisible(
         !exiting && interactionDepth === 0 && event.snapshot.status === "idle" && !!event.snapshot.currentSessionId,
       )
     } else if (event.promptType === "select") {

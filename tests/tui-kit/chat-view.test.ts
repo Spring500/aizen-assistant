@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import type { CoreSnapshot } from "../../packages/core/types.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
+import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
 
 function snapshot(overrides: Partial<CoreSnapshot> = {}): CoreSnapshot {
   return {
@@ -27,6 +28,19 @@ async function setupRepl(width = 100, height = 20) {
     externalOutputMode: "capture-stdout",
   })
 }
+
+test("状态栏视图模型根据运行状态生成统一内容", () => {
+  const current = snapshot({
+    status: "running",
+    currentSessionId: "s1",
+    currentModel: { providerId: "test", modelId: "model", api: "a", thinkingLevel: "off", contextWindow: 1000 },
+    contextUsage: { used: 250, total: 1000 },
+  })
+  expect(statusBarView(current)).toEqual({
+    session: "模型：test/model | 上下文：250/1,000",
+    shortcuts: "Esc 中止 | Ctrl+C 退出",
+  })
+})
 
 test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态", async () => {
   const setup = await setupRepl()

@@ -1,19 +1,6 @@
 import { type CliRenderer, type KeyEvent, TextareaRenderable, TextRenderable } from "@opentui/core"
-import type { CoreStatus } from "../core/types.ts"
+import { shortcutText } from "./status-bar.ts"
 import { systemColors } from "./theme.ts"
-
-export type ShortcutContext = {
-  status: CoreStatus
-  hasSession: boolean
-}
-
-export function shortcutText(context: ShortcutContext): string {
-  const global = "Ctrl+C 退出"
-  if (context.status === "running" || context.status === "aborting") return `Esc 中止 | ${global}`
-  if (context.status === "authenticating") return `Esc 取消认证 | ${global}`
-  if (!context.hasSession) return `↑/↓ 选择 | Enter 确认 | Esc 返回 | ${global}`
-  return `Enter 发送 | Shift+Enter 或 \\+Enter 换行 | Esc 中止 | /model 切换模型 | /sessions 会话 | /new 新会话 | /fold 折叠 | /quit 退出 | ${global}`
-}
 
 export type EditorHandlers = {
   onSubmit(value: string): void
@@ -28,7 +15,7 @@ export type ChatEditor = {
   setStatus(content: string): void
   setShortcuts(content: string): void
   setBusy(busy: boolean): void
-  setVisible(visible: boolean): void
+  setInputVisible(visible: boolean): void
   destroy(): void
 }
 
@@ -97,10 +84,8 @@ export function createChatEditor(renderer: CliRenderer, handlers: EditorHandlers
     setBusy(value) {
       busy = value
     },
-    setVisible(value) {
+    setInputVisible(value) {
       input.visible = value
-      status.visible = value
-      shortcuts.visible = value
       if (value) input.focus()
       else input.blur()
     },
