@@ -23,7 +23,7 @@ async function setupRepl(width = 100, height = 20) {
     width,
     height,
     screenMode: "split-footer",
-    footerHeight: 8,
+    footerHeight: 9,
     externalOutputMode: "capture-stdout",
   })
 }

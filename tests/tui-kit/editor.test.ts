@@ -1,7 +1,7 @@
 import { expect, test } from "bun:test"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
-import { createChatEditor } from "../../packages/tui-kit/editor.ts"
+import { createChatEditor, shortcutText } from "../../packages/tui-kit/editor.ts"
 
 function emitKey(renderer: Awaited<ReturnType<typeof createTestRenderer>>["renderer"], raw: string): void {
   const parsed = parseKeypress(raw)
@@ -34,6 +34,24 @@ test("编辑器发送、中止和忙碌状态", async () => {
   }
 })
 
+test("编辑器支持 Ctrl+J 换行，并用 Enter 发送", async () => {
+  const setup = await createTestRenderer({ width: 80, height: 10 })
+  const submitted: string[] = []
+  try {
+    const editor = createChatEditor(setup.renderer, {
+      onSubmit: (value) => submitted.push(value),
+      onAbort: () => {},
+      onQuit: () => {},
+    })
+    editor.input.setText("第一行\n第二行")
+    editor.input.submit()
+    expect(submitted).toEqual(["第一行\n第二行"])
+    editor.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("编辑器可在选择和认证期间隐藏", async () => {
   const setup = await createTestRenderer({ width: 60, height: 8 })
   try {
@@ -50,8 +68,15 @@ test("编辑器可在选择和认证期间隐藏", async () => {
     await setup.renderOnce()
     expect(setup.captureCharFrame()).toContain("输入消息")
     expect(setup.captureCharFrame()).toContain("模型：未选择模型")
+    expect(setup.captureCharFrame()).toContain("Ctrl+J 换行")
     editor.destroy()
   } finally {
     setup.renderer.destroy()
   }
+})
+
+test("快捷键提示随状态变化", () => {
+  expect(shortcutText({ status: "running", hasSession: true })).toContain("Esc 中止")
+  expect(shortcutText({ status: "idle", hasSession: true })).toContain("/model 切换模型")
+  expect(shortcutText({ status: "idle", hasSession: false })).toContain("↑/↓ 选择")
 })

@@ -5,7 +5,8 @@ import { SessionStore } from "../../packages/core/session-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { createChatView, sessionStatusText } from "../../packages/tui-kit/chat-view.ts"
 
-import { createChatEditor } from "../../packages/tui-kit/editor.ts"
+import { createChatEditor, shortcutText } from "../../packages/tui-kit/editor.ts"
+
 import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { createAizenRenderer, destroyRenderer } from "../../packages/tui-kit/renderer.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
@@ -90,6 +91,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     if (event.type === "snapshot") {
       view.update(event.snapshot)
       editor.setStatus(sessionStatusText(event.snapshot))
+      editor.setShortcuts(
+        shortcutText({ status: event.snapshot.status, hasSession: !!event.snapshot.currentSessionId }),
+      )
       editor.setBusy(event.snapshot.status !== "idle")
 
       editor.setVisible(

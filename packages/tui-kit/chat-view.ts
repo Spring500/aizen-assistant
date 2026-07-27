@@ -1,6 +1,7 @@
 import { BoxRenderable, type CliRenderer, type RenderContext, TextRenderable } from "@opentui/core"
 import type { ToolCallPart, ToolMessage } from "../core/session-format.ts"
 import type { CoreSnapshot } from "../core/types.ts"
+import { systemTextColor } from "./theme.ts"
 
 export type ChatView = {
   header: TextRenderable
@@ -288,6 +289,7 @@ function createHistoryBlock(
       width: "100%",
       height: "auto",
       marginBottom: 1,
+      fg: systemTextColor,
       content: block.content,
     })
   }
@@ -358,7 +360,9 @@ function contextText(snapshot: CoreSnapshot): string {
 }
 
 export function sessionStatusText(snapshot: CoreSnapshot): string {
-  const model = snapshot.currentModel ? `${snapshot.currentModel.providerId}/${snapshot.currentModel.modelId}` : "未选择模型"
+  const model = snapshot.currentModel
+    ? `${snapshot.currentModel.providerId}/${snapshot.currentModel.modelId}`
+    : "未选择模型"
   return `模型：${model} | 上下文：${contextText(snapshot)}`
 }
 
@@ -377,6 +381,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
   const header = new TextRenderable(renderer, {
     id: "header",
     height: 1,
+    fg: systemTextColor,
     content: "AizenAssistant",
   })
   const live = new TextRenderable(renderer, {
@@ -385,11 +390,13 @@ export function createChatView(renderer: CliRenderer): ChatView {
     height: 1,
     wrapMode: "none",
     truncate: true,
+    fg: systemTextColor,
     content: "",
   })
   const status = new TextRenderable(renderer, {
     id: "status",
     height: 1,
+    fg: systemTextColor,
     content: "空闲",
   })
   renderer.root.add(header)
