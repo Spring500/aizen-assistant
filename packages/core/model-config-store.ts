@@ -1,0 +1,356 @@
+import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { dirname } from "node:path"
+import { createHash } from "node:crypto"
+
+export const configurableApis = [
+  "openai-completions",
+  "openai-responses",
+  "anthropic-messages",
+  "google-generative-ai",
+] as const
+
+export type ConfigurableApi = (typeof configurableApis)[number]
+export type ModelModality = "text" | "image" | "pdf" | "audio" | "video"
+export type SupportedModelModality = "text" | "image"
+
+export type ModelCostConfig = { input: number; output: number; cacheRead: number; cacheWrite: number }
+
+export type EditableModelConfig = {
+  id: string
+  name: string
+  api?: ConfigurableApi
+  reasoning: boolean
+  input: SupportedModelModality[]
+  contextWindow: number
+  maxTokens: number
+  cost: ModelCostConfig
+}
+
+export type EditableProviderConfig = {
+  id: string
+  name: string
+  baseUrl: string
+  api: ConfigurableApi
+  authHeader: boolean
+}
+
+export type ModelConfigEntry = EditableModelConfig & { editable: boolean; readonlyReason?: string }
+export type ProviderConfigEntry = {
+  id: string
+  name: string
+  baseUrl: string
+  api?: ConfigurableApi
+  authHeader: boolean
+  editable: boolean
+  readonlyReason?: string
+  models: ModelConfigEntry[]
+}
+
+export type ModelConfigSnapshot = {
+  revision: string
+  providers: ProviderConfigEntry[]
+  apiChoices: ConfigurableApi[]
+  inputModalities: Array<{ value: ModelModality; enabled: boolean; disabledReason?: string }>
+  outputModalities: Array<{ value: ModelModality; enabled: boolean; disabledReason?: string }>
+}
+
+type JsonObject = Record<string, unknown>
+type StoredConfig = { providers: Record<string, JsonObject> }
+
+const providerIdPattern = /^[a-z0-9][a-z0-9._-]{0,63}$/
+
+function object(value: unknown, label: string): JsonObject {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${label} 必须是对象`)
+  return value as JsonObject
+}
+
+function stripJsonComments(source: string): string {
+  let output = ""
+  let string = false
+  let escaped = false
+  for (let index = 0; index < source.length; index++) {
+    const current = source[index] ?? ""
+    const next = source[index + 1]
+    if (string) {
+      output += current
+      if (escaped) escaped = false
+      else if (current === "\\") escaped = true
+      else if (current === '"') string = false
+      continue
+    }
+    if (current === '"') {
+      string = true
+      output += current
+    } else if (current === "/" && next === "/") {
+      while (index < source.length && source[index] !== "\n") index++
+      output += "\n"
+    } else if (current === "/" && next === "*") {
+      index += 2
+      while (index < source.length && !(source[index] === "*" && source[index + 1] === "/")) index++
+      index++
+    } else output += current
+  }
+  return output
+}
+
+function parseConfig(source: string): StoredConfig {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(stripJsonComments(source))
+  } catch (error) {
+    throw new Error(`models.json 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`)
+  }
+  const root = object(parsed, "models.json")
+  const providers = object(root.providers, "models.json.providers")
+  return { providers: providers as Record<string, JsonObject> }
+}
+
+function revision(source: string): string {
+  return createHash("sha256").update(source).digest("hex")
+}
+
+function api(value: unknown, label: string): ConfigurableApi {
+  if (!configurableApis.includes(value as ConfigurableApi)) throw new Error(`${label} 不是支持的 API`)
+  return value as ConfigurableApi
+}
+
+function positiveInteger(value: unknown, label: string, fallback: number): number {
+  const actual = value === undefined ? fallback : value
+  if (!Number.isSafeInteger(actual) || Number(actual) <= 0) throw new Error(`${label} 必须是正整数`)
+  return Number(actual)
+}
+
+function cost(value: unknown, label: string): ModelCostConfig {
+  const source = value === undefined ? {} : object(value, label)
+  const result = {
+    input: source.input ?? 0,
+    output: source.output ?? 0,
+    cacheRead: source.cacheRead ?? 0,
+    cacheWrite: source.cacheWrite ?? 0,
+  }
+  for (const [key, item] of Object.entries(result))
+    if (typeof item !== "number" || !Number.isFinite(item) || item < 0)
+      throw new Error(`${label}.${key} 必须是非负有限数`)
+  return result as ModelCostConfig
+}
+
+function validateProvider(input: EditableProviderConfig): void {
+  if (!providerIdPattern.test(input.id))
+    throw new Error("供应商 ID 只能包含小写字母、数字、点、下划线和短横线，长度不超过 64")
+  if (!input.name.trim()) throw new Error("供应商名称不能为空")
+  let parsed: URL
+  try {
+    parsed = new URL(input.baseUrl)
+  } catch {
+    throw new Error("Base URL 必须是合法的绝对 URL")
+  }
+  if (
+    !["http:", "https:"].includes(parsed.protocol) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  )
+    throw new Error("Base URL 只能使用 HTTP/HTTPS，且不能包含认证信息、查询参数或片段")
+  api(input.api, "供应商 API")
+}
+
+function validateModel(input: EditableModelConfig): void {
+  if (!input.id.trim() || input.id !== input.id.trim() || /[\u0000-\u001f\u007f]/u.test(input.id))
+    throw new Error("模型 ID 不能为空、包含首尾空格或控制字符")
+  if (!input.name.trim()) throw new Error("模型名称不能为空")
+  if (input.api !== undefined) api(input.api, "模型 API")
+  if (input.input.length === 0 || new Set(input.input).size !== input.input.length)
+    throw new Error("输入模态不能为空或重复")
+  if (input.input.some((item) => item !== "text" && item !== "image"))
+    throw new Error("当前 adapter 只支持文本和图片输入")
+  positiveInteger(input.contextWindow, "上下文窗口", 128000)
+  positiveInteger(input.maxTokens, "最大输出 token", 16384)
+  if (input.maxTokens > input.contextWindow) throw new Error("最大输出 token 不能超过上下文窗口")
+  cost(input.cost, "模型价格")
+}
+
+function modelEntry(providerId: string, value: unknown): ModelConfigEntry {
+  const source = object(value, `供应商 ${providerId} 的模型`)
+  const id = typeof source.id === "string" ? source.id : ""
+  const input = source.input === undefined ? ["text"] : source.input
+  if (!Array.isArray(input)) throw new Error(`模型 ${providerId}/${id} 的 input 必须是数组`)
+  const unsupported = input.filter((item) => item !== "text" && item !== "image")
+  const modelApi =
+    source.api === undefined
+      ? undefined
+      : configurableApis.includes(source.api as ConfigurableApi)
+        ? (source.api as ConfigurableApi)
+        : undefined
+  const unsupportedApi = source.api !== undefined && modelApi === undefined
+  const entry: ModelConfigEntry = {
+    id,
+    name: typeof source.name === "string" ? source.name : id,
+    ...(modelApi === undefined ? {} : { api: modelApi }),
+    reasoning: source.reasoning === true,
+    input: input.filter((item): item is SupportedModelModality => item === "text" || item === "image"),
+    contextWindow: positiveInteger(source.contextWindow, `模型 ${providerId}/${id} 的上下文窗口`, 128000),
+    maxTokens: positiveInteger(source.maxTokens, `模型 ${providerId}/${id} 的最大输出 token`, 16384),
+    cost: cost(source.cost, `模型 ${providerId}/${id} 的价格`),
+    editable: unsupported.length === 0 && !unsupportedApi,
+    ...(unsupported.length > 0
+      ? { readonlyReason: `包含当前 adapter 不支持的输入模态：${unsupported.join("、")}` }
+      : unsupportedApi
+        ? { readonlyReason: `使用当前编辑器不支持的 API：${String(source.api)}` }
+        : {}),
+  }
+  if (entry.maxTokens > entry.contextWindow) throw new Error(`模型 ${providerId}/${id} 的最大输出 token 超过上下文窗口`)
+  return entry
+}
+
+function snapshot(config: StoredConfig, source: string): ModelConfigSnapshot {
+  const providers = Object.entries(config.providers).map(([id, value]) => {
+    const provider = object(value, `供应商 ${id}`)
+    const models = provider.models === undefined ? [] : provider.models
+    if (!Array.isArray(models)) throw new Error(`供应商 ${id} 的 models 必须是数组`)
+    const providerApi = configurableApis.includes(provider.api as ConfigurableApi)
+      ? (provider.api as ConfigurableApi)
+      : undefined
+    const editable = providerApi !== undefined && typeof provider.baseUrl === "string" && Array.isArray(provider.models)
+    const entry: ProviderConfigEntry = {
+      id,
+      name: typeof provider.name === "string" ? provider.name : id,
+      baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : "",
+      ...(providerApi === undefined ? {} : { api: providerApi }),
+      authHeader: provider.authHeader === true,
+      editable,
+      ...(editable ? {} : { readonlyReason: "该供应商是内置覆盖或包含当前编辑器不支持的配置" }),
+      models: models.map((model) => modelEntry(id, model)),
+    }
+    return entry
+  })
+  const unsupported = (value: ModelModality) => ({ value, enabled: false, disabledReason: "当前 pi adapter 不支持" })
+  return {
+    revision: revision(source),
+    providers,
+    apiChoices: [...configurableApis],
+    inputModalities: [
+      { value: "text", enabled: true },
+      { value: "image", enabled: true },
+      unsupported("pdf"),
+      unsupported("audio"),
+      unsupported("video"),
+    ],
+    outputModalities: [
+      unsupported("text"),
+      unsupported("image"),
+      unsupported("pdf"),
+      unsupported("audio"),
+      unsupported("video"),
+    ],
+  }
+}
+
+export class ModelConfigStore {
+  readonly #path: string
+  constructor(path: string) {
+    this.#path = path
+  }
+
+  async read(): Promise<ModelConfigSnapshot> {
+    const source = await this.#readSource()
+    return snapshot(parseConfig(source), source)
+  }
+
+  async upsertProvider(expectedRevision: string, provider: EditableProviderConfig): Promise<string> {
+    validateProvider(provider)
+    return this.#update(expectedRevision, (config) => {
+      const previous = config.providers[provider.id] ?? {}
+      config.providers[provider.id] = {
+        ...previous,
+        name: provider.name.trim(),
+        baseUrl: provider.baseUrl,
+        api: provider.api,
+        authHeader: provider.authHeader,
+        models: previous.models ?? [],
+      }
+    })
+  }
+
+  async deleteProvider(expectedRevision: string, providerId: string): Promise<string> {
+    return this.#update(expectedRevision, (config) => {
+      if (!config.providers[providerId]) throw new Error(`供应商不存在：${providerId}`)
+      delete config.providers[providerId]
+    })
+  }
+
+  async upsertModel(expectedRevision: string, providerId: string, model: EditableModelConfig): Promise<string> {
+    validateModel(model)
+    return this.#update(expectedRevision, (config) => {
+      const provider = config.providers[providerId]
+      if (!provider) throw new Error(`供应商不存在：${providerId}`)
+      const models = Array.isArray(provider.models) ? [...provider.models] : []
+      const index = models.findIndex((item) => object(item, "模型").id === model.id)
+      const previous = index < 0 ? {} : object(models[index], "模型")
+      const stored: JsonObject = {
+        ...previous,
+        id: model.id,
+        name: model.name.trim(),
+        ...(model.api === undefined ? { api: undefined } : { api: model.api }),
+        reasoning: model.reasoning,
+        input: [...model.input],
+        contextWindow: model.contextWindow,
+        maxTokens: model.maxTokens,
+        cost: { ...model.cost },
+      }
+      if (stored.api === undefined) delete stored.api
+      if (index < 0) models.push(stored)
+      else models[index] = stored
+      provider.models = models
+    })
+  }
+
+  async deleteModel(expectedRevision: string, providerId: string, modelId: string): Promise<string> {
+    return this.#update(expectedRevision, (config) => {
+      const provider = config.providers[providerId]
+      if (!provider || !Array.isArray(provider.models)) throw new Error(`供应商不存在：${providerId}`)
+      const models = provider.models.filter((item) => object(item, "模型").id !== modelId)
+      if (models.length === provider.models.length) throw new Error(`模型不存在：${providerId}/${modelId}`)
+      provider.models = models
+    })
+  }
+
+  async restore(source: string): Promise<void> {
+    await this.#writeSource(source)
+  }
+
+  async source(): Promise<string> {
+    return this.#readSource()
+  }
+
+  async #update(expectedRevision: string, mutate: (config: StoredConfig) => void): Promise<string> {
+    const source = await this.#readSource()
+    if (revision(source) !== expectedRevision) throw new Error("模型配置已被其他程序修改，请重新加载")
+    const config = structuredClone(parseConfig(source))
+    mutate(config)
+    const next = `${JSON.stringify(config, null, 2)}\n`
+    snapshot(config, next)
+    await this.#writeSource(next)
+    return next
+  }
+
+  async #readSource(): Promise<string> {
+    try {
+      return await readFile(this.#path, "utf8")
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return '{\n  "providers": {}\n}\n'
+      throw error
+    }
+  }
+
+  async #writeSource(source: string): Promise<void> {
+    await mkdir(dirname(this.#path), { recursive: true })
+    const temporary = `${this.#path}.${crypto.randomUUID()}.tmp`
+    await writeFile(temporary, source, "utf8")
+    try {
+      await rename(temporary, this.#path)
+    } finally {
+      await rm(temporary, { force: true })
+    }
+  }
+}
