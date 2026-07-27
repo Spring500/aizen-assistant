@@ -90,7 +90,27 @@ test("footer 显示回复耗时、生成 token 和上下文用量", async () => 
     )
     await setup.renderOnce()
     const footer = setup.captureCharFrame()
-    expect(footer).toContain("7s · 42 tokens")
+    expect(footer).toContain("耗时 7s · 生成 42 tokens")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("工具调用时也显示当前回复耗时", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    view.update(
+      snapshot({
+        status: "running",
+        responseMetrics: { startedAt: Date.now(), elapsedSeconds: 9, outputTokens: 0 },
+        activeTools: [{ callId: "c1", name: "bash", arguments: { command: "bun test" } }],
+      }),
+    )
+    await setup.renderOnce()
+    const footer = setup.captureCharFrame()
+    expect(footer).toContain("[bash] bun test")
+    expect(footer).toContain("耗时 9s")
   } finally {
     setup.renderer.destroy()
   }

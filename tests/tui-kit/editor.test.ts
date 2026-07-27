@@ -34,7 +34,7 @@ test("编辑器发送、中止和忙碌状态", async () => {
   }
 })
 
-test("编辑器支持 Ctrl+J 换行，并用 Enter 发送", async () => {
+test("编辑器支持反斜杠回车换行，并用 Enter 发送", async () => {
   const setup = await createTestRenderer({ width: 80, height: 10 })
   const submitted: string[] = []
   try {
@@ -43,7 +43,11 @@ test("编辑器支持 Ctrl+J 换行，并用 Enter 发送", async () => {
       onAbort: () => {},
       onQuit: () => {},
     })
-    editor.input.setText("第一行\n第二行")
+    editor.input.setText("第一行\\")
+    editor.input.submit()
+    expect(submitted).toEqual([])
+    expect(editor.input.plainText).toBe("第一行\n")
+    editor.input.setText(`${editor.input.plainText}第二行`)
     editor.input.submit()
     expect(submitted).toEqual(["第一行\n第二行"])
     editor.destroy()
@@ -68,7 +72,8 @@ test("编辑器可在选择和认证期间隐藏", async () => {
     await setup.renderOnce()
     expect(setup.captureCharFrame()).toContain("输入消息")
     expect(setup.captureCharFrame()).toContain("模型：未选择模型")
-    expect(setup.captureCharFrame()).toContain("Ctrl+J 换行")
+    expect(setup.captureCharFrame()).toContain("Shift+Enter 或 \\+Enter 换行")
+
     editor.destroy()
   } finally {
     setup.renderer.destroy()
@@ -77,6 +82,6 @@ test("编辑器可在选择和认证期间隐藏", async () => {
 
 test("快捷键提示随状态变化", () => {
   expect(shortcutText({ status: "running", hasSession: true })).toContain("Esc 中止")
-  expect(shortcutText({ status: "idle", hasSession: true })).toContain("/model 切换模型")
+  expect(shortcutText({ status: "idle", hasSession: true })).toContain("Shift+Enter 或 \\+Enter 换行")
   expect(shortcutText({ status: "idle", hasSession: false })).toContain("↑/↓ 选择")
 })

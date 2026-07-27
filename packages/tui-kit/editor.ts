@@ -1,6 +1,6 @@
 import { type CliRenderer, type KeyEvent, TextareaRenderable, TextRenderable } from "@opentui/core"
 import type { CoreStatus } from "../core/types.ts"
-import { systemTextColor } from "./theme.ts"
+import { systemColors } from "./theme.ts"
 
 export type ShortcutContext = {
   status: CoreStatus
@@ -12,7 +12,7 @@ export function shortcutText(context: ShortcutContext): string {
   if (context.status === "running" || context.status === "aborting") return `Esc 中止 | ${global}`
   if (context.status === "authenticating") return `Esc 取消认证 | ${global}`
   if (!context.hasSession) return `↑/↓ 选择 | Enter 确认 | Esc 返回 | ${global}`
-  return `Enter 发送 | Ctrl+J 换行 | Esc 中止 | /model 切换模型 | /sessions 会话 | /new 新会话 | /fold 折叠 | /quit 退出 | ${global}`
+  return `Enter 发送 | Shift+Enter 或 \\+Enter 换行 | Esc 中止 | /model 切换模型 | /sessions 会话 | /new 新会话 | /fold 折叠 | /quit 退出 | ${global}`
 }
 
 export type EditorHandlers = {
@@ -34,21 +34,26 @@ export type ChatEditor = {
 
 export function createChatEditor(renderer: CliRenderer, handlers: EditorHandlers): ChatEditor {
   let busy = false
+  const submitOrNewline = () => {
+    if (busy) return
+    const value = input.plainText
+    if (value.endsWith("\\")) {
+      input.setText(`${value.slice(0, -1)}\n`)
+      return
+    }
+    if (!value.trim()) return
+    input.setText("")
+    handlers.onSubmit(value)
+  }
   const input = new TextareaRenderable(renderer, {
     id: "editor",
     height: 3,
-    placeholder: "输入消息；Enter 发送，Ctrl+J 换行，Esc 中止",
+    placeholder: "输入消息；Enter 发送，Shift+Enter 或 \\+Enter 换行，Esc 中止",
     keyBindings: [
       { name: "return", action: "submit" },
-      { name: "j", ctrl: true, action: "newline" },
+      { name: "return", shift: true, action: "newline" },
     ],
-    onSubmit: () => {
-      if (busy) return
-      const value = input.plainText
-      if (!value.trim()) return
-      input.setText("")
-      handlers.onSubmit(value)
-    },
+    onSubmit: submitOrNewline,
   })
   const status = new TextRenderable(renderer, {
     id: "editor-status",
@@ -56,7 +61,7 @@ export function createChatEditor(renderer: CliRenderer, handlers: EditorHandlers
     height: 1,
     wrapMode: "none",
     truncate: true,
-    fg: systemTextColor,
+    fg: systemColors.sessionStatus,
     content: "模型：未选择模型 | 上下文：0/未知",
   })
   const shortcuts = new TextRenderable(renderer, {
@@ -65,7 +70,7 @@ export function createChatEditor(renderer: CliRenderer, handlers: EditorHandlers
     height: 1,
     wrapMode: "none",
     truncate: true,
-    fg: systemTextColor,
+    fg: systemColors.shortcuts,
     content: shortcutText({ status: "idle", hasSession: false }),
   })
   renderer.root.add(input)

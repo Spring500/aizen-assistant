@@ -5,7 +5,7 @@ import {
   SelectRenderableEvents,
   TextRenderable,
 } from "@opentui/core"
-import { systemTextColor } from "./theme.ts"
+import { systemColors } from "./theme.ts"
 
 export type SelectorItem<T> = { name: string; description: string; value: T }
 export type SelectorOptions = { title: string; signal?: AbortSignal }
@@ -29,7 +29,7 @@ export function selectItem<T>(
       right: 0,
       left: 0,
       zIndex: 101,
-      fg: systemTextColor,
+      fg: systemColors.secondary,
       content: options.title,
     })
     const selector = new SelectRenderable(renderer, {
@@ -42,8 +42,8 @@ export function selectItem<T>(
       left: 0,
       zIndex: 100,
       showDescription: true,
-      textColor: systemTextColor,
-      descriptionColor: systemTextColor,
+      textColor: systemColors.secondary,
+      descriptionColor: systemColors.shortcuts,
     })
     renderer.root.add(title)
     renderer.root.add(selector)
