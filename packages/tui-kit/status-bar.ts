@@ -32,7 +32,7 @@ export function shortcutText(context: ShortcutContext): string {
   if (context.status === "running" || context.status === "aborting") return `Esc 中止 | ${global}`
   if (context.status === "authenticating") return `Esc 取消认证 | ${global}`
   if (!context.hasSession) return `↑/↓ 选择 | Enter 确认 | Esc 返回 | ${global}`
-  return `Enter 发送 | Shift+Enter 或 \\+Enter 换行 | Esc 中止 | /model 切换模型 | /sessions 会话 | /new 新会话 | /fold 折叠 | /quit 退出 | ${global}`
+  return `Enter 发送 | Shift+Enter 换行 | 光标前 \\ 后 Enter 换行 | Esc 中止 | /model 切换模型 | /sessions 会话 | /new 新会话 | /fold 折叠 | /quit 退出 | ${global}`
 }
 
 export function statusBarView(snapshot: CoreSnapshot): StatusBarViewModel {

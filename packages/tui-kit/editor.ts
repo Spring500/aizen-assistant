@@ -19,15 +19,28 @@ export type ChatEditor = {
   destroy(): void
 }
 
+function escapedNewline(input: TextareaRenderable): boolean {
+  const value = input.plainText
+  const characterOffset = input.cursorCharacterOffset
+  if (characterOffset === undefined) return false
+
+  let slashIndex = -1
+  if (characterOffset > 0 && value[characterOffset - 1] === "\\") slashIndex = characterOffset - 1
+  else if (input.cursorOffset >= value.length && value[characterOffset] === "\\") slashIndex = characterOffset
+  if (slashIndex < 0) return false
+
+  const before = value.slice(0, slashIndex)
+  input.setText(`${before}\n${value.slice(slashIndex + 1)}`)
+  input.setCursor(before.split("\n").length, 0)
+  return true
+}
+
 export function createChatEditor(renderer: CliRenderer, handlers: EditorHandlers): ChatEditor {
   let busy = false
   const submitOrNewline = () => {
     if (busy) return
     const value = input.plainText
-    if (value.endsWith("\\")) {
-      input.setText(`${value.slice(0, -1)}\n`)
-      return
-    }
+    if (escapedNewline(input)) return
     if (!value.trim()) return
     input.setText("")
     handlers.onSubmit(value)
@@ -35,7 +48,7 @@ export function createChatEditor(renderer: CliRenderer, handlers: EditorHandlers
   const input = new TextareaRenderable(renderer, {
     id: "editor",
     height: 3,
-    placeholder: "输入消息；Enter 发送，Shift+Enter 或 \\+Enter 换行，Esc 中止",
+    placeholder: "输入消息；Enter 发送，Shift+Enter 或光标前 \\ 后 Enter 换行，Esc 中止",
     keyBindings: [
       { name: "return", action: "submit" },
       { name: "return", shift: true, action: "newline" },

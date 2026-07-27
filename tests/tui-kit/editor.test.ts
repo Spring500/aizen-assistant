@@ -35,7 +35,7 @@ test("编辑器发送、中止和忙碌状态", async () => {
   }
 })
 
-test("编辑器支持反斜杠回车换行，并用 Enter 发送", async () => {
+test("编辑器支持光标前反斜杠回车换行，并用 Enter 发送", async () => {
   const setup = await createTestRenderer({ width: 80, height: 10 })
   const submitted: string[] = []
   try {
@@ -44,13 +44,21 @@ test("编辑器支持反斜杠回车换行，并用 Enter 发送", async () => {
       onAbort: () => {},
       onQuit: () => {},
     })
-    editor.input.setText("第一行\\")
+    editor.input.setText("first\\")
+    editor.input.cursorOffset = editor.input.plainText.length
     editor.input.submit()
     expect(submitted).toEqual([])
-    expect(editor.input.plainText).toBe("第一行\n")
-    editor.input.setText(`${editor.input.plainText}第二行`)
+    expect(editor.input.plainText).toBe("first\n")
+    expect(editor.input.logicalCursor).toMatchObject({ row: 1, col: 0 })
+
+    editor.input.setText("first\nabc\\def")
+    editor.input.cursorOffset = "first\nabc\\".length
     editor.input.submit()
-    expect(submitted).toEqual(["第一行\n第二行"])
+    expect(editor.input.plainText).toBe("first\nabc\ndef")
+    expect(editor.input.logicalCursor).toMatchObject({ row: 2, col: 0 })
+
+    editor.input.submit()
+    expect(submitted).toEqual(["first\nabc\ndef"])
     editor.destroy()
   } finally {
     setup.renderer.destroy()
@@ -70,12 +78,12 @@ test("编辑器可只隐藏输入框并保持底部状态栏可见", async () =>
     await setup.renderOnce()
     expect(setup.captureCharFrame()).not.toContain("输入消息")
     expect(setup.captureCharFrame()).toContain("模型：未选择模型")
-    expect(setup.captureCharFrame()).toContain("Shift+Enter 或 \\+Enter 换行")
+    expect(setup.captureCharFrame()).toContain("光标前 \\ 后 Enter 换行")
     editor.setInputVisible(true)
     await setup.renderOnce()
     expect(setup.captureCharFrame()).toContain("输入消息")
     expect(setup.captureCharFrame()).toContain("模型：未选择模型")
-    expect(setup.captureCharFrame()).toContain("Shift+Enter 或 \\+Enter 换行")
+    expect(setup.captureCharFrame()).toContain("光标前 \\ 后 Enter 换行")
 
     editor.destroy()
   } finally {
@@ -85,6 +93,6 @@ test("编辑器可只隐藏输入框并保持底部状态栏可见", async () =>
 
 test("快捷键提示随状态变化", () => {
   expect(shortcutText({ status: "running", hasSession: true })).toContain("Esc 中止")
-  expect(shortcutText({ status: "idle", hasSession: true })).toContain("Shift+Enter 或 \\+Enter 换行")
+  expect(shortcutText({ status: "idle", hasSession: true })).toContain("光标前 \\ 后 Enter 换行")
   expect(shortcutText({ status: "idle", hasSession: false })).toContain("↑/↓ 选择")
 })
