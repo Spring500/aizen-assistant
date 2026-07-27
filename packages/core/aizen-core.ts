@@ -1,5 +1,11 @@
 import type { PiPort, PiPortEvent } from "./pi-port.ts"
-import type { AssistantMessage, ModelReference, SessionRecord, TurnFinishedRecord, TurnStartedRecord } from "./session-format.ts"
+import type {
+  AssistantMessage,
+  ModelReference,
+  SessionRecord,
+  TurnFinishedRecord,
+  TurnStartedRecord,
+} from "./session-format.ts"
 import type { SessionStore } from "./session-store.ts"
 import {
   type CoreCommand,
@@ -368,7 +374,10 @@ export class AizenCore implements CorePort {
   #contextUsageFromRecords() {
     const assistant = [...this.#records]
       .reverse()
-      .find((record): record is SessionRecord & { message: AssistantMessage } => record.kind === "message" && record.message.role === "assistant")
+      .find(
+        (record): record is SessionRecord & { message: AssistantMessage } =>
+          record.kind === "message" && record.message.role === "assistant",
+      )
     const total = this.#snapshot.currentModel?.contextWindow
     const used = assistant ? this.#contextUsageFromAssistant(assistant.message).used : 0
     return total === undefined ? { used } : { used, total }

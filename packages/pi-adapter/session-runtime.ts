@@ -41,7 +41,13 @@ function asThinkingLevel(level: string): ThinkingLevel {
 }
 
 function modelReference(model: Model<Api>, thinkingLevel: ThinkingLevel) {
-  return { providerId: model.provider, modelId: model.id, api: model.api, thinkingLevel, contextWindow: model.contextWindow }
+  return {
+    providerId: model.provider,
+    modelId: model.id,
+    api: model.api,
+    thinkingLevel,
+    contextWindow: model.contextWindow,
+  }
 }
 
 function toolResultText(result: unknown): string {
