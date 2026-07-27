@@ -16,7 +16,7 @@ import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
 
-import { selectableModelProviders } from "../../packages/tui-kit/model-selection.ts"
+import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
 import { selectMultiple } from "../../packages/tui-kit/multi-select.ts"
 import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { createAizenRenderer, destroyRenderer } from "../../packages/tui-kit/renderer.ts"
@@ -212,77 +212,134 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   async function chooseModel() {
     beginInteraction()
     try {
-      const authenticateProvider = async () => {
+      const authenticateProvider = async (providerId?: string): Promise<string | undefined> => {
         while (!exiting) {
           await core.dispatch({ type: "list_auth_providers" })
-          const providers = core.getSnapshot().authProviders.filter((provider) => provider.supportsApiKey)
-          const provider = await selectItem(
-            renderer,
-            "provider-selector",
-            providers.map((item) => ({
-              name: item.name,
-              description: item.configured ? "已配置" : "需要认证",
-              value: item.id,
-            })),
-            { title: "选择服务商", signal: interactionController.signal },
-          )
-          if (!provider) return false
-          authProviderName = providers.find((item) => item.id === provider)?.name
-          const login = await core.dispatch({
-            type: "login_api_key",
-            providerId: provider,
-          })
+          const providers = core.getSnapshot().authProviders
+          const selectedProvider = providerId
+            ? providers.find((provider) => provider.id === providerId)
+            : await selectItem(
+                renderer,
+                "provider-selector",
+                unconfiguredAuthProviders(providers).map((item) => ({
+                  name: item.name,
+                  description: "需要认证",
+                  value: item,
+                })),
+                { title: "认证其它供应商", signal: interactionController.signal },
+              )
+          if (!selectedProvider) return undefined
+          authProviderName = selectedProvider.name
+          const login = await core.dispatch({ type: "login_api_key", providerId: selectedProvider.id })
           authProviderName = undefined
-          if (login.ok) return true
+          if (login.ok) return selectedProvider.id
+          if (providerId) return undefined
         }
-        return false
+        return undefined
       }
+
+      let preferredProviderId: string | undefined
       while (!exiting) {
         const listed = await core.dispatch({ type: "list_models" })
         const authListed = await core.dispatch({ type: "list_auth_providers" })
-        if (!listed.ok || !authListed.ok) return undefined
-        const providers = selectableModelProviders(core.getSnapshot().models, core.getSnapshot().authProviders)
-        const provider = await selectItem<(typeof providers)[number] | "__authenticate__" | "__manage__">(
-          renderer,
-          "model-provider-selector",
-          [
-            ...providers.map((item) => ({
-              name: item.name,
-              description: `${item.models.length} 个可用模型`,
-              value: item,
-            })),
-            {
-              name: "管理供应商和模型",
-              description: "新增、编辑或删除 models.json 配置",
-              value: "__manage__" as const,
-            },
-            {
-              name: "认证其它服务商",
-              description: "认证后，该供应商才会出现在模型选择列表",
-              value: "__authenticate__" as const,
-            },
-          ],
-          { title: "选择供应商", signal: interactionController.signal },
+        const configLoaded = await core.dispatch({ type: "load_model_config" })
+        if (!listed.ok || !authListed.ok || !configLoaded.ok) return undefined
+        const snapshot = core.getSnapshot()
+        const providers = modelProviderChoices(
+          snapshot.models,
+          snapshot.authProviders,
+          snapshot.modelConfig?.providers ?? [],
         )
+        const preferred = preferredProviderId
+          ? providers.find((provider) => provider.id === preferredProviderId)
+          : undefined
+        preferredProviderId = undefined
+        const provider =
+          preferred ??
+          (await selectItem<(typeof providers)[number] | "__authenticate__" | "__manage__">(
+            renderer,
+            "model-provider-selector",
+            [
+              ...providers.map((item) => ({
+                name: item.name,
+                description: item.configured ? `${item.models.length} 个可用模型` : "需要认证（认证前不显示模型）",
+                value: item,
+              })),
+              {
+                name: "管理供应商和模型",
+                description: "新增、编辑或删除 models.json 配置",
+                value: "__manage__" as const,
+              },
+              {
+                name: "认证其它供应商",
+                description: "显示尚未认证的供应商",
+                value: "__authenticate__" as const,
+              },
+            ],
+            { title: "选择供应商", signal: interactionController.signal },
+          ))
         if (provider === "__manage__") {
-          await manageModels()
+          preferredProviderId = await manageModels("select")
           continue
         }
         if (provider === "__authenticate__") {
-          await authenticateProvider()
+          preferredProviderId = await authenticateProvider()
           continue
         }
         if (!provider) return undefined
-        const selected = await selectItem(
+
+        if (!provider.configured) {
+          const action = await selectItem<"authenticate" | "manage">(
+            renderer,
+            "unconfigured-provider",
+            [
+              { name: "立即认证", description: "认证成功后选择模型", value: "authenticate" },
+              { name: "管理供应商配置", description: "编辑地址、API 和模型", value: "manage" },
+            ],
+            { title: `${provider.name} 尚未认证`, signal: interactionController.signal },
+          )
+          if (action === "authenticate") preferredProviderId = await authenticateProvider(provider.id)
+          else if (action === "manage") preferredProviderId = await manageModels("select", provider.id)
+          continue
+        }
+
+        if (provider.models.length === 0) {
+          const action = await selectItem<"manage" | "authenticate">(
+            renderer,
+            "empty-provider",
+            [
+              { name: "新增或管理模型", description: "当前没有可用模型", value: "manage" },
+              { name: "重新认证", description: "更新供应商认证信息", value: "authenticate" },
+            ],
+            { title: `${provider.name} 没有可用模型`, signal: interactionController.signal },
+          )
+          if (action === "manage") preferredProviderId = await manageModels("select", provider.id)
+          else if (action === "authenticate") preferredProviderId = await authenticateProvider(provider.id)
+          continue
+        }
+
+        const selected = await selectItem<(typeof provider.models)[number] | "__manage__" | "__authenticate__">(
           renderer,
           "model-selector",
-          provider.models.map((model) => ({
-            name: model.name,
-            description: `${model.providerId}/${model.modelId}`,
-            value: model,
-          })),
+          [
+            ...provider.models.map((model) => ({
+              name: model.name,
+              description: `${model.providerId}/${model.modelId}`,
+              value: model,
+            })),
+            { name: "管理此供应商", description: "编辑供应商和模型", value: "__manage__" as const },
+            { name: "重新认证", description: "更新认证信息", value: "__authenticate__" as const },
+          ],
           { title: `选择模型 · ${provider.name}`, signal: interactionController.signal },
         )
+        if (selected === "__manage__") {
+          preferredProviderId = await manageModels("select", provider.id)
+          continue
+        }
+        if (selected === "__authenticate__") {
+          preferredProviderId = await authenticateProvider(provider.id)
+          continue
+        }
         if (selected) return selected
       }
       return undefined
@@ -503,14 +560,14 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     )
   }
 
-  async function manageProvider(provider: ProviderConfigEntry): Promise<void> {
+  async function manageProvider(provider: ProviderConfigEntry, selecting = false): Promise<boolean> {
     while (!exiting) {
       await core.dispatch({ type: "load_model_config" })
       const current = core.getSnapshot().modelConfig?.providers.find((item) => item.id === provider.id)
-      if (!current) return
+      if (!current) return false
       const currentModel = core.getSnapshot().currentModel
       const protectsProvider = currentModel?.providerId === current.id
-      const action = await selectItem<"edit" | "add" | "delete" | ModelConfigEntry>(
+      const action = await selectItem<"edit" | "add" | "delete" | "done" | ModelConfigEntry>(
         renderer,
         "provider-manager",
         [
@@ -527,6 +584,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             value: item,
           })),
           {
+            name: selecting ? "完成并选择模型" : "完成并返回对话",
+            description: "重新加载供应商状态",
+            value: "done",
+          },
+          {
             name: protectsProvider ? "删除供应商（当前会话正在使用）" : "删除供应商",
             description: protectsProvider ? "请先切换模型" : `同时删除 ${current.models.length} 个模型`,
             value: "delete",
@@ -535,7 +597,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         ],
         { title: current.name, signal: interactionController.signal },
       )
-      if (!action) return
+      if (!action) return false
       const revision = core.getSnapshot().modelConfig?.revision ?? ""
       if (action === "edit") {
         const edited = await editProvider(current)
@@ -550,13 +612,15 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             model: edited,
             create: true,
           })
-      } else if (action === "delete") {
+      } else if (action === "done") return true
+      else if (action === "delete") {
         if (await confirmAction(`删除供应商 ${current.id}`, "此操作不可撤销")) {
           const result = await core.dispatch({ type: "delete_provider", revision, providerId: current.id })
-          if (result.ok) return
+          if (result.ok) return false
         }
       } else await manageModel(current, action)
     }
+    return false
   }
 
   async function manageModel(provider: ProviderConfigEntry, model: ModelConfigEntry): Promise<void> {
@@ -609,39 +673,54 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
-  async function manageModels() {
+  async function manageModels(
+    mode: "standalone" | "select" = "standalone",
+    initialProviderId?: string,
+  ): Promise<string | undefined> {
     beginInteraction()
+    let providerId = initialProviderId
     try {
       while (!exiting) {
         const loaded = await core.dispatch({ type: "load_model_config" })
-        if (!loaded.ok) return
+        if (!loaded.ok) return undefined
         const config = core.getSnapshot().modelConfig
-        if (!config) return
-        const selected = await selectItem<ProviderConfigEntry | "add">(
-          renderer,
-          "model-config-providers",
-          [
-            ...config.providers.map((provider) => ({
-              name: provider.editable ? provider.name : `${provider.name}（只读）`,
-              description: `${provider.models.length} 个模型${provider.readonlyReason ? ` · ${provider.readonlyReason}` : ""}`,
-              value: provider,
-            })),
-            { name: "新增供应商", description: "配置第三方模型服务", value: "add" as const },
-          ],
-          { title: "管理供应商和模型", signal: interactionController.signal },
-        )
-        if (!selected) return
+        if (!config) return undefined
+        const directProvider = providerId ? config.providers.find((provider) => provider.id === providerId) : undefined
+        providerId = undefined
+        const selected =
+          directProvider ??
+          (await selectItem<ProviderConfigEntry | "add">(
+            renderer,
+            "model-config-providers",
+            [
+              ...config.providers.map((provider) => ({
+                name: provider.editable ? provider.name : `${provider.name}（只读）`,
+                description: `${provider.models.length} 个模型${provider.readonlyReason ? ` · ${provider.readonlyReason}` : ""}`,
+                value: provider,
+              })),
+              { name: "新增供应商", description: "配置第三方模型服务", value: "add" as const },
+            ],
+            { title: "管理供应商和模型", signal: interactionController.signal },
+          ))
+        if (!selected) return undefined
         if (selected === "add") {
           const edited = await editProvider()
-          if (edited)
-            await core.dispatch({
+          if (edited) {
+            const result = await core.dispatch({
               type: "save_provider",
               revision: config.revision,
               provider: edited,
               create: true,
             })
-        } else await manageProvider(selected)
+            if (result.ok) providerId = edited.id
+          }
+        } else {
+          const done = await manageProvider(selected, mode === "select")
+          if (done) return mode === "select" ? selected.id : undefined
+          if (initialProviderId) return mode === "select" ? selected.id : undefined
+        }
       }
+      return undefined
     } finally {
       endInteraction()
     }
