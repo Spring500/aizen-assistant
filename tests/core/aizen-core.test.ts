@@ -5,6 +5,7 @@ import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import type { PiPort, PiPortEvent } from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
+import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 
 const model: ModelReference = { providerId: "test", modelId: "model", api: "anthropic-messages", thinkingLevel: "off" }
@@ -17,6 +18,7 @@ class FakePi implements PiPort {
   restore = async () => model
   abort = async () => {}
   listModels = async () => [{ ...model, name: "测试模型", available: true }]
+  reloadModelConfig = async () => {}
   setModel = async () => model
   listAuthProviders = async () => []
   loginApiKey = async () => {}
@@ -98,6 +100,61 @@ afterEach(async () => {
 })
 
 describe("核心编排", () => {
+  test("模型配置变更重载运行时并保护当前模型", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new FakePi()
+    const config = new ModelConfigStore(join(root, "models.json"))
+    const core = new AizenCore({
+      cwd: "E:\\project",
+      store: new SessionStore(join(root, "sessions")),
+      pi,
+      modelConfigStore: config,
+    })
+
+    await core.dispatch({ type: "load_model_config" })
+    let revision = core.getSnapshot().modelConfig?.revision ?? ""
+    expect(
+      await core.dispatch({
+        type: "save_provider",
+        revision,
+        provider: {
+          id: "company",
+          name: "公司网关",
+          baseUrl: "https://example.com/v1",
+          api: "openai-completions",
+          authHeader: true,
+        },
+      }),
+    ).toEqual({ ok: true })
+    revision = core.getSnapshot().modelConfig?.revision ?? ""
+    expect(
+      await core.dispatch({
+        type: "save_model",
+        revision,
+        providerId: "company",
+        model: {
+          id: "model-a",
+          name: "模型 A",
+          reasoning: false,
+          input: ["text"],
+          contextWindow: 128000,
+          maxTokens: 16000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      }),
+    ).toEqual({ ok: true })
+    expect(core.getSnapshot().modelConfig?.providers[0]?.models[0]?.id).toBe("model-a")
+
+    await core.dispatch({ type: "create_session", model })
+    revision = core.getSnapshot().modelConfig?.revision ?? ""
+    expect(await core.dispatch({ type: "delete_model", revision, providerId: "test", modelId: "model" })).toEqual({
+      ok: false,
+      error: "不能删除当前会话正在使用的模型，请先切换模型",
+    })
+    await core.dispose()
+  })
+
   test("核心保留工具参数并更新流式输出预览", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)

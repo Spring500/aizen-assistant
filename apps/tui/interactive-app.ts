@@ -1,5 +1,6 @@
 import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
+import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
@@ -37,7 +38,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     modelsPath: join(options.dataDirectory, "models.json"),
   })
   const store = new SessionStore(join(options.dataDirectory, "sessions", projectDirectoryName(options.cwd)))
-  const core = new AizenCore({ cwd: options.cwd, store, pi })
+  const core = new AizenCore({
+    cwd: options.cwd,
+    store,
+    pi,
+    modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "models.json")),
+  })
   const view = createChatView(renderer)
   const interactionController = new AbortController()
   let exiting = false
