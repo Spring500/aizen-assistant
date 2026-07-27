@@ -4,7 +4,7 @@ export async function createAizenRenderer(): Promise<CliRenderer> {
   return createCliRenderer({
     exitOnCtrlC: false,
     screenMode: "split-footer",
-    footerHeight: 8,
+    footerHeight: 9,
     externalOutputMode: "capture-stdout",
     useMouse: false,
   })

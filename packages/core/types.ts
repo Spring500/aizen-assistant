@@ -1,4 +1,4 @@
-import type { AuthPromptOption, AuthProviderOption, ModelOption } from "./pi-port.ts"
+import type { AuthPromptOption, AuthProviderOption, ModelOption, ModelRuntimeInfo } from "./pi-port.ts"
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
 import type { SessionSummary } from "./session-store.ts"
 
@@ -18,17 +18,30 @@ export type ActiveTool = {
   isError?: boolean
 }
 
+export type ResponseMetrics = {
+  startedAt: number
+  elapsedSeconds: number
+  outputTokens: number
+}
+
+export type ContextUsage = {
+  used: number
+  total?: number
+}
+
 export type CoreSnapshot = {
   cwd: string
   status: CoreStatus
   sessions: SessionSummary[]
   currentSessionId?: string
-  currentModel?: ModelReference
+  currentModel?: ModelRuntimeInfo
   currentViewId?: ViewId
   models: ModelOption[]
   authProviders: AuthProviderOption[]
   transcript: TranscriptEntry[]
   activeTools: ActiveTool[]
+  responseMetrics?: ResponseMetrics
+  contextUsage?: ContextUsage
   streamingText: string
   streamingThinking: string
   lastError?: string

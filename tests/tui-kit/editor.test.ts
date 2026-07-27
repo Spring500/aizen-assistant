@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
+import { shortcutText } from "../../packages/tui-kit/status-bar.ts"
 
 function emitKey(renderer: Awaited<ReturnType<typeof createTestRenderer>>["renderer"], raw: string): void {
   const parsed = parseKeypress(raw)
@@ -34,22 +35,64 @@ test("编辑器发送、中止和忙碌状态", async () => {
   }
 })
 
-test("编辑器可在选择和认证期间隐藏", async () => {
-  const setup = await createTestRenderer({ width: 60, height: 8 })
+test("编辑器支持光标前反斜杠回车换行，并用 Enter 发送", async () => {
+  const setup = await createTestRenderer({ width: 80, height: 10 })
+  const submitted: string[] = []
+  try {
+    const editor = createChatEditor(setup.renderer, {
+      onSubmit: (value) => submitted.push(value),
+      onAbort: () => {},
+      onQuit: () => {},
+    })
+    editor.input.setText("first\\")
+    editor.input.cursorOffset = editor.input.plainText.length
+    editor.input.submit()
+    expect(submitted).toEqual([])
+    expect(editor.input.plainText).toBe("first\n")
+    expect(editor.input.logicalCursor).toMatchObject({ row: 1, col: 0 })
+
+    editor.input.setText("first\nabc\\def")
+    editor.input.cursorOffset = "first\nabc\\".length
+    editor.input.submit()
+    expect(editor.input.plainText).toBe("first\nabc\ndef")
+    expect(editor.input.logicalCursor).toMatchObject({ row: 2, col: 0 })
+
+    editor.input.submit()
+    expect(submitted).toEqual(["first\nabc\ndef"])
+    editor.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("编辑器可只隐藏输入框并保持底部状态栏可见", async () => {
+  const setup = await createTestRenderer({ width: 120, height: 8 })
   try {
     const editor = createChatEditor(setup.renderer, {
       onSubmit: () => {},
       onAbort: () => {},
       onQuit: () => {},
     })
-    editor.setVisible(false)
+    editor.setShortcuts(shortcutText({ status: "idle", hasSession: true }))
+    editor.setInputVisible(false)
     await setup.renderOnce()
     expect(setup.captureCharFrame()).not.toContain("输入消息")
-    editor.setVisible(true)
+    expect(setup.captureCharFrame()).toContain("模型：未选择模型")
+    expect(setup.captureCharFrame()).toContain("光标前 \\ 后 Enter 换行")
+    editor.setInputVisible(true)
     await setup.renderOnce()
     expect(setup.captureCharFrame()).toContain("输入消息")
+    expect(setup.captureCharFrame()).toContain("模型：未选择模型")
+    expect(setup.captureCharFrame()).toContain("光标前 \\ 后 Enter 换行")
+
     editor.destroy()
   } finally {
     setup.renderer.destroy()
   }
+})
+
+test("快捷键提示随状态变化", () => {
+  expect(shortcutText({ status: "running", hasSession: true })).toContain("Esc 中止")
+  expect(shortcutText({ status: "idle", hasSession: true })).toContain("光标前 \\ 后 Enter 换行")
+  expect(shortcutText({ status: "idle", hasSession: false })).toContain("↑/↓ 选择")
 })

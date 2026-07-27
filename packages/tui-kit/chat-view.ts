@@ -1,6 +1,7 @@
 import { BoxRenderable, type CliRenderer, type RenderContext, TextRenderable } from "@opentui/core"
 import type { ToolCallPart, ToolMessage } from "../core/session-format.ts"
 import type { CoreSnapshot } from "../core/types.ts"
+import { systemColors } from "./theme.ts"
 
 export type ChatView = {
   header: TextRenderable
@@ -288,6 +289,7 @@ function createHistoryBlock(
       width: "100%",
       height: "auto",
       marginBottom: 1,
+      fg: systemColors.secondary,
       content: block.content,
     })
   }
@@ -335,14 +337,17 @@ function createHistoryBlock(
 }
 
 function liveText(snapshot: CoreSnapshot): string {
+  const metrics = snapshot.responseMetrics
+  const metricText = metrics ? ` | 耗时 ${metrics.elapsedSeconds}s · 生成 ${metrics.outputTokens} tokens` : ""
+
   const active = snapshot.activeTools.at(-1)
   if (active) {
     const output = active.outputPreview ? outputPreview(active.outputPreview) : "等待输出"
-    return `${toolCallText(active.name, active.arguments)} | ${active.isFinished ? "完成" : "运行中"}：${output}`
+    return `${toolCallText(active.name, active.arguments)} | ${active.isFinished ? "完成" : "运行中"}：${output}${metricText}`
   }
-  if (snapshot.streamingText) return `[助手流式] ${outputPreview(snapshot.streamingText)}`
-  if (snapshot.streamingThinking) return `[思考流式] ${outputPreview(snapshot.streamingThinking)}`
-  return ""
+  if (snapshot.streamingText) return `[助手流式] ${outputPreview(snapshot.streamingText)}${metricText}`
+  if (snapshot.streamingThinking) return `[思考流式] ${outputPreview(snapshot.streamingThinking)}${metricText}`
+  return metrics ? `助手回复中${metricText}` : ""
 }
 
 function statusText(snapshot: CoreSnapshot): string {
@@ -360,21 +365,27 @@ export function createChatView(renderer: CliRenderer): ChatView {
   const header = new TextRenderable(renderer, {
     id: "header",
     height: 1,
+    fg: systemColors.header,
     content: "AizenAssistant",
   })
+
   const live = new TextRenderable(renderer, {
     id: "live",
     width: "100%",
     height: 1,
     wrapMode: "none",
     truncate: true,
+    fg: systemColors.live,
     content: "",
   })
+
   const status = new TextRenderable(renderer, {
     id: "status",
     height: 1,
+    fg: systemColors.statusIdle,
     content: "空闲",
   })
+
   renderer.root.add(header)
   renderer.root.add(live)
   renderer.root.add(status)
@@ -449,12 +460,15 @@ export function createChatView(renderer: CliRenderer): ChatView {
   const refreshFooter = () => {
     if (!latestSnapshot) return
     const snapshot = latestSnapshot
-    const model = snapshot.currentModel
-      ? `${snapshot.currentModel.providerId}/${snapshot.currentModel.modelId}`
-      : "未选择模型"
-    header.content = `AizenAssistant | ${model} | /fold 管理折叠`
+    header.content = `AizenAssistant | /fold 管理折叠`
     live.content = liveText(snapshot)
     status.content = notice || statusText(snapshot)
+    status.fg =
+      snapshot.lastError || snapshot.status === "error"
+        ? systemColors.statusError
+        : snapshot.status === "idle"
+          ? systemColors.statusIdle
+          : systemColors.statusRunning
   }
 
   const toggleCollapse = (id: string): boolean => {

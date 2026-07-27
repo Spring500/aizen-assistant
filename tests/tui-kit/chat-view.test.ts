@@ -2,6 +2,7 @@ import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
 import type { CoreSnapshot } from "../../packages/core/types.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
+import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
 
 function snapshot(overrides: Partial<CoreSnapshot> = {}): CoreSnapshot {
   return {
@@ -23,10 +24,23 @@ async function setupRepl(width = 100, height = 20) {
     width,
     height,
     screenMode: "split-footer",
-    footerHeight: 8,
+    footerHeight: 9,
     externalOutputMode: "capture-stdout",
   })
 }
+
+test("状态栏视图模型根据运行状态生成统一内容", () => {
+  const current = snapshot({
+    status: "running",
+    currentSessionId: "s1",
+    currentModel: { providerId: "test", modelId: "model", api: "a", thinkingLevel: "off", contextWindow: 1000 },
+    contextUsage: { used: 250, total: 1000 },
+  })
+  expect(statusBarView(current)).toEqual({
+    session: "模型：test/model | 上下文：250/1,000",
+    shortcuts: "Esc 中止 | Ctrl+C 退出",
+  })
+})
 
 test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态", async () => {
   const setup = await setupRepl()
@@ -62,8 +76,55 @@ test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态"
     const history = setup.externalOutput.takeText().replace(/\s+/g, "")
     const footer = setup.captureCharFrame()
     expect(history).toContain("hello")
-    expect(footer).toContain("AizenAssistant | test/model")
+    expect(footer).toContain("AizenAssistant | /fold")
     expect(footer).toContain("[bash] bun test")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("footer 显示回复耗时、生成 token 和上下文用量", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    view.update(
+      snapshot({
+        status: "running",
+        responseMetrics: { startedAt: Date.now(), elapsedSeconds: 7, outputTokens: 42 },
+        contextUsage: { used: 12345, total: 200000 },
+        streamingText: "partial answer",
+        currentModel: {
+          providerId: "test",
+          modelId: "model",
+          api: "a",
+          thinkingLevel: "off",
+          contextWindow: 200000,
+        },
+      }),
+    )
+    await setup.renderOnce()
+    const footer = setup.captureCharFrame()
+    expect(footer).toContain("耗时 7s · 生成 42 tokens")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("工具调用时也显示当前回复耗时", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    view.update(
+      snapshot({
+        status: "running",
+        responseMetrics: { startedAt: Date.now(), elapsedSeconds: 9, outputTokens: 0 },
+        activeTools: [{ callId: "c1", name: "bash", arguments: { command: "bun test" } }],
+      }),
+    )
+    await setup.renderOnce()
+    const footer = setup.captureCharFrame()
+    expect(footer).toContain("[bash] bun test")
+    expect(footer).toContain("耗时 9s")
   } finally {
     setup.renderer.destroy()
   }

@@ -1,6 +1,10 @@
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
 
-export type ModelOption = ModelReference & {
+export type ModelRuntimeInfo = ModelReference & {
+  contextWindow?: number
+}
+
+export type ModelOption = ModelRuntimeInfo & {
   name: string
   available: boolean
 }
@@ -17,6 +21,7 @@ export type AuthPromptOption = { id: string; label: string; description?: string
 export type PiPortEvent =
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
+  | { type: "usage_updated"; outputTokens: number; contextTokens?: number }
   | {
       type: "message"
       runtimeRef: string
@@ -60,12 +65,13 @@ export type PiPromptInput = {
 }
 
 export interface PiPort {
-  create(input: PiCreateInput): Promise<ModelReference>
-  restore(input: PiRestoreInput): Promise<ModelReference>
+  create(input: PiCreateInput): Promise<ModelRuntimeInfo>
+  restore(input: PiRestoreInput): Promise<ModelRuntimeInfo>
   prompt(input: PiPromptInput): Promise<void>
   abort(): Promise<void>
   listModels(): Promise<ModelOption[]>
-  setModel(model: ModelReference): Promise<ModelReference>
+  setModel(model: ModelReference): Promise<ModelRuntimeInfo>
+
   listAuthProviders(): Promise<AuthProviderOption[]>
   loginApiKey(providerId: string): Promise<void>
   answerAuthPrompt(promptId: string, value: string): void

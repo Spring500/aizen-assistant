@@ -1,4 +1,5 @@
 import { type CliRenderer, type KeyEvent, type PasteEvent, TextRenderable } from "@opentui/core"
+import { systemColors } from "./theme.ts"
 
 export type PromptOptions = { mask?: boolean; signal?: AbortSignal; onCancel?: () => void }
 
@@ -17,6 +18,7 @@ export function promptLine(
       bottom: 3,
       left: 0,
       zIndex: 110,
+      fg: systemColors.secondary,
       content: label,
     })
     renderer.root.add(display)

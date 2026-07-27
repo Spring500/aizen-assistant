@@ -99,6 +99,7 @@ describe("认证与模型", () => {
       api: "openai-completions",
       thinkingLevel: "off",
       name: "示例模型",
+      contextWindow: 128000,
       available: false,
     })
     await runtime.dispose()
