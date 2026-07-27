@@ -5,6 +5,31 @@ import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
 
+test("禁用的选择项不能提交", async () => {
+  const setup = await createTestRenderer({ width: 50, height: 10 })
+  try {
+    const pending = selectItem(
+      setup.renderer,
+      "disabled-selector",
+      [
+        { name: "不可用模型", description: "尚未认证", value: "disabled", disabled: true },
+        { name: "可用模型", description: "", value: "enabled" },
+      ],
+      { title: "选择模型" },
+    )
+    const enter = parseKeypress("\r")
+    const down = parseKeypress("\x1b[B")
+    if (!enter || !down) throw new Error("无法解析按键")
+    setup.renderer.keyInput.emit("keypress", new KeyEvent(enter))
+    await Bun.sleep(1)
+    setup.renderer.keyInput.emit("keypress", new KeyEvent(down))
+    setup.renderer.keyInput.emit("keypress", new KeyEvent(enter))
+    expect(await pending).toBe("enabled")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("选择器可用 Esc 取消并清理界面", async () => {
   const setup = await createTestRenderer({ width: 40, height: 8 })
   try {
