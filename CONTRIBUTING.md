@@ -6,7 +6,7 @@
 
 1. 执行 `git pull --ff-only` 更新 `main`。
 2. 创建 `feat/*`、`fix/*`、`chore/*`、`docs/*`、`build/*`、`ci/*` 或 `spike/*` 分支。
-3. 安装并验证：`bun install --frozen-lockfile`、`bun run hooks:install`、`bun run verify`。
+3. 安装并验证：`bun install --frozen-lockfile`（自动安装 git hooks）、`bun run verify`。
 4. Agent 只能创建 Draft PR，不得转为 Ready、合并或发布。
 5. 项目负责人审查后手动转为 Ready，并使用 Squash merge。
 
