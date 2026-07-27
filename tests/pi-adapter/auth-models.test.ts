@@ -93,14 +93,16 @@ describe("认证与模型", () => {
       configured: false,
       supportsApiKey: true,
     })
-    expect(await runtime.listModels()).toContainEqual({
-      providerId: "example",
-      modelId: "example-model",
-      api: "openai-completions",
-      thinkingLevel: "off",
-      name: "示例模型",
-      available: false,
-    })
+    expect(await runtime.listModels()).toContainEqual(
+      expect.objectContaining({
+        providerId: "example",
+        modelId: "example-model",
+        api: "openai-completions",
+        thinkingLevel: "off",
+        name: "示例模型",
+        available: false,
+      }),
+    )
     await runtime.dispose()
   })
 })

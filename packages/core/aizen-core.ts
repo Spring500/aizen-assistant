@@ -18,6 +18,15 @@ import {
 
 export type AizenCoreOptions = { cwd: string; store: SessionStore; pi: PiPort }
 
+function sessionModel(model: ModelReference): ModelReference {
+  return {
+    providerId: model.providerId,
+    modelId: model.modelId,
+    api: model.api,
+    thinkingLevel: model.thinkingLevel,
+  }
+}
+
 export class AizenCore implements CorePort {
   readonly #cwd: string
   readonly #store: SessionStore
@@ -149,7 +158,7 @@ export class AizenCore implements CorePort {
     const viewId = null
     const actualModel = await this.#pi.create({ cwd: this.#cwd, model, viewId })
     const records: SessionRecord[] = [
-      { kind: "model_changed", recordId: crypto.randomUUID(), at, model: actualModel },
+      { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(actualModel) },
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
     ]
     for (const record of records) await this.#store.append(sessionId, record)
@@ -279,7 +288,7 @@ export class AizenCore implements CorePort {
       kind: "model_changed",
       recordId: crypto.randomUUID(),
       at: new Date().toISOString(),
-      model: actual,
+      model: sessionModel(actual),
     }
     await this.#store.append(sessionId, record)
     this.#records.push(record)
