@@ -1,4 +1,4 @@
-import { ModelConfigStore } from "./model-config-store.ts"
+import type { ModelConfigStore } from "./model-config-store.ts"
 import type { PiPort, PiPortEvent } from "./pi-port.ts"
 import type {
   AssistantMessage,
@@ -96,7 +96,11 @@ export class AizenCore implements CorePort {
           break
         case "save_provider":
           await this.#changeModelConfig(() =>
-            this.#requireModelConfigStore().upsertProvider(command.revision, command.provider),
+            this.#requireModelConfigStore().upsertProvider(
+              command.revision,
+              command.provider,
+              command.create ? "create" : "update",
+            ),
           )
           break
         case "delete_provider":
@@ -113,7 +117,12 @@ export class AizenCore implements CorePort {
           )
             throw new Error("不能修改当前会话正在使用的模型，请先切换模型")
           await this.#changeModelConfig(() =>
-            this.#requireModelConfigStore().upsertModel(command.revision, command.providerId, command.model),
+            this.#requireModelConfigStore().upsertModel(
+              command.revision,
+              command.providerId,
+              command.model,
+              command.create ? "create" : "update",
+            ),
           )
           break
         case "delete_model":

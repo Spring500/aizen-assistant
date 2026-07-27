@@ -55,6 +55,19 @@ describe("模型配置存储", () => {
     })
   })
 
+  test("创建模式拒绝重复 ID", async () => {
+    const { store } = await makeStore()
+    let snapshot = await store.read()
+    await store.upsertProvider(snapshot.revision, provider, "create")
+    snapshot = await store.read()
+    await expect(store.upsertProvider(snapshot.revision, provider, "create")).rejects.toThrow("供应商 ID 已存在")
+    await store.upsertModel(snapshot.revision, provider.id, { ...model, input: [...model.input] }, "create")
+    snapshot = await store.read()
+    await expect(
+      store.upsertModel(snapshot.revision, provider.id, { ...model, input: [...model.input] }, "create"),
+    ).rejects.toThrow("模型 ID 已存在")
+  })
+
   test("拒绝过期修订覆盖外部修改", async () => {
     const { path, store } = await makeStore()
     const snapshot = await store.read()

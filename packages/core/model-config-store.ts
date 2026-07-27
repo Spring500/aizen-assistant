@@ -156,7 +156,14 @@ function validateProvider(input: EditableProviderConfig): void {
 }
 
 function validateModel(input: EditableModelConfig): void {
-  if (!input.id.trim() || input.id !== input.id.trim() || /[\u0000-\u001f\u007f]/u.test(input.id))
+  if (
+    !input.id.trim() ||
+    input.id !== input.id.trim() ||
+    [...input.id].some((character) => {
+      const code = character.codePointAt(0) ?? 0
+      return code < 32 || code === 127
+    })
+  )
     throw new Error("模型 ID 不能为空、包含首尾空格或控制字符")
   if (!input.name.trim()) throw new Error("模型名称不能为空")
   if (input.api !== undefined) api(input.api, "模型 API")
@@ -257,9 +264,16 @@ export class ModelConfigStore {
     return snapshot(parseConfig(source), source)
   }
 
-  async upsertProvider(expectedRevision: string, provider: EditableProviderConfig): Promise<string> {
+  async upsertProvider(
+    expectedRevision: string,
+    provider: EditableProviderConfig,
+    mode: "create" | "update" | "upsert" = "upsert",
+  ): Promise<string> {
     validateProvider(provider)
     return this.#update(expectedRevision, (config) => {
+      const exists = config.providers[provider.id] !== undefined
+      if (mode === "create" && exists) throw new Error(`供应商 ID 已存在：${provider.id}`)
+      if (mode === "update" && !exists) throw new Error(`供应商不存在：${provider.id}`)
       const previous = config.providers[provider.id] ?? {}
       config.providers[provider.id] = {
         ...previous,
@@ -279,13 +293,20 @@ export class ModelConfigStore {
     })
   }
 
-  async upsertModel(expectedRevision: string, providerId: string, model: EditableModelConfig): Promise<string> {
+  async upsertModel(
+    expectedRevision: string,
+    providerId: string,
+    model: EditableModelConfig,
+    mode: "create" | "update" | "upsert" = "upsert",
+  ): Promise<string> {
     validateModel(model)
     return this.#update(expectedRevision, (config) => {
       const provider = config.providers[providerId]
       if (!provider) throw new Error(`供应商不存在：${providerId}`)
       const models = Array.isArray(provider.models) ? [...provider.models] : []
       const index = models.findIndex((item) => object(item, "模型").id === model.id)
+      if (mode === "create" && index >= 0) throw new Error(`模型 ID 已存在：${providerId}/${model.id}`)
+      if (mode === "update" && index < 0) throw new Error(`模型不存在：${providerId}/${model.id}`)
       const previous = index < 0 ? {} : object(models[index], "模型")
       const stored: JsonObject = {
         ...previous,

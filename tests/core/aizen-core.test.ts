@@ -125,6 +125,7 @@ describe("核心编排", () => {
           api: "openai-completions",
           authHeader: true,
         },
+        create: true,
       }),
     ).toEqual({ ok: true })
     revision = core.getSnapshot().modelConfig?.revision ?? ""
@@ -142,6 +143,7 @@ describe("核心编排", () => {
           maxTokens: 16000,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         },
+        create: true,
       }),
     ).toEqual({ ok: true })
     expect(core.getSnapshot().modelConfig?.providers[0]?.models[0]?.id).toBe("model-a")

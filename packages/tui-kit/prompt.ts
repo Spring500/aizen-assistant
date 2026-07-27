@@ -1,7 +1,12 @@
 import { type CliRenderer, type KeyEvent, type PasteEvent, TextRenderable } from "@opentui/core"
 import { systemColors } from "./theme.ts"
 
-export type PromptOptions = { mask?: boolean; signal?: AbortSignal; onCancel?: () => void }
+export type PromptOptions = {
+  mask?: boolean
+  signal?: AbortSignal
+  onCancel?: () => void
+  initialValue?: string
+}
 
 export function promptLine(
   renderer: CliRenderer,
@@ -22,7 +27,7 @@ export function promptLine(
       content: label,
     })
     renderer.root.add(display)
-    let value = ""
+    let value = options.initialValue ?? ""
     let settled = false
     const render = () => {
       display.content = `${label}${options.mask ? "•".repeat(value.length) : value}`

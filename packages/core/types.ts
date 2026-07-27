@@ -57,9 +57,15 @@ export type CoreCommand =
   | { type: "abort" }
   | { type: "list_models" }
   | { type: "load_model_config" }
-  | { type: "save_provider"; revision: string; provider: EditableProviderConfig }
+  | { type: "save_provider"; revision: string; provider: EditableProviderConfig; create?: boolean }
   | { type: "delete_provider"; revision: string; providerId: string }
-  | { type: "save_model"; revision: string; providerId: string; model: EditableModelConfig }
+  | {
+      type: "save_model"
+      revision: string
+      providerId: string
+      model: EditableModelConfig
+      create?: boolean
+    }
   | { type: "delete_model"; revision: string; providerId: string; modelId: string }
   | { type: "set_model"; model: ModelReference }
   | { type: "list_auth_providers" }
