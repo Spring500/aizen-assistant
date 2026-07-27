@@ -1,5 +1,5 @@
 import type { PiPort, PiPortEvent } from "./pi-port.ts"
-import type { ModelReference, SessionRecord, TurnFinishedRecord, TurnStartedRecord } from "./session-format.ts"
+import type { AssistantMessage, ModelReference, SessionRecord, TurnFinishedRecord, TurnStartedRecord } from "./session-format.ts"
 import type { SessionStore } from "./session-store.ts"
 import {
   type CoreCommand,
@@ -22,6 +22,7 @@ export class AizenCore implements CorePort {
   #records: SessionRecord[] = []
   #writeQueue = Promise.resolve()
   #currentTurnId: string | undefined
+  #responseTimer: ReturnType<typeof setInterval> | undefined
   #runtimeRecords = new Map<string, string>()
   #abortRequested = false
   #disposed = false
@@ -127,6 +128,7 @@ export class AizenCore implements CorePort {
     if (this.#disposed) return
     this.#disposed = true
     if (this.#snapshot.status === "running" || this.#snapshot.status === "aborting") await this.#pi.abort()
+    this.#stopResponseTimer()
     await this.#writeQueue
     await this.#store.flush()
     this.#unsubscribePi()
@@ -149,10 +151,13 @@ export class AizenCore implements CorePort {
     this.#runtimeRecords.clear()
     this.#snapshot.currentSessionId = sessionId
     this.#snapshot.currentModel = actualModel
+    this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.currentViewId = viewId
     this.#snapshot.transcript = []
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
+    delete this.#snapshot.responseMetrics
+    this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     delete this.#snapshot.lastError
     this.#snapshot.sessions = await this.#store.list()
   }
@@ -174,10 +179,12 @@ export class AizenCore implements CorePort {
     this.#runtimeRecords = new Map(loaded.records.map((record) => [record.recordId, record.recordId]))
     this.#snapshot.currentSessionId = sessionId
     this.#snapshot.currentModel = actualModel
+    this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.currentViewId = viewRecord.viewId
     this.#snapshot.transcript = recordsToTranscript(loaded.records)
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
+    delete this.#snapshot.responseMetrics
     if (loaded.warnings.length > 0) this.#snapshot.lastError = loaded.warnings.join("；")
     else delete this.#snapshot.lastError
   }
@@ -204,6 +211,8 @@ export class AizenCore implements CorePort {
     this.#snapshot.status = "running"
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
+    this.#snapshot.responseMetrics = { startedAt: Date.now(), elapsedSeconds: 0, outputTokens: 0 }
+    this.#startResponseTimer()
     this.#abortRequested = false
     this.#notify()
     let outcome: TurnFinishedRecord["outcome"] = "completed"
@@ -245,9 +254,12 @@ export class AizenCore implements CorePort {
       if (error) this.#snapshot.lastError = error.message
     } finally {
       this.#snapshot.status = "idle"
+      this.#stopResponseTimer()
       this.#snapshot.activeTools = []
       this.#snapshot.streamingText = ""
       this.#snapshot.streamingThinking = ""
+      if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.elapsedSeconds = this.#elapsedSeconds()
+      delete this.#snapshot.responseMetrics
       this.#currentTurnId = undefined
       this.#notify()
     }
@@ -266,6 +278,7 @@ export class AizenCore implements CorePort {
     await this.#store.append(sessionId, record)
     this.#records.push(record)
     this.#snapshot.currentModel = actual
+    this.#snapshot.contextUsage = this.#contextUsageFromRecords()
   }
 
   #handlePiEvent(event: PiPortEvent): void {
@@ -283,6 +296,12 @@ export class AizenCore implements CorePort {
     }
     if (event.type === "text_delta") this.#snapshot.streamingText += event.delta
     if (event.type === "thinking_delta") this.#snapshot.streamingThinking += event.delta
+    if (event.type === "usage_updated") {
+      if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.outputTokens = event.outputTokens
+      const used = event.contextTokens ?? this.#snapshot.contextUsage?.used ?? 0
+      const total = this.#snapshot.currentModel?.contextWindow
+      this.#snapshot.contextUsage = total === undefined ? { used } : { used, total }
+    }
     if (event.type === "tool_started")
       this.#snapshot.activeTools.push({ callId: event.callId, name: event.name, arguments: event.arguments })
     if (event.type === "tool_updated") {
@@ -311,6 +330,10 @@ export class AizenCore implements CorePort {
         this.#records.push(record)
       })
       this.#snapshot.transcript.push({ type: "message", turnId: this.#currentTurnId, message: event.record })
+      if (event.record.role === "assistant") {
+        this.#snapshot.contextUsage = this.#contextUsageFromAssistant(event.record)
+        if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.outputTokens = event.record.usage.output
+      }
     }
     if (event.type === "compaction" && this.#snapshot.currentSessionId) {
       const firstKeptRecordId = this.#runtimeRecords.get(event.firstKeptRuntimeRef)
@@ -334,6 +357,43 @@ export class AizenCore implements CorePort {
       })
     }
     this.#notify()
+  }
+
+  #contextUsageFromAssistant(message: AssistantMessage) {
+    const total = this.#snapshot.currentModel?.contextWindow
+    const used = message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite
+    return total === undefined ? { used } : { used, total }
+  }
+
+  #contextUsageFromRecords() {
+    const assistant = [...this.#records]
+      .reverse()
+      .find((record): record is SessionRecord & { message: AssistantMessage } => record.kind === "message" && record.message.role === "assistant")
+    const total = this.#snapshot.currentModel?.contextWindow
+    const used = assistant ? this.#contextUsageFromAssistant(assistant.message).used : 0
+    return total === undefined ? { used } : { used, total }
+  }
+
+  #elapsedSeconds(): number {
+    const startedAt = this.#snapshot.responseMetrics?.startedAt
+    return startedAt ? Math.floor((Date.now() - startedAt) / 1000) : 0
+  }
+
+  #startResponseTimer(): void {
+    this.#stopResponseTimer()
+    this.#responseTimer = setInterval(() => {
+      if (!this.#snapshot.responseMetrics) return
+      const elapsedSeconds = this.#elapsedSeconds()
+      if (this.#snapshot.responseMetrics.elapsedSeconds === elapsedSeconds) return
+      this.#snapshot.responseMetrics.elapsedSeconds = elapsedSeconds
+      this.#notify()
+    }, 1000)
+  }
+
+  #stopResponseTimer(): void {
+    if (!this.#responseTimer) return
+    clearInterval(this.#responseTimer)
+    this.#responseTimer = undefined
   }
 
   #notify(): void {

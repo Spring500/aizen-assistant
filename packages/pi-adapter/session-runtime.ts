@@ -11,6 +11,7 @@ import {
 import type {
   AuthProviderOption,
   ModelOption,
+  ModelRuntimeInfo,
   PiCreateInput,
   PiPort,
   PiPortEvent,
@@ -39,8 +40,8 @@ function asThinkingLevel(level: string): ThinkingLevel {
   return "medium"
 }
 
-function modelReference(model: Model<Api>, thinkingLevel: ThinkingLevel): ModelReference {
-  return { providerId: model.provider, modelId: model.id, api: model.api, thinkingLevel }
+function modelReference(model: Model<Api>, thinkingLevel: ThinkingLevel) {
+  return { providerId: model.provider, modelId: model.id, api: model.api, thinkingLevel, contextWindow: model.contextWindow }
 }
 
 function toolResultText(result: unknown): string {
@@ -88,7 +89,7 @@ export class PiSessionRuntime implements PiPort {
     model.baseUrl = baseUrl
   }
 
-  async #start(input: PiCreateInput, records: SessionRecord[]): Promise<ModelReference> {
+  async #start(input: PiCreateInput, records: SessionRecord[]): Promise<ModelRuntimeInfo> {
     await this.#disposeSession()
     const model = this.#modelRuntime.getModel(input.model.providerId, input.model.modelId)
     if (!model) throw new Error(`找不到模型：${input.model.providerId}/${input.model.modelId}`)
@@ -135,6 +136,18 @@ export class PiSessionRuntime implements PiPort {
           this.#emit({ type: "text_delta", delta: event.assistantMessageEvent.delta })
         if (event.assistantMessageEvent.type === "thinking_delta")
           this.#emit({ type: "thinking_delta", delta: event.assistantMessageEvent.delta })
+        const message =
+          "partial" in event.assistantMessageEvent
+            ? event.assistantMessageEvent.partial
+            : "message" in event.assistantMessageEvent
+              ? event.assistantMessageEvent.message
+              : event.assistantMessageEvent.error
+        const usage = message.usage
+        this.#emit({
+          type: "usage_updated",
+          outputTokens: usage.output,
+          contextTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+        })
       } else if (event.type === "tool_execution_start") {
         this.#emit({ type: "tool_started", callId: event.toolCallId, name: event.toolName, arguments: event.args })
       } else if (event.type === "tool_execution_update") {
@@ -164,11 +177,11 @@ export class PiSessionRuntime implements PiPort {
     return modelReference(model, session.thinkingLevel)
   }
 
-  create(input: PiCreateInput): Promise<ModelReference> {
+  create(input: PiCreateInput): Promise<ModelRuntimeInfo> {
     return this.#start(input, [])
   }
 
-  restore(input: PiRestoreInput): Promise<ModelReference> {
+  restore(input: PiRestoreInput): Promise<ModelRuntimeInfo> {
     return this.#start(input, input.records)
   }
 
@@ -211,11 +224,12 @@ export class PiSessionRuntime implements PiPort {
       api: model.api,
       thinkingLevel: model.reasoning ? "medium" : "off",
       name: model.name,
+      contextWindow: model.contextWindow,
       available: available.has(`${model.provider}\0${model.id}`),
     }))
   }
 
-  async setModel(reference: ModelReference): Promise<ModelReference> {
+  async setModel(reference: ModelReference): Promise<ModelRuntimeInfo> {
     const session = this.#requireSession()
     if (!session.isIdle) throw new Error("生成或执行工具期间不能切换模型")
     const model = this.#modelRuntime.getModel(reference.providerId, reference.modelId)
