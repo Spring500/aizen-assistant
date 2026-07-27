@@ -45,9 +45,11 @@ test("编辑器可在选择和认证期间隐藏", async () => {
     editor.setVisible(false)
     await setup.renderOnce()
     expect(setup.captureCharFrame()).not.toContain("输入消息")
+    expect(setup.captureCharFrame()).not.toContain("模型：")
     editor.setVisible(true)
     await setup.renderOnce()
     expect(setup.captureCharFrame()).toContain("输入消息")
+    expect(setup.captureCharFrame()).toContain("模型：未选择模型")
     editor.destroy()
   } finally {
     setup.renderer.destroy()

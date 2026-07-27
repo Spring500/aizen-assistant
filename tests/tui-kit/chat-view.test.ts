@@ -62,8 +62,35 @@ test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态"
     const history = setup.externalOutput.takeText().replace(/\s+/g, "")
     const footer = setup.captureCharFrame()
     expect(history).toContain("hello")
-    expect(footer).toContain("AizenAssistant | test/model")
+    expect(footer).toContain("AizenAssistant | /fold")
     expect(footer).toContain("[bash] bun test")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("footer 显示回复耗时、生成 token 和上下文用量", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    view.update(
+      snapshot({
+        status: "running",
+        responseMetrics: { startedAt: Date.now(), elapsedSeconds: 7, outputTokens: 42 },
+        contextUsage: { used: 12345, total: 200000 },
+        streamingText: "partial answer",
+        currentModel: {
+          providerId: "test",
+          modelId: "model",
+          api: "a",
+          thinkingLevel: "off",
+          contextWindow: 200000,
+        },
+      }),
+    )
+    await setup.renderOnce()
+    const footer = setup.captureCharFrame()
+    expect(footer).toContain("7s · 42 tokens")
   } finally {
     setup.renderer.destroy()
   }

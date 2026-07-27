@@ -3,7 +3,8 @@ import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
-import { createChatView } from "../../packages/tui-kit/chat-view.ts"
+import { createChatView, sessionStatusText } from "../../packages/tui-kit/chat-view.ts"
+
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { createAizenRenderer, destroyRenderer } from "../../packages/tui-kit/renderer.ts"
@@ -88,7 +89,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const unsubscribe = core.subscribe((event) => {
     if (event.type === "snapshot") {
       view.update(event.snapshot)
+      editor.setStatus(sessionStatusText(event.snapshot))
       editor.setBusy(event.snapshot.status !== "idle")
+
       editor.setVisible(
         !exiting && interactionDepth === 0 && event.snapshot.status === "idle" && !!event.snapshot.currentSessionId,
       )

@@ -1,4 +1,4 @@
-import { type CliRenderer, type KeyEvent, TextareaRenderable } from "@opentui/core"
+import { type CliRenderer, type KeyEvent, TextareaRenderable, TextRenderable } from "@opentui/core"
 
 export type EditorHandlers = {
   onSubmit(value: string): void
@@ -8,6 +8,8 @@ export type EditorHandlers = {
 
 export type ChatEditor = {
   input: TextareaRenderable
+  status: TextRenderable
+  setStatus(content: string): void
   setBusy(busy: boolean): void
   setVisible(visible: boolean): void
   destroy(): void
@@ -31,7 +33,16 @@ export function createChatEditor(renderer: CliRenderer, handlers: EditorHandlers
       handlers.onSubmit(value)
     },
   })
+  const status = new TextRenderable(renderer, {
+    id: "editor-status",
+    width: "100%",
+    height: 1,
+    wrapMode: "none",
+    truncate: true,
+    content: "模型：未选择模型 | 上下文：0/未知",
+  })
   renderer.root.add(input)
+  renderer.root.add(status)
   input.focus()
 
   const onKeyPress = (key: KeyEvent) => {
@@ -42,17 +53,23 @@ export function createChatEditor(renderer: CliRenderer, handlers: EditorHandlers
 
   return {
     input,
+    status,
+    setStatus(content) {
+      status.content = content
+    },
     setBusy(value) {
       busy = value
     },
     setVisible(value) {
       input.visible = value
+      status.visible = value
       if (value) input.focus()
       else input.blur()
     },
     destroy() {
       renderer.keyInput.off("keypress", onKeyPress)
       input.destroy()
+      status.destroy()
     },
   }
 }
