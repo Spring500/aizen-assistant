@@ -10,6 +10,7 @@ function snapshot(overrides: Partial<CoreSnapshot> = {}): CoreSnapshot {
     status: "idle",
     sessions: [],
     models: [],
+    views: [],
     authProviders: [],
     transcript: [],
     activeTools: [],
@@ -37,7 +38,7 @@ test("状态栏视图模型根据运行状态生成统一内容", () => {
     contextUsage: { used: 250, total: 1000 },
   })
   expect(statusBarView(current)).toEqual({
-    session: "模型：test/model | 上下文：250/1,000",
+    session: "模型：test/model | 视图：未选择视图 | 上下文：250/1,000",
     shortcuts: "Esc 中止 | Ctrl+C 退出",
   })
 })

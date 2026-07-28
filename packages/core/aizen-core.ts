@@ -5,9 +5,12 @@ import type {
   ModelReference,
   SessionRecord,
   TurnFinishedRecord,
+  TurnInputItem,
   TurnStartedRecord,
+  ViewId,
 } from "./session-format.ts"
 import type { SessionStore } from "./session-store.ts"
+import type { ViewStore } from "./view-store.ts"
 import {
   type CoreCommand,
   type CoreCommandResult,
@@ -17,7 +20,22 @@ import {
   recordsToTranscript,
 } from "./types.ts"
 
-export type AizenCoreOptions = { cwd: string; store: SessionStore; pi: PiPort; modelConfigStore?: ModelConfigStore }
+export type ExtraMessageProvider = (input: {
+  cwd: string
+  sessionId: string
+  turnId: string
+  viewId: ViewId
+  text: string
+}) => Promise<TurnInputItem[]>
+
+export type AizenCoreOptions = {
+  cwd: string
+  store: SessionStore
+  pi: PiPort
+  views?: ViewStore
+  extraMessages?: ExtraMessageProvider
+  modelConfigStore?: ModelConfigStore
+}
 
 function sessionModel(model: ModelReference): ModelReference {
   return {
@@ -32,6 +50,8 @@ export class AizenCore implements CorePort {
   readonly #cwd: string
   readonly #store: SessionStore
   readonly #pi: PiPort
+  readonly #views: ViewStore | undefined
+  readonly #extraMessages: ExtraMessageProvider
   readonly #modelConfigStore: ModelConfigStore | undefined
   readonly #listeners = new Set<(event: CoreEvent) => void>()
   readonly #unsubscribePi: () => void
@@ -42,24 +62,28 @@ export class AizenCore implements CorePort {
   #responseTimer: ReturnType<typeof setInterval> | undefined
   #runtimeRecords = new Map<string, string>()
   #abortRequested = false
+  #runtimeReady = false
   #disposed = false
 
   constructor(options: AizenCoreOptions) {
     this.#cwd = options.cwd
     this.#store = options.store
     this.#pi = options.pi
-    this.#modelConfigStore = options.modelConfigStore
     this.#snapshot = {
       cwd: options.cwd,
       status: "idle",
       sessions: [],
       models: [],
+      views: [],
       authProviders: [],
       transcript: [],
       activeTools: [],
       streamingText: "",
       streamingThinking: "",
     }
+    this.#views = options.views
+    this.#extraMessages = options.extraMessages ?? (async () => [])
+    this.#modelConfigStore = options.modelConfigStore
     this.#unsubscribePi = this.#pi.subscribe((event) => this.#handlePiEvent(event))
   }
 
@@ -73,7 +97,8 @@ export class AizenCore implements CorePort {
   }
 
   async dispatch(command: CoreCommand): Promise<CoreCommandResult> {
-    if (this.#disposed) return { ok: false, error: "核心已经关闭" }
+    if (this.#disposed)
+      return { ok: false, error: { code: "CORE_DISPOSED", message: "核心已经关闭", severity: "fatal" } }
     try {
       delete this.#snapshot.lastError
       if (
@@ -87,6 +112,10 @@ export class AizenCore implements CorePort {
       switch (command.type) {
         case "list_sessions":
           this.#snapshot.sessions = await this.#store.list()
+          break
+        case "list_views":
+          if (!this.#views) throw new Error("未配置视图存储")
+          this.#snapshot.views = await this.#views.list()
           break
         case "list_models":
           this.#snapshot.models = await this.#pi.listModels()
@@ -139,7 +168,7 @@ export class AizenCore implements CorePort {
           this.#snapshot.authProviders = await this.#pi.listAuthProviders()
           break
         case "create_session":
-          await this.#createSession(command.model)
+          await this.#createSession(command.model, command.viewId)
           break
         case "open_session":
           await this.#openSession(command.sessionId)
@@ -154,6 +183,33 @@ export class AizenCore implements CorePort {
             this.#notify()
             await this.#pi.abort()
           }
+          break
+        case "set_view":
+          await this.#setView(command.viewId)
+          break
+        case "create_view":
+          if (!this.#views) throw new Error("未配置视图存储")
+          await this.#views.create({ name: command.name, ...(command.id === undefined ? {} : { id: command.id }) })
+          this.#snapshot.views = await this.#views.list()
+          break
+        case "update_view":
+          if (!this.#views) throw new Error("未配置视图存储")
+          await this.#views.update(command.viewId, {
+            ...(command.name === undefined ? {} : { name: command.name }),
+            ...(command.path === undefined ? {} : { path: command.path }),
+          })
+          this.#snapshot.views = await this.#views.list()
+          break
+        case "ensure_view_file":
+          if (!this.#views) throw new Error("未配置视图存储")
+          await this.#views.ensureFile(command.viewId, command.name)
+          break
+        case "remove_view":
+          if (!this.#views) throw new Error("未配置视图存储")
+          if (this.#snapshot.currentViewId === command.viewId) throw new Error("不能移除当前会话正在使用的视图")
+          if (command.deleteDirectory) await this.#views.deleteDirectory(command.viewId)
+          else await this.#views.remove(command.viewId)
+          this.#snapshot.views = await this.#views.list()
           break
         case "set_model":
           await this.#setModel(command.model)
@@ -182,7 +238,7 @@ export class AizenCore implements CorePort {
       this.#snapshot.lastError = message
       if (this.#snapshot.status !== "running" && this.#snapshot.status !== "aborting") this.#snapshot.status = "idle"
       this.#notify()
-      return { ok: false, error: message }
+      return { ok: false, error: { code: "COMMAND_FAILED", message, severity: "error" } }
     }
   }
 
@@ -218,12 +274,12 @@ export class AizenCore implements CorePort {
     this.#snapshot.models = await this.#pi.listModels()
   }
 
-  async #createSession(model: ModelReference): Promise<void> {
+  async #createSession(model: ModelReference, viewId: ViewId): Promise<void> {
     const sessionId = crypto.randomUUID()
     const at = new Date().toISOString()
+    const view = await this.#resolveView(viewId)
+    const actualModel = await this.#pi.create({ cwd: this.#cwd, model, view })
     await this.#store.create({ sessionId, cwd: this.#cwd, createdAt: at })
-    const viewId = null
-    const actualModel = await this.#pi.create({ cwd: this.#cwd, model, viewId })
     const records: SessionRecord[] = [
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(actualModel) },
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
@@ -232,6 +288,7 @@ export class AizenCore implements CorePort {
     this.#records = records
     this.#runtimeRecords.clear()
     this.#snapshot.currentSessionId = sessionId
+    this.#runtimeReady = true
     this.#snapshot.currentModel = actualModel
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.currentViewId = viewId
@@ -251,12 +308,20 @@ export class AizenCore implements CorePort {
     const viewRecord = [...loaded.records].reverse().find((record) => record.kind === "view_changed")
     if (modelRecord?.kind !== "model_changed") throw new Error("会话没有模型记录")
     if (viewRecord?.kind !== "view_changed") throw new Error("会话没有视图记录")
-    const actualModel = await this.#pi.restore({
-      cwd: this.#cwd,
-      model: modelRecord.model,
-      viewId: viewRecord.viewId,
-      records: loaded.records,
+    const view = await this.#resolveView(viewRecord.viewId).catch((error) => {
+      this.#runtimeReady = false
+      this.#snapshot.lastError = error instanceof Error ? error.message : String(error)
+      return undefined
     })
+    const actualModel = view
+      ? await this.#pi.restore({
+          cwd: this.#cwd,
+          model: modelRecord.model,
+          view,
+          records: loaded.records,
+        })
+      : modelRecord.model
+    this.#runtimeReady = view !== undefined
     this.#records = loaded.records
     this.#runtimeRecords = new Map(loaded.records.map((record) => [record.recordId, record.recordId]))
     this.#snapshot.currentSessionId = sessionId
@@ -268,7 +333,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
     if (loaded.warnings.length > 0) this.#snapshot.lastError = loaded.warnings.join("；")
-    else delete this.#snapshot.lastError
+    else if (this.#runtimeReady) delete this.#snapshot.lastError
   }
 
   async #sendPrompt(text: string): Promise<void> {
@@ -276,14 +341,22 @@ export class AizenCore implements CorePort {
     const viewId = this.#snapshot.currentViewId
     if (!sessionId || viewId === undefined) throw new Error("请先新建或恢复会话")
     if (!text.trim()) throw new Error("消息不能为空")
+    if (!this.#runtimeReady) throw new Error("当前视图已失效，请先使用 /view 切换视图")
+    const view = await this.#resolveView(viewId)
+    await this.#pi.refreshView(view)
     const turnId = crypto.randomUUID()
+    const extraItems = await this.#extraMessages({ cwd: this.#cwd, sessionId, turnId, viewId, text })
+    const items: TurnInputItem[] = [
+      ...extraItems,
+      { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text }] },
+    ]
     const started: TurnStartedRecord = {
       kind: "turn_started",
       recordId: crypto.randomUUID(),
       turnId,
       at: new Date().toISOString(),
       viewId,
-      items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text }] }],
+      items,
     }
     await this.#store.append(sessionId, started)
     this.#records.push(started)
@@ -345,6 +418,33 @@ export class AizenCore implements CorePort {
       this.#currentTurnId = undefined
       this.#notify()
     }
+  }
+
+  async #setView(viewId: ViewId): Promise<void> {
+    const sessionId = this.#snapshot.currentSessionId
+    if (!sessionId) throw new Error("请先新建或恢复会话")
+    const view = await this.#resolveView(viewId)
+    const model = this.#snapshot.currentModel
+    if (!model) throw new Error("当前会话没有模型")
+    const actual = await this.#pi.restore({ cwd: this.#cwd, model, view, records: this.#records })
+    const record: SessionRecord = {
+      kind: "view_changed",
+      recordId: crypto.randomUUID(),
+      at: new Date().toISOString(),
+      viewId,
+    }
+    await this.#store.append(sessionId, record)
+    this.#records.push(record)
+    this.#snapshot.currentViewId = viewId
+    this.#snapshot.currentModel = actual
+    this.#runtimeReady = true
+  }
+
+  async #resolveView(viewId: ViewId) {
+    if (viewId === null) return { viewId: null }
+    if (!this.#views) return { viewId, directory: this.#cwd }
+    const view = await this.#views.resolve(viewId)
+    return { viewId, directory: view.directory }
   }
 
   async #setModel(model: ModelReference): Promise<void> {

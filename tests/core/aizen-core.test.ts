@@ -7,6 +7,7 @@ import type { PiPort, PiPortEvent } from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
+import { ViewStore } from "../../packages/core/view-store.ts"
 
 const model: ModelReference = { providerId: "test", modelId: "model", api: "anthropic-messages", thinkingLevel: "off" }
 const directories: string[] = []
@@ -16,6 +17,8 @@ class FakePi implements PiPort {
   prompts: unknown[] = []
   create = async () => model
   restore = async () => model
+  refreshView = async () => {}
+  switchView = async () => model
   abort = async () => {}
   listModels = async () => [{ ...model, name: "测试模型", available: true }]
   reloadModelConfig = async () => {}
@@ -46,6 +49,12 @@ class FakePi implements PiPort {
       })
       listener({ type: "settled" })
     }
+  }
+}
+
+class CreateFailingFakePi extends FakePi {
+  create = async () => {
+    throw new Error("无法创建运行时")
   }
 }
 
@@ -148,11 +157,11 @@ describe("核心编排", () => {
     ).toEqual({ ok: true })
     expect(core.getSnapshot().modelConfig?.providers[0]?.models[0]?.id).toBe("model-a")
 
-    await core.dispatch({ type: "create_session", model })
+    await core.dispatch({ type: "create_session", model, viewId: null })
     revision = core.getSnapshot().modelConfig?.revision ?? ""
     expect(await core.dispatch({ type: "delete_model", revision, providerId: "test", modelId: "model" })).toEqual({
       ok: false,
-      error: "不能删除当前会话正在使用的模型，请先切换模型",
+      error: { code: "COMMAND_FAILED", message: "不能删除当前会话正在使用的模型，请先切换模型", severity: "error" },
     })
     await core.dispose()
   })
@@ -207,6 +216,49 @@ describe("核心编排", () => {
     await core.dispose()
   })
 
+  test("运行时创建失败时不留下空会话", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const core = new AizenCore({ cwd: "E:\\project", store, pi: new CreateFailingFakePi() })
+
+    expect(await core.dispatch({ type: "create_session", model, viewId: null })).toEqual({
+      ok: false,
+      error: { code: "COMMAND_FAILED", message: "无法创建运行时", severity: "error" },
+    })
+    expect(core.getSnapshot().currentSessionId).toBeUndefined()
+    expect(await store.list()).toEqual([])
+    await core.dispose()
+  })
+
+  test("配置视图存储时仍可创建和恢复无视图会话", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(join(root, "sessions"))
+    const pi = new FakePi()
+    const core = new AizenCore({
+      cwd: "E:\\project",
+      store,
+      pi,
+      views: new ViewStore(join(root, "views.json")),
+    })
+
+    expect(await core.dispatch({ type: "create_session", model, viewId: null })).toEqual({ ok: true })
+    const sessionId = core.getSnapshot().currentSessionId ?? ""
+    expect(core.getSnapshot().currentViewId).toBeNull()
+    await core.dispose()
+
+    const restored = new AizenCore({
+      cwd: "E:\\project",
+      store,
+      pi: new FakePi(),
+      views: new ViewStore(join(root, "views.json")),
+    })
+    expect(await restored.dispatch({ type: "open_session", sessionId })).toEqual({ ok: true })
+    expect(restored.getSnapshot().currentViewId).toBeNull()
+    await restored.dispose()
+  })
+
   test("新建、发送多轮并从文件恢复", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
@@ -214,7 +266,7 @@ describe("核心编排", () => {
     const pi = new FakePi()
     const core = new AizenCore({ cwd: "E:\\project", store, pi })
 
-    expect(await core.dispatch({ type: "create_session", model })).toEqual({ ok: true })
+    expect(await core.dispatch({ type: "create_session", model, viewId: null })).toEqual({ ok: true })
     const sessionId = core.getSnapshot().currentSessionId
     expect(sessionId).toBeDefined()
     expect(await core.dispatch({ type: "send_prompt", text: "第一轮" })).toEqual({ ok: true })
@@ -229,13 +281,45 @@ describe("核心编排", () => {
     await restored.dispose()
   })
 
+  test("额外消息先写入会话且 useLater 语义交给适配器", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const pi = new FakePi()
+    const core = new AizenCore({
+      cwd: "E:\\project",
+      store,
+      pi,
+      extraMessages: async () => [
+        {
+          source: "clock",
+          role: "developer",
+          useLater: false,
+          parts: [{ kind: "text", text: "仅本轮" }],
+        },
+      ],
+    })
+
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    const sessionId = core.getSnapshot().currentSessionId ?? ""
+    await core.dispatch({ type: "send_prompt", text: "用户消息" })
+    const loaded = await store.read(sessionId)
+    const started = loaded.records.find((record) => record.kind === "turn_started")
+    expect(started?.kind === "turn_started" ? started.items : []).toEqual([
+      { source: "clock", role: "developer", useLater: false, parts: [{ kind: "text", text: "仅本轮" }] },
+      { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "用户消息" }] },
+    ])
+    expect(pi.prompts[0]).toMatchObject({ items: started?.kind === "turn_started" ? started.items : [] })
+    await core.dispose()
+  })
+
   test("上下文压缩只保存核心记录 ID", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
     const store = new SessionStore(root)
     const core = new AizenCore({ cwd: "E:\\project", store, pi: new CompactingFakePi() })
 
-    await core.dispatch({ type: "create_session", model })
+    await core.dispatch({ type: "create_session", model, viewId: null })
     const sessionId = core.getSnapshot().currentSessionId ?? ""
     await core.dispatch({ type: "send_prompt", text: "触发压缩" })
     await core.dispose()
@@ -257,7 +341,7 @@ describe("核心编排", () => {
     const store = new SessionStore(root)
     const core = new AizenCore({ cwd: "E:\\project", store, pi: new FailingFakePi() })
 
-    await core.dispatch({ type: "create_session", model })
+    await core.dispatch({ type: "create_session", model, viewId: null })
     const sessionId = core.getSnapshot().currentSessionId ?? ""
     expect((await core.dispatch({ type: "send_prompt", text: "失败请求" })).ok).toBe(true)
     const loaded = await store.read(sessionId)

@@ -1,0 +1,4 @@
+{
+  "version": 1,
+  "views": [{ "id": "review", "name": "代码审查", "path": "views/review" }]
+}

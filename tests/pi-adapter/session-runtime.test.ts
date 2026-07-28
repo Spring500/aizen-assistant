@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionRecord } from "../../packages/core/session-format.ts"
@@ -63,7 +63,7 @@ describe("pi 内存会话", () => {
       },
     ]
 
-    await runtime.restore({ cwd: directory, model, viewId: null, records })
+    await runtime.restore({ cwd: directory, model, view: { viewId: "test", directory }, records })
     const messages = runtime.inspectMessages()
     expect(JSON.stringify(messages)).not.toContain("不要恢复")
     expect(JSON.stringify(messages)).toContain("需要恢复")
@@ -120,11 +120,67 @@ describe("pi 内存会话", () => {
       },
     ]
 
-    await runtime.restore({ cwd: directory, model, viewId: null, records })
+    await runtime.restore({ cwd: directory, model, view: { viewId: "test", directory }, records })
     const messages = JSON.stringify(runtime.inspectMessages())
     expect(messages).toContain("已完成输入")
     expect(messages).not.toContain("意外中断输入")
     expect(messages).not.toContain("意外中断输出")
+    await runtime.dispose()
+  })
+
+  test("视图按轮重载 SYSTEM、AGENTS 和 Skill", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const viewDirectory = join(directory, "view")
+    const skillDirectory = join(viewDirectory, "skills", "review")
+    await mkdir(skillDirectory, { recursive: true })
+    await writeFile(join(viewDirectory, "SYSTEM.md"), "视图系统甲")
+    await writeFile(join(viewDirectory, "AGENTS.md"), "项目规则甲")
+    await writeFile(join(skillDirectory, "SKILL.md"), "---\nname: review\ndescription: 审查代码\n---\n")
+
+    await runtime.create({ cwd: directory, model, view: { viewId: "review", directory: viewDirectory } })
+    expect(runtime.inspectSystemPrompt()).toContain("视图系统甲")
+    expect(runtime.inspectSystemPrompt()).toContain("项目规则甲")
+    expect(runtime.inspectSystemPrompt()).toContain("review")
+
+    await writeFile(join(viewDirectory, "SYSTEM.md"), "视图系统乙")
+    await writeFile(join(viewDirectory, "AGENTS.md"), "项目规则乙")
+    await runtime.refreshView({ viewId: "review", directory: viewDirectory })
+    expect(runtime.inspectSystemPrompt()).toContain("视图系统乙")
+    expect(runtime.inspectSystemPrompt()).toContain("项目规则乙")
+    expect(runtime.inspectSystemPrompt()).not.toContain("视图系统甲")
+    await runtime.dispose()
+  })
+
+  test("无视图会话使用内建提示词且不加载工作目录上下文", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    await mkdir(join(directory, "skills", "hidden"), { recursive: true })
+    await writeFile(join(directory, "SYSTEM.md"), "不应加载的系统提示词")
+    await writeFile(join(directory, "AGENTS.md"), "不应加载的项目规则")
+    await writeFile(join(directory, "skills", "hidden", "SKILL.md"), "---\nname: hidden\ndescription: 不应加载\n---\n")
+
+    await runtime.create({ cwd: directory, model, view: { viewId: null } })
+    expect(runtime.inspectSystemPrompt()).toContain("You are an expert coding assistant")
+    expect(runtime.inspectSystemPrompt()).not.toContain("不应加载")
+    expect(runtime.inspectSystemPrompt()).not.toContain("hidden")
+    await runtime.dispose()
+  })
+
+  test("SYSTEM 缺失时采用 Pi 内建提示词", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    await runtime.create({ cwd: directory, model, view: { viewId: "default", directory } })
+    expect(runtime.inspectSystemPrompt()).toContain("You are an expert coding assistant")
     await runtime.dispose()
   })
 
@@ -153,7 +209,7 @@ describe("pi 内存会话", () => {
     })
     try {
       runtime.setModelBaseUrl(model.providerId, model.modelId, `http://localhost:${server.port}`)
-      await runtime.create({ cwd: directory, model, viewId: null })
+      await runtime.create({ cwd: directory, model, view: { viewId: "test", directory } })
       const messageEvents: Array<{ runtimeRef: string }> = []
       runtime.subscribe((event) => {
         if (event.type === "message") messageEvents.push(event)

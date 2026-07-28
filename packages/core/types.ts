@@ -1,4 +1,5 @@
-import type { ModelConfigSnapshot, EditableModelConfig, EditableProviderConfig } from "./model-config-store.ts"
+import type { EditableModelConfig, EditableProviderConfig, ModelConfigSnapshot } from "./model-config-store.ts"
+import type { ViewOption } from "./view-store.ts"
 import type { AuthPromptOption, AuthProviderOption, ModelOption, ModelRuntimeInfo } from "./pi-port.ts"
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
 import type { SessionSummary } from "./session-store.ts"
@@ -39,6 +40,7 @@ export type CoreSnapshot = {
   currentViewId?: ViewId
   models: ModelOption[]
   modelConfig?: ModelConfigSnapshot
+  views: ViewOption[]
   authProviders: AuthProviderOption[]
   transcript: TranscriptEntry[]
   activeTools: ActiveTool[]
@@ -51,7 +53,8 @@ export type CoreSnapshot = {
 
 export type CoreCommand =
   | { type: "list_sessions" }
-  | { type: "create_session"; model: ModelReference }
+  | { type: "list_views" }
+  | { type: "create_session"; model: ModelReference; viewId: ViewId }
   | { type: "open_session"; sessionId: string }
   | { type: "send_prompt"; text: string }
   | { type: "abort" }
@@ -68,6 +71,11 @@ export type CoreCommand =
     }
   | { type: "delete_model"; revision: string; providerId: string; modelId: string }
   | { type: "set_model"; model: ModelReference }
+  | { type: "set_view"; viewId: ViewId }
+  | { type: "create_view"; name: string; id?: string }
+  | { type: "update_view"; viewId: string; name?: string; path?: string }
+  | { type: "ensure_view_file"; viewId: string; name: "SYSTEM.md" | "AGENTS.md" }
+  | { type: "remove_view"; viewId: string; deleteDirectory?: boolean }
   | { type: "list_auth_providers" }
   | { type: "login_api_key"; providerId: string }
   | { type: "answer_auth_prompt"; promptId: string; value: string }
@@ -84,7 +92,13 @@ export type CoreEvent =
       options?: AuthPromptOption[]
     }
 
-export type CoreCommandResult = { ok: true } | { ok: false; error: string }
+export type CoreError = {
+  code: string
+  message: string
+  severity: "error" | "fatal"
+}
+
+export type CoreCommandResult = { ok: true } | { ok: false; error: CoreError }
 
 export interface CorePort {
   dispatch(command: CoreCommand): Promise<CoreCommandResult>

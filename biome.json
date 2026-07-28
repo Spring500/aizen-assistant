@@ -1,7 +1,15 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.5.4/schema.json",
   "files": {
-    "includes": ["**", "!!**/.private", "!!**/.aizen", "!!.worktrees", "!!**/node_modules", "!!**/dist"]
+    "includes": [
+      "**",
+      "!!**/.private",
+      "!!**/.aizen",
+      "!!.worktrees",
+      "!!**/node_modules",
+      "!!**/dist",
+      "!!tests/fixtures/app/invalid-model/models.json"
+    ]
   },
   "formatter": {
     "enabled": true,

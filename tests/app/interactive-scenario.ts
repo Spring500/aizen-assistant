@@ -1,0 +1,191 @@
+import { rm } from "node:fs/promises"
+import { KeyEvent, parseKeypress } from "@opentui/core"
+import { createTestRenderer } from "@opentui/core/testing"
+import { runInteractiveApp } from "../../apps/tui/interactive-app.ts"
+import { AizenCore } from "../../packages/core/aizen-core.ts"
+import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
+import { projectDirectoryName } from "../../packages/core/paths.ts"
+import { SessionStore } from "../../packages/core/session-store.ts"
+import type { CoreCommand, CoreEvent, CorePort, CoreSnapshot } from "../../packages/core/types.ts"
+import { ViewStore } from "../../packages/core/view-store.ts"
+import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
+import { copyAppFixture } from "../utils/app-fixture.ts"
+
+const model = {
+  providerId: "anthropic",
+  modelId: "claude-sonnet-4-6",
+  api: "anthropic-messages",
+  thinkingLevel: "off",
+  name: "Fixture Model",
+  available: true,
+}
+
+class ThrowingCreateCore implements CorePort {
+  readonly snapshot: CoreSnapshot = {
+    cwd: "E:\\fixture",
+    status: "idle",
+    sessions: [],
+    models: [model],
+    views: [],
+    authProviders: [{ id: "anthropic", name: "Anthropic", configured: true, supportsApiKey: true }],
+    transcript: [],
+    activeTools: [],
+    streamingText: "",
+    streamingThinking: "",
+  }
+  async dispatch(command: CoreCommand) {
+    if (command.type === "create_session") throw new Error("fixture 创建抛出异常")
+    return { ok: true as const }
+  }
+  subscribe(_listener: (event: CoreEvent) => void) {
+    return () => {}
+  }
+  getSnapshot() {
+    return structuredClone(this.snapshot)
+  }
+  dispose = async () => {}
+}
+
+function assertIncludes(frame: string, value: string): void {
+  if (!frame.includes(value)) throw new Error(`界面不包含 ${JSON.stringify(value)}：\n${frame}`)
+}
+
+function assertExcludes(frame: string, value: string): void {
+  if (frame.includes(value)) throw new Error(`界面不应包含 ${JSON.stringify(value)}：\n${frame}`)
+}
+
+function key(text: string): KeyEvent {
+  const parsed = parseKeypress(text)
+  if (!parsed) throw new Error(`无法解析按键：${JSON.stringify(text)}`)
+  return new KeyEvent(parsed)
+}
+
+async function setupRenderer() {
+  return createTestRenderer({
+    width: 100,
+    height: 24,
+    screenMode: "split-footer",
+    footerHeight: 9,
+    externalOutputMode: "capture-stdout",
+  })
+}
+
+async function press(setup: Awaited<ReturnType<typeof createTestRenderer>>, sequence: string) {
+  setup.renderer.keyInput.emit("keypress", key(sequence))
+  await Bun.sleep(10)
+  await setup.renderOnce()
+}
+
+const pressEnter = (setup: Awaited<ReturnType<typeof createTestRenderer>>) => press(setup, "\r")
+async function pressDown(setup: Awaited<ReturnType<typeof createTestRenderer>>, count: number) {
+  for (let index = 0; index < count; index++) await press(setup, "\x1b[B")
+}
+
+async function invalidModel(): Promise<void> {
+  const root = await copyAppFixture("invalid-model")
+  const setup = await setupRenderer()
+  const pi = await PiSessionRuntime.create({ authPath: `${root}/auth.json`, modelsPath: `${root}/models.json` })
+  const core = new AizenCore({
+    cwd: root,
+    store: new SessionStore(`${root}/sessions/${projectDirectoryName(root)}`),
+    pi,
+    modelConfigStore: new ModelConfigStore(`${root}/models.json`),
+    views: new ViewStore(`${root}/views.json`),
+  })
+  const running = runInteractiveApp({ cwd: root, dataDirectory: root, testing: { renderer: setup.renderer, core } })
+  try {
+    await Bun.sleep(20)
+    await setup.renderOnce()
+    assertIncludes(setup.captureCharFrame(), "会话设置 · 新建会话")
+    await pressEnter(setup)
+    await Bun.sleep(20)
+    await setup.renderOnce()
+    const first = setup.captureCharFrame()
+    await Bun.sleep(40)
+    await setup.renderOnce()
+    const later = setup.captureCharFrame()
+    assertIncludes(first, "models.json")
+    assertExcludes(first, "选择会话")
+    assertIncludes(later, "models.json")
+    assertExcludes(later, "选择会话")
+  } finally {
+    setup.renderer.keyInput.emit("keypress", key("\x03"))
+    await running
+    setup.renderer.destroy()
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+async function noViews(): Promise<void> {
+  const root = await copyAppFixture("empty")
+  const setup = await setupRenderer()
+  const pi = await PiSessionRuntime.create({ authPath: `${root}/auth.json`, modelsPath: null })
+  await pi.setRuntimeApiKey("anthropic", "fixture-key")
+  const core = new AizenCore({
+    cwd: root,
+    store: new SessionStore(`${root}/sessions/${projectDirectoryName(root)}`),
+    pi,
+    modelConfigStore: new ModelConfigStore(`${root}/models.json`),
+    views: new ViewStore(`${root}/views.json`),
+  })
+  const running = runInteractiveApp({ cwd: root, dataDirectory: root, testing: { renderer: setup.renderer, core } })
+  try {
+    await Bun.sleep(20)
+    await setup.renderOnce()
+    assertIncludes(setup.captureCharFrame(), "会话设置 · 新建会话")
+    await pressEnter(setup)
+    assertIncludes(setup.captureCharFrame(), "选择供应商")
+    await pressEnter(setup)
+    assertIncludes(setup.captureCharFrame(), "选择模型")
+    await pressEnter(setup)
+    assertIncludes(setup.captureCharFrame(), "会话设置 · 新建会话")
+    await pressDown(setup, 4)
+    await pressEnter(setup)
+    await Bun.sleep(30)
+    await setup.renderOnce()
+    if (!core.getSnapshot().currentSessionId) throw new Error("未创建会话")
+    if (core.getSnapshot().currentViewId !== null) throw new Error("无视图没有生效")
+    assertExcludes(setup.captureCharFrame(), "创建会话失败")
+  } finally {
+    setup.renderer.keyInput.emit("keypress", key("\x03"))
+    await running
+    setup.renderer.destroy()
+    await rm(root, { recursive: true, force: true })
+  }
+}
+
+async function throwingCreate(): Promise<void> {
+  const setup = await setupRenderer()
+  const core = new ThrowingCreateCore()
+  const running = runInteractiveApp({
+    cwd: core.snapshot.cwd,
+    dataDirectory: "unused",
+    testing: { renderer: setup.renderer, core },
+  })
+  try {
+    await Bun.sleep(10)
+    await setup.renderOnce()
+    await pressEnter(setup)
+    await pressEnter(setup)
+    await pressEnter(setup)
+    await pressDown(setup, 4)
+    await pressEnter(setup)
+    await Bun.sleep(20)
+    await setup.renderOnce()
+    assertIncludes(setup.captureCharFrame(), "创建会话失败")
+    assertIncludes(setup.captureCharFrame(), "fixture 创建抛出异常")
+    await Bun.sleep(30)
+    await setup.renderOnce()
+    assertIncludes(setup.captureCharFrame(), "fixture 创建抛出异常")
+  } finally {
+    setup.renderer.keyInput.emit("keypress", key("\x03"))
+    await Promise.race([running, Bun.sleep(1000)])
+    setup.renderer.destroy()
+  }
+}
+
+const scenario = process.argv[2]
+if (scenario === "invalid-model") await invalidModel()
+else if (scenario === "no-views") await noViews()
+else if (scenario === "throwing-create") await throwingCreate()
+else throw new Error(`未知场景：${scenario}`)

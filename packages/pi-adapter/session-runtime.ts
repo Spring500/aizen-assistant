@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from "node:fs"
+import { join } from "node:path"
 import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core"
 import type { Api, AuthPrompt, Model } from "@earendil-works/pi-ai"
 import {
@@ -5,6 +7,7 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   ModelRuntime,
+  type ResourceLoader,
   SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent"
@@ -17,6 +20,7 @@ import type {
   PiPortEvent,
   PiPromptInput,
   PiRestoreInput,
+  ViewRuntimeInput,
 } from "../core/pi-port.ts"
 import type { ModelReference, SessionRecord } from "../core/session-format.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
@@ -50,6 +54,55 @@ function modelReference(model: Model<Api>, thinkingLevel: ThinkingLevel) {
   }
 }
 
+function createViewLoader(
+  cwd: string,
+  view: ViewRuntimeInput,
+  settingsManager: SettingsManager,
+): DefaultResourceLoader {
+  const emptyView = view.viewId === null
+  const directory = emptyView ? cwd : view.directory
+  const systemPath = join(directory, "SYSTEM.md")
+  const agentsPath = join(directory, "AGENTS.md")
+  return new DefaultResourceLoader({
+    cwd,
+    agentDir: directory,
+    settingsManager,
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
+    additionalSkillPaths: !emptyView && existsSync(join(directory, "skills")) ? [join(directory, "skills")] : [],
+    systemPromptOverride: () => (!emptyView && existsSync(systemPath) ? readFileSync(systemPath, "utf8") : undefined),
+    agentsFilesOverride: () => ({
+      agentsFiles:
+        !emptyView && existsSync(agentsPath) ? [{ path: agentsPath, content: readFileSync(agentsPath, "utf8") }] : [],
+    }),
+  })
+}
+
+class MutableViewLoader implements ResourceLoader {
+  #current: ResourceLoader
+
+  constructor(loader: ResourceLoader) {
+    this.#current = loader
+  }
+
+  replace(loader: ResourceLoader): void {
+    this.#current = loader
+  }
+
+  getExtensions = () => this.#current.getExtensions()
+  getSkills = () => this.#current.getSkills()
+  getPrompts = () => this.#current.getPrompts()
+  getThemes = () => this.#current.getThemes()
+  getAgentsFiles = () => this.#current.getAgentsFiles()
+  getSystemPrompt = () => this.#current.getSystemPrompt()
+  getAppendSystemPrompt = () => this.#current.getAppendSystemPrompt()
+  extendResources = (paths: Parameters<ResourceLoader["extendResources"]>[0]) => this.#current.extendResources(paths)
+  reload = (options?: Parameters<ResourceLoader["reload"]>[0]) => this.#current.reload(options)
+}
+
 function toolResultText(result: unknown): string {
   if (!result || typeof result !== "object" || !("content" in result) || !Array.isArray(result.content)) return ""
   return result.content
@@ -76,6 +129,9 @@ export class PiSessionRuntime implements PiPort {
   #authAnswers = new Map<string, { resolve: (value: string) => void; reject: (error: Error) => void }>()
   #entryRuntimeRefs = new Map<string, string>()
   #recordEntries = new Map<string, string>()
+  #viewLoader: MutableViewLoader | undefined
+  #settingsManager: SettingsManager | undefined
+  #cwd: string | undefined
 
   private constructor(modelRuntime: ModelRuntime) {
     this.#modelRuntime = modelRuntime
@@ -100,19 +156,13 @@ export class PiSessionRuntime implements PiPort {
     const model = this.#modelRuntime.getModel(input.model.providerId, input.model.modelId)
     if (!model) throw new Error(`找不到模型：${input.model.providerId}/${input.model.modelId}`)
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: false } })
-    const resourceLoader = new DefaultResourceLoader({
-      cwd: input.cwd,
-      agentDir: input.cwd,
-      settingsManager,
-      noExtensions: true,
-      noSkills: true,
-      noPromptTemplates: true,
-      noThemes: true,
-      noContextFiles: true,
-      agentsFilesOverride: () => ({ agentsFiles: [] }),
-      skillsOverride: () => ({ skills: [], diagnostics: [] }),
-    })
-    await resourceLoader.reload()
+    const initialLoader = createViewLoader(input.cwd, input.view, settingsManager)
+    await initialLoader.reload()
+    this.#validateViewLoader(initialLoader, input.view.viewId)
+    const resourceLoader = new MutableViewLoader(initialLoader)
+    this.#viewLoader = resourceLoader
+    this.#settingsManager = settingsManager
+    this.#cwd = input.cwd
     const sessionManager = SessionManager.inMemory(input.cwd)
     this.#restoreEntries(sessionManager, records)
     const { session } = await createAgentSession({
@@ -189,6 +239,25 @@ export class PiSessionRuntime implements PiPort {
 
   restore(input: PiRestoreInput): Promise<ModelRuntimeInfo> {
     return this.#start(input, input.records)
+  }
+
+  async refreshView(view: ViewRuntimeInput): Promise<void> {
+    const session = this.#requireSession()
+    if (!session.isIdle) throw new Error("生成或执行工具期间不能刷新视图")
+    if (!this.#settingsManager || !this.#viewLoader || !this.#cwd) throw new Error("视图加载器尚未初始化")
+    const loader = createViewLoader(this.#cwd, view, this.#settingsManager)
+    await loader.reload()
+    this.#validateViewLoader(loader, view.viewId)
+    this.#viewLoader.replace(loader)
+    session.setActiveToolsByName(session.getActiveToolNames())
+  }
+
+  async switchView(view: ViewRuntimeInput, _records: SessionRecord[]): Promise<ModelRuntimeInfo> {
+    await this.refreshView(view)
+    const session = this.#requireSession()
+    const model = session.model
+    if (!model) throw new Error("当前会话没有模型")
+    return modelReference(model, session.thinkingLevel)
   }
 
   async prompt(input: PiPromptInput): Promise<void> {
@@ -303,6 +372,10 @@ export class PiSessionRuntime implements PiPort {
     return this.#requireSession().agent.state.messages
   }
 
+  inspectSystemPrompt(): string {
+    return this.#requireSession().systemPrompt
+  }
+
   inspectSessionFile(): string | undefined {
     return this.#requireSession().sessionFile
   }
@@ -336,6 +409,9 @@ export class PiSessionRuntime implements PiPort {
     this.#session = undefined
     this.#entryRuntimeRefs.clear()
     this.#recordEntries.clear()
+    this.#viewLoader = undefined
+    this.#settingsManager = undefined
+    this.#cwd = undefined
   }
 
   #registerEntry(recordId: string, entryId: string): void {
@@ -391,6 +467,13 @@ export class PiSessionRuntime implements PiPort {
       if (runtimeRef) return runtimeRef
     }
     throw new Error("上下文压缩位置无法对应到会话记录")
+  }
+
+  #validateViewLoader(loader: ResourceLoader, viewId: ViewRuntimeInput["viewId"]): void {
+    const diagnostics = loader.getSkills().diagnostics
+    if (viewId === null || diagnostics.length === 0) return
+    const details = diagnostics.map((item) => `${item.path ?? "Skill"}: ${item.message}`).join("；")
+    throw new Error(`视图 ${viewId} 的 Skill 无效：${details}`)
   }
 
   #requestAuthAnswer(prompt: AuthPrompt, signal: AbortSignal): Promise<string> {

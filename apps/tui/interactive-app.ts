@@ -1,3 +1,4 @@
+import type { CliRenderer } from "@opentui/core"
 import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import type {
@@ -11,9 +12,12 @@ import type {
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
+import type { CorePort } from "../../packages/core/types.ts"
+import { ViewStore } from "../../packages/core/view-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
+import { selectRichItem } from "../../packages/tui-kit/rich-selector.ts"
 import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
 
 import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
@@ -22,7 +26,19 @@ import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { createAizenRenderer, destroyRenderer } from "../../packages/tui-kit/renderer.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
 
-export type InteractiveAppOptions = { cwd: string; dataDirectory: string }
+import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
+import { openDirectory, openExternalEditor } from "./external-open.ts"
+import { sessionSettingsItems, type SessionSettingsDraft } from "./session-settings.ts"
+import { viewSelectionItems } from "./view-flow.ts"
+
+const createViewValue = ":create-view"
+const manageViewsValue = ":manage-views"
+
+export type InteractiveAppOptions = {
+  cwd: string
+  dataDirectory: string
+  testing?: { renderer: CliRenderer; core: CorePort }
+}
 
 const authPromptLabels: Record<string, string> = {
   "Enter AWS profile name": "AWS 配置名称",
@@ -42,22 +58,26 @@ const authOptionLabels: Record<string, string> = {
 }
 
 export async function runInteractiveApp(options: InteractiveAppOptions): Promise<void> {
-  const renderer = await createAizenRenderer()
-  const pi = await PiSessionRuntime.create({
-    authPath: join(options.dataDirectory, "auth.json"),
-    modelsPath: join(options.dataDirectory, "models.json"),
-  })
+  const renderer = options.testing?.renderer ?? (await createAizenRenderer())
+  const pi = options.testing
+    ? undefined
+    : await PiSessionRuntime.create({
+        authPath: join(options.dataDirectory, "auth.json"),
+        modelsPath: join(options.dataDirectory, "models.json"),
+      })
   const store = new SessionStore(join(options.dataDirectory, "sessions", projectDirectoryName(options.cwd)))
-  const core = new AizenCore({
-    cwd: options.cwd,
-    store,
-    pi,
-    modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "models.json")),
-  })
+  const core =
+    options.testing?.core ??
+    new AizenCore({
+      cwd: options.cwd,
+      store,
+      pi: pi as PiSessionRuntime,
+      modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "models.json")),
+      views: new ViewStore(join(options.dataDirectory, "views.json")),
+    })
   const view = createChatView(renderer)
   const interactionController = new AbortController()
   let exiting = false
-  let action = Promise.resolve()
   let authProviderName: string | undefined
   let interactionDepth = 0
 
@@ -69,25 +89,26 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     if (status === "authenticating") core.dispatch({ type: "cancel_auth" }).catch(() => {})
     if (status === "running" || status === "aborting") core.dispatch({ type: "abort" }).catch(() => {})
   }
-  const runAction = (operation: () => Promise<unknown>) => {
-    action = action.then(operation).then(
-      () => {},
-      () => {},
-    )
+  const showError = async (title: string, error: string) => {
+    await selectItem(renderer, `error-${crypto.randomUUID()}`, [{ name: "返回", description: error, value: true }], {
+      title,
+      signal: interactionController.signal,
+    })
   }
+  const actions = new ActionQueue(showError)
+  const runAction = (operation: () => Promise<unknown>) => actions.run(operation)
+  const dispatchWithError = (command: Parameters<typeof core.dispatch>[0], title: string) =>
+    dispatchOrPresent(core, command, title, showError)
   const editor = createChatEditor(renderer, {
     onSubmit: (value) => {
       if (value === "/quit") quit()
       else if (value === "/new") runAction(createSession)
       else if (value === "/sessions") runAction(chooseSession)
+      else if (value === "/views") runAction(manageViews)
+      else if (value === "/view" || value === "/model") runAction(() => openSessionSettings("existing"))
       else if (value === "/fold") runAction(chooseFold)
       else if (value === "/models") runAction(manageModels)
-      else if (value === "/model")
-        runAction(async () => {
-          const model = await chooseModel()
-          if (model && core.getSnapshot().currentSessionId) await core.dispatch({ type: "set_model", model })
-        })
-      else runAction(() => core.dispatch({ type: "send_prompt", text: value }))
+      else runAction(() => dispatchWithError({ type: "send_prompt", text: value }, "发送消息失败"))
     },
     onAbort: () => void core.dispatch({ type: "abort" }),
     onQuit: quit,
@@ -168,6 +189,135 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   })
 
+  async function createView(): Promise<void> {
+    const name = await promptLine(renderer, "view-name", "视图名称：", { signal: interactionController.signal })
+    if (!name) return
+    const result = await dispatchWithError({ type: "create_view", name }, "创建视图失败")
+    if (!result.ok) return
+    const created = core.getSnapshot().views.find((item) => item.name === name)
+    if (!created) return
+    await showError(
+      "视图已创建",
+      `请编辑 SYSTEM.md：${join(created.directory, "SYSTEM.md")}；AGENTS.md：${join(created.directory, "AGENTS.md")}；Skills：${join(created.directory, "skills")}`,
+    )
+  }
+
+  async function chooseView(): Promise<string | null | undefined> {
+    beginInteraction()
+    try {
+      while (!exiting) {
+        const listed = await dispatchWithError({ type: "list_views" }, "读取视图失败")
+        if (!listed.ok) return undefined
+        const selected = await selectItem<string | null>(
+          renderer,
+          "view-selector",
+          [
+            ...viewSelectionItems(core.getSnapshot().views),
+            { name: "新建视图", description: "创建视图模板并立即使用", value: createViewValue },
+            { name: "管理视图", description: "编辑、移除或删除视图", value: manageViewsValue },
+          ],
+          { title: "选择视图", signal: interactionController.signal },
+        )
+        if (selected === createViewValue) {
+          await createView()
+          continue
+        }
+        if (selected === manageViewsValue) {
+          await manageViews()
+          continue
+        }
+        return selected
+      }
+      return undefined
+    } finally {
+      endInteraction()
+    }
+  }
+
+  async function manageViews() {
+    beginInteraction()
+    try {
+      while (!exiting) {
+        const listed = await dispatchWithError({ type: "list_views" }, "读取视图失败")
+        if (!listed.ok) return
+        const selected = await selectItem(
+          renderer,
+          "views-manager",
+          [
+            { name: "刷新", description: "重新读取 views.json 和目录状态", value: "__refresh__" },
+            { name: "创建视图模板", description: "创建 AGENTS.md 和 skills 目录", value: "__create__" },
+            ...core.getSnapshot().views.map((item) => ({
+              name: `${item.valid ? "✓" : "!"} ${item.name}`,
+              description: `${item.id} · ${item.error ?? item.directory}`,
+              value: item.id,
+            })),
+          ],
+          { title: "管理视图（选择视图后进入操作菜单）", signal: interactionController.signal },
+        )
+        if (!selected) return
+        if (selected === "__refresh__") continue
+        if (selected === "__create__") {
+          await createView()
+          continue
+        }
+        await manageView(selected)
+      }
+    } finally {
+      endInteraction()
+    }
+  }
+
+  async function manageView(viewId: string) {
+    const viewItem = core.getSnapshot().views.find((item) => item.id === viewId)
+    if (!viewItem) return
+    const action = await selectItem(
+      renderer,
+      "view-action",
+      [
+        { name: "编辑名称", description: viewItem.name, value: "name" },
+        { name: "编辑目录路径", description: viewItem.path, value: "path" },
+        { name: "编辑 SYSTEM.md", description: "不存在时自动创建", value: "system" },
+        { name: "编辑 AGENTS.md", description: "不存在时自动创建", value: "agents" },
+        { name: "打开 Skills 目录", description: viewItem.directory, value: "skills" },
+        { name: "移除注册", description: "保留视图目录和文件", value: "remove" },
+        { name: "删除视图目录", description: "同时删除注册和目录，需要再次确认", value: "delete" },
+      ],
+      { title: `管理视图 · ${viewItem.name}`, signal: interactionController.signal },
+    )
+    if (action === "name") {
+      const name = await promptLine(renderer, "view-edit-name", "新名称：", {
+        initialValue: viewItem.name,
+        signal: interactionController.signal,
+      })
+      if (name) await dispatchWithError({ type: "update_view", viewId, name }, "更新视图失败")
+    } else if (action === "path") {
+      const path = await promptLine(renderer, "view-edit-path", "新路径：", {
+        initialValue: viewItem.path,
+        signal: interactionController.signal,
+      })
+      if (path) await dispatchWithError({ type: "update_view", viewId, path }, "更新视图失败")
+    } else if (action === "system" || action === "agents") {
+      const name = action === "system" ? "SYSTEM.md" : "AGENTS.md"
+      const ensured = await dispatchWithError({ type: "ensure_view_file", viewId, name }, "创建视图文件失败")
+      if (ensured.ok) await openExternalEditor(join(viewItem.directory, name))
+    } else if (action === "skills") {
+      await openDirectory(join(viewItem.directory, "skills"))
+    } else if (action === "remove") {
+      await dispatchWithError({ type: "remove_view", viewId }, "移除视图失败")
+    } else if (action === "delete") {
+      const confirmed = await selectItem(
+        renderer,
+        "view-delete-confirm",
+        [
+          { name: "确认删除", description: viewItem.directory, value: true },
+          { name: "取消", description: "不做修改", value: false },
+        ],
+        { title: `永久删除视图 ${viewItem.name}？`, signal: interactionController.signal },
+      )
+      if (confirmed) await dispatchWithError({ type: "remove_view", viewId, deleteDirectory: true }, "删除视图失败")
+    }
+  }
+
   async function chooseFold() {
     beginInteraction()
     try {
@@ -214,7 +364,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     try {
       const authenticateProvider = async (providerId?: string): Promise<string | undefined> => {
         while (!exiting) {
-          await core.dispatch({ type: "list_auth_providers" })
+          const providersResult = await dispatchWithError({ type: "list_auth_providers" }, "读取认证供应商失败")
+          if (!providersResult.ok) return undefined
           const providers = core.getSnapshot().authProviders
           const selectedProvider = providerId
             ? providers.find((provider) => provider.id === providerId)
@@ -230,7 +381,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               )
           if (!selectedProvider) return undefined
           authProviderName = selectedProvider.name
-          const login = await core.dispatch({ type: "login_api_key", providerId: selectedProvider.id })
+          const login = await dispatchWithError(
+            { type: "login_api_key", providerId: selectedProvider.id },
+            "供应商认证失败",
+          )
           authProviderName = undefined
           if (login.ok) return selectedProvider.id
           if (providerId) return undefined
@@ -240,10 +394,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
       let preferredProviderId: string | undefined
       while (!exiting) {
-        const listed = await core.dispatch({ type: "list_models" })
-        const authListed = await core.dispatch({ type: "list_auth_providers" })
-        const configLoaded = await core.dispatch({ type: "load_model_config" })
-        if (!listed.ok || !authListed.ok || !configLoaded.ok) return undefined
+        const listed = await dispatchWithError({ type: "list_models" }, "读取模型失败")
+        if (!listed.ok) return undefined
+        const authListed = await dispatchWithError({ type: "list_auth_providers" }, "读取认证供应商失败")
+        if (!authListed.ok) return undefined
+        const configLoaded = await dispatchWithError({ type: "load_model_config" }, "读取模型配置失败")
+        if (!configLoaded.ok) return undefined
         const snapshot = core.getSnapshot()
         const providers = modelProviderChoices(
           snapshot.models,
@@ -726,15 +882,79 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
+  async function openSessionSettings(mode: "new" | "existing"): Promise<boolean> {
+    let draft: SessionSettingsDraft = { viewId: null }
+    if (mode === "existing") {
+      const snapshot = core.getSnapshot()
+      const current = snapshot.currentModel
+      if (!current) return false
+      draft = {
+        model: {
+          ...current,
+          name:
+            snapshot.models.find((item) => item.providerId === current.providerId && item.modelId === current.modelId)
+              ?.name ?? current.modelId,
+          available: true,
+        },
+        viewId: snapshot.currentViewId ?? null,
+      }
+    }
+    while (!exiting) {
+      if (!(await dispatchWithError({ type: "list_views" }, "读取视图失败")).ok) return false
+      const action = await selectRichItem(
+        renderer,
+        "session-settings",
+        sessionSettingsItems(draft, core.getSnapshot().views, mode),
+        {
+          title: mode === "new" ? "会话设置 · 新建会话" : "会话设置 · 当前会话",
+          signal: interactionController.signal,
+        },
+      )
+      if (!action || action === "cancel") return false
+      if (action === "model") {
+        const model = await chooseModel()
+        if (model) draft = { ...draft, model }
+      } else if (action === "view") {
+        const viewId = await chooseView()
+        if (viewId !== undefined) draft = { ...draft, viewId }
+      } else if (action === "manage-models") await manageModels("standalone")
+      else if (action === "manage-views") await manageViews()
+      else if (action === "apply") {
+        if (mode === "new") {
+          if (!draft.model) {
+            await showError("无法应用设置", "请先选择模型")
+            continue
+          }
+          const result = await dispatchWithError(
+            { type: "create_session", model: draft.model, viewId: draft.viewId },
+            "创建会话失败",
+          )
+          return result.ok
+        }
+        if (!draft.model) continue
+        const snapshot = core.getSnapshot()
+        const current = snapshot.currentModel
+        if (!current || current.providerId !== draft.model.providerId || current.modelId !== draft.model.modelId) {
+          if (!(await dispatchWithError({ type: "set_model", model: draft.model }, "切换模型失败")).ok) continue
+        }
+        if (snapshot.currentViewId !== draft.viewId) {
+          if (!(await dispatchWithError({ type: "set_view", viewId: draft.viewId }, "切换视图失败")).ok) continue
+        }
+        return true
+      }
+    }
+    return false
+  }
+
   async function createSession() {
-    const model = await chooseModel()
-    if (model) await core.dispatch({ type: "create_session", model })
+    await openSessionSettings("new")
   }
 
   async function chooseSession() {
     beginInteraction()
     try {
-      await core.dispatch({ type: "list_sessions" })
+      const listed = await dispatchWithError({ type: "list_sessions" }, "读取会话失败")
+      if (!listed.ok) return
       const sessions = core.getSnapshot().sessions
       if (sessions.length === 0) return createSession()
       const selected = await selectItem(
@@ -755,15 +975,17 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         { title: "选择会话", signal: interactionController.signal },
       )
       if (selected === "__new__") await createSession()
-      else if (selected) await core.dispatch({ type: "open_session", sessionId: selected })
+      else if (selected) await dispatchWithError({ type: "open_session", sessionId: selected }, "打开会话失败")
     } finally {
       endInteraction()
     }
   }
 
   try {
-    await chooseSession()
-    if (!core.getSnapshot().currentSessionId) quit()
+    while (!exiting && !core.getSnapshot().currentSessionId) {
+      await chooseSession()
+      if (!core.getSnapshot().currentSessionId) await Bun.sleep(50)
+    }
     while (!exiting) {
       await Bun.sleep(50)
     }
@@ -771,10 +993,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     unsubscribe()
     editor.destroy()
     try {
-      await action
+      await actions.flush()
       await core.dispose()
     } finally {
-      destroyRenderer(renderer)
+      if (!options.testing) destroyRenderer(renderer)
     }
   }
 }
