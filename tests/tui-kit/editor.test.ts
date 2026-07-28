@@ -91,6 +91,40 @@ test("编辑器可只隐藏输入框并保持底部状态栏可见", async () =>
   }
 })
 
+test("编辑器高度随视觉行数变化并显示带标题分割线", async () => {
+  const setup = await createTestRenderer({
+    width: 40,
+    height: 16,
+    screenMode: "split-footer",
+    footerHeight: 9,
+  })
+  try {
+    const editor = createChatEditor(setup.renderer, {
+      onSubmit: () => {},
+      onAbort: () => {},
+      onQuit: () => {},
+    })
+    editor.setTitle("会话")
+    editor.input.setText("第一行\n第二行\n第三行")
+    await Bun.sleep(1)
+    await setup.renderOnce()
+    expect(editor.input.height).toBe(3)
+    expect(setup.renderer.footerHeight).toBe(10)
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("会话──")
+    expect(frame).toContain("第一行")
+    expect(frame).toContain("第三行")
+
+    editor.input.setText(Array.from({ length: 12 }, (_, index) => `第 ${index} 行`).join("\n"))
+    await Bun.sleep(1)
+    expect(editor.input.height).toBe(8)
+    expect(setup.renderer.footerHeight).toBe(15)
+    editor.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("快捷键提示随状态变化", () => {
   expect(shortcutText({ status: "running", hasSession: true })).toContain("Esc 中止")
   expect(shortcutText({ status: "idle", hasSession: true })).toContain("光标前 \\ 后 Enter 换行")

@@ -1,12 +1,12 @@
 import {
   type CliRenderer,
   createTextAttributes,
-  type KeyEvent,
   parseColor,
   StyledText,
   type TextChunk,
   TextRenderable,
 } from "@opentui/core"
+import { overlayManager, type OverlayManager } from "./overlay-manager.ts"
 import { systemColors } from "./theme.ts"
 
 export type RichSegment = {
@@ -46,71 +46,69 @@ function content(item: RichSelectorItem<unknown>, selected: boolean): StyledText
 }
 
 export function selectRichItem<T>(
-  renderer: CliRenderer,
+  manager: OverlayManager | CliRenderer,
   id: string,
   items: RichSelectorItem<T>[],
   options: { title: string; signal?: AbortSignal },
 ): Promise<T | undefined> {
+  const overlays = overlayManager(manager)
   return new Promise((resolve) => {
-    const previousFooterHeight = renderer.footerHeight
-    if (renderer.screenMode === "split-footer") renderer.footerHeight = Math.max(previousFooterHeight, 12)
-    const title = new TextRenderable(renderer, {
-      id: `${id}-title`,
-      position: "absolute",
-      top: 1,
-      left: 1,
-      right: 0,
-      height: 1,
-      zIndex: 121,
-      fg: systemColors.header,
-      content: options.title,
-    })
+    let settled = false
     let selected = 0
-    const rows = items.map(
-      (item, index) =>
-        new TextRenderable(renderer, {
+    const visibleRows = Math.max(1, Math.min(items.length, 10))
+    const handle = overlays.open<T>({
+      id,
+      title: options.title,
+      help: "↑↓ 移动 | Enter 选择 | Esc 返回",
+      contentHeight: visibleRows,
+      ...(options.signal ? { signal: options.signal } : {}),
+      onCancel: () => finish(undefined, true),
+    })
+    const rows = Array.from(
+      { length: visibleRows },
+      (_, index) =>
+        new TextRenderable(overlays.renderer, {
           id: `${id}-${index}`,
           position: "absolute",
-          top: 3 + index,
-          left: 1,
+          top: index,
+          left: 0,
           right: 0,
           height: 1,
-          zIndex: 120,
-          content: content(item, index === selected),
+          wrapMode: "none",
+          truncate: true,
+          content: "",
         }),
     )
-    renderer.root.add(title)
-    for (const row of rows) renderer.root.add(row)
-    let settled = false
+    for (const row of rows) handle.content.add(row)
+
     const render = () => {
-      for (const [index, row] of rows.entries()) {
-        const item = items[index]
-        if (item) row.content = content(item, index === selected)
+      const maxOffset = Math.max(0, items.length - visibleRows)
+      const offset = Math.min(maxOffset, Math.max(0, selected - visibleRows + 1))
+      for (const [rowIndex, row] of rows.entries()) {
+        const itemIndex = offset + rowIndex
+        const item = items[itemIndex]
+        row.visible = item !== undefined
+        if (item) row.content = content(item, itemIndex === selected)
       }
     }
-    const finish = (value: T | undefined) => {
+    const finish = (value: T | undefined, cancelled = false) => {
       if (settled) return
       settled = true
-      renderer.keyInput.off("keypress", onKeyPress)
-      options.signal?.removeEventListener("abort", onAbort)
-      for (const row of rows) row.destroy()
-      title.destroy()
-      renderer.footerHeight = previousFooterHeight
-      resolve(value)
+      handle.close(value)
+      resolve(cancelled ? undefined : value)
     }
-    const onKeyPress = (key: KeyEvent) => {
-      if (key.name === "up") {
-        selected = Math.max(0, selected - 1)
-        render()
-      } else if (key.name === "down") {
-        selected = Math.min(items.length - 1, selected + 1)
-        render()
-      } else if (key.name === "return") finish(items[selected]?.value)
-      else if (key.name === "escape") finish(undefined)
-    }
-    const onAbort = () => finish(undefined)
-    renderer.keyInput.on("keypress", onKeyPress)
-    if (options.signal?.aborted) finish(undefined)
-    else options.signal?.addEventListener("abort", onAbort, { once: true })
+    handle.setInput({
+      keypress: (key) => {
+        if (key.name === "up") {
+          selected = Math.max(0, selected - 1)
+          render()
+        } else if (key.name === "down") {
+          selected = Math.min(items.length - 1, selected + 1)
+          render()
+        } else if (key.name === "return") finish(items[selected]?.value)
+        else if (key.name === "escape") finish(undefined)
+      },
+    })
+    render()
   })
 }

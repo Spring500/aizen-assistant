@@ -22,6 +22,7 @@ import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
 
 import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
 import { selectMultiple } from "../../packages/tui-kit/multi-select.ts"
+import { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
 import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { createAizenRenderer, destroyRenderer } from "../../packages/tui-kit/renderer.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
@@ -77,6 +78,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     })
   const view = createChatView(renderer)
   const interactionController = new AbortController()
+  const overlays = new OverlayManager(renderer)
   let exiting = false
   let authProviderName: string | undefined
   let interactionDepth = 0
@@ -89,8 +91,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     if (status === "authenticating") core.dispatch({ type: "cancel_auth" }).catch(() => {})
     if (status === "running" || status === "aborting") core.dispatch({ type: "abort" }).catch(() => {})
   }
+  overlays.setCtrlCHandler(quit)
   const showError = async (title: string, error: string) => {
-    await selectItem(renderer, `error-${crypto.randomUUID()}`, [{ name: "返回", description: error, value: true }], {
+    if (exiting) return
+    await selectItem(overlays, `error-${crypto.randomUUID()}`, [{ name: "返回", description: error, value: true }], {
       title,
       signal: interactionController.signal,
     })
@@ -99,20 +103,24 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const runAction = (operation: () => Promise<unknown>) => actions.run(operation)
   const dispatchWithError = (command: Parameters<typeof core.dispatch>[0], title: string) =>
     dispatchOrPresent(core, command, title, showError)
-  const editor = createChatEditor(renderer, {
-    onSubmit: (value) => {
-      if (value === "/quit") quit()
-      else if (value === "/new") runAction(createSession)
-      else if (value === "/sessions") runAction(chooseSession)
-      else if (value === "/views") runAction(manageViews)
-      else if (value === "/view" || value === "/model") runAction(() => openSessionSettings("existing"))
-      else if (value === "/fold") runAction(chooseFold)
-      else if (value === "/models") runAction(manageModels)
-      else runAction(() => dispatchWithError({ type: "send_prompt", text: value }, "发送消息失败"))
+  const editor = createChatEditor(
+    renderer,
+    {
+      onSubmit: (value) => {
+        if (value === "/quit") quit()
+        else if (value === "/new") runAction(createSession)
+        else if (value === "/sessions") runAction(chooseSession)
+        else if (value === "/views") runAction(manageViews)
+        else if (value === "/view" || value === "/model") runAction(() => openSessionSettings("existing"))
+        else if (value === "/fold") runAction(chooseFold)
+        else if (value === "/models") runAction(manageModels)
+        else runAction(() => dispatchWithError({ type: "send_prompt", text: value }, "发送消息失败"))
+      },
+      onAbort: () => void core.dispatch({ type: "abort" }),
+      onQuit: quit,
     },
-    onAbort: () => void core.dispatch({ type: "abort" }),
-    onQuit: quit,
-  })
+    overlays,
+  )
   editor.setInputVisible(false)
 
   const updateStatusBar = () => {
@@ -148,7 +156,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     } else if (event.promptType === "select") {
       editor.input.blur()
       void selectItem(
-        renderer,
+        overlays,
         `auth-${event.promptId}`,
         (event.options ?? []).map((option) => ({
           name: authOptionLabels[option.label] ?? option.label,
@@ -174,7 +182,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         event.promptType === "secret"
           ? `${authProviderName ?? "服务商"} 密钥或令牌：`
           : `${authPromptLabels[event.message] ?? event.message}：`
-      void promptLine(renderer, `auth-${event.promptId}`, label, {
+      void promptLine(overlays, `auth-${event.promptId}`, label, {
         mask: event.promptType === "secret",
         signal: interactionController.signal,
         onCancel: () => void core.dispatch({ type: "cancel_auth" }),
@@ -190,7 +198,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   })
 
   async function createView(): Promise<void> {
-    const name = await promptLine(renderer, "view-name", "视图名称：", { signal: interactionController.signal })
+    const name = await promptLine(overlays, "view-name", "视图名称：", { signal: interactionController.signal })
     if (!name) return
     const result = await dispatchWithError({ type: "create_view", name }, "创建视图失败")
     if (!result.ok) return
@@ -209,7 +217,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         const listed = await dispatchWithError({ type: "list_views" }, "读取视图失败")
         if (!listed.ok) return undefined
         const selected = await selectItem<string | null>(
-          renderer,
+          overlays,
           "view-selector",
           [
             ...viewSelectionItems(core.getSnapshot().views),
@@ -241,7 +249,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         const listed = await dispatchWithError({ type: "list_views" }, "读取视图失败")
         if (!listed.ok) return
         const selected = await selectItem(
-          renderer,
+          overlays,
           "views-manager",
           [
             { name: "刷新", description: "重新读取 views.json 和目录状态", value: "__refresh__" },
@@ -271,7 +279,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     const viewItem = core.getSnapshot().views.find((item) => item.id === viewId)
     if (!viewItem) return
     const action = await selectItem(
-      renderer,
+      overlays,
       "view-action",
       [
         { name: "编辑名称", description: viewItem.name, value: "name" },
@@ -285,13 +293,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       { title: `管理视图 · ${viewItem.name}`, signal: interactionController.signal },
     )
     if (action === "name") {
-      const name = await promptLine(renderer, "view-edit-name", "新名称：", {
+      const name = await promptLine(overlays, "view-edit-name", "新名称：", {
         initialValue: viewItem.name,
         signal: interactionController.signal,
       })
       if (name) await dispatchWithError({ type: "update_view", viewId, name }, "更新视图失败")
     } else if (action === "path") {
-      const path = await promptLine(renderer, "view-edit-path", "新路径：", {
+      const path = await promptLine(overlays, "view-edit-path", "新路径：", {
         initialValue: viewItem.path,
         signal: interactionController.signal,
       })
@@ -306,7 +314,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       await dispatchWithError({ type: "remove_view", viewId }, "移除视图失败")
     } else if (action === "delete") {
       const confirmed = await selectItem(
-        renderer,
+        overlays,
         "view-delete-confirm",
         [
           { name: "确认删除", description: viewItem.directory, value: true },
@@ -325,7 +333,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         const selected = await selectItem<
           { type: "toggle"; id: string } | { type: "collapse_tools" } | { type: "expand_all" }
         >(
-          renderer,
+          overlays,
           "fold-selector",
           [
             {
@@ -370,7 +378,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           const selectedProvider = providerId
             ? providers.find((provider) => provider.id === providerId)
             : await selectItem(
-                renderer,
+                overlays,
                 "provider-selector",
                 unconfiguredAuthProviders(providers).map((item) => ({
                   name: item.name,
@@ -413,7 +421,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         const provider =
           preferred ??
           (await selectItem<(typeof providers)[number] | "__authenticate__" | "__manage__">(
-            renderer,
+            overlays,
             "model-provider-selector",
             [
               ...providers.map((item) => ({
@@ -446,7 +454,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
         if (!provider.configured) {
           const action = await selectItem<"authenticate" | "manage">(
-            renderer,
+            overlays,
             "unconfigured-provider",
             [
               { name: "立即认证", description: "认证成功后选择模型", value: "authenticate" },
@@ -461,7 +469,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
         if (provider.models.length === 0) {
           const action = await selectItem<"manage" | "authenticate">(
-            renderer,
+            overlays,
             "empty-provider",
             [
               { name: "新增或管理模型", description: "当前没有可用模型", value: "manage" },
@@ -475,7 +483,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         }
 
         const selected = await selectItem<(typeof provider.models)[number] | "__manage__" | "__authenticate__">(
-          renderer,
+          overlays,
           "model-selector",
           [
             ...provider.models.map((model) => ({
@@ -506,7 +514,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   }
 
   async function ask(label: string, initialValue = "") {
-    return promptLine(renderer, `model-field-${crypto.randomUUID()}`, `${label}：`, {
+    return promptLine(overlays, `model-field-${crypto.randomUUID()}`, `${label}：`, {
       initialValue,
       signal: interactionController.signal,
     })
@@ -528,7 +536,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     const snapshot = core.getSnapshot().modelConfig
     if (!snapshot) return "cancel"
     const value = await selectItem<ConfigurableApi | "inherit">(
-      renderer,
+      overlays,
       `api-selector-${crypto.randomUUID()}`,
       [
         ...(inherited ? [{ name: "继承供应商", description: "", value: "inherit" as const }] : []),
@@ -557,7 +565,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       : { name: "", baseUrl: "https://", authHeader: true }
     while (!exiting) {
       const action = await selectItem<"id" | "name" | "baseUrl" | "api" | "authHeader" | "save">(
-        renderer,
+        overlays,
         "provider-editor",
         [
           {
@@ -627,7 +635,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       const action = await selectItem<
         "id" | "name" | "api" | "input" | "output" | "reasoning" | "context" | "max" | "cost" | "save"
       >(
-        renderer,
+        overlays,
         "model-editor",
         [
           {
@@ -663,7 +671,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         }
       } else if (action === "input") {
         const selected = await selectMultiple(
-          renderer,
+          overlays,
           `model-modalities-${crypto.randomUUID()}`,
           "输入模态",
           config.inputModalities.map((item) => ({
@@ -679,7 +687,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           draft.input = selected.filter((item): item is "text" | "image" => item === "text" || item === "image")
       } else if (action === "output") {
         await selectMultiple(
-          renderer,
+          overlays,
           `model-output-modalities-${crypto.randomUUID()}`,
           "输出模态（当前仅用于展示扩展边界）",
           config.outputModalities.map((item) => ({
@@ -705,7 +713,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   async function confirmAction(title: string, description: string): Promise<boolean> {
     return (
       (await selectItem(
-        renderer,
+        overlays,
         `confirm-${crypto.randomUUID()}`,
         [
           { name: "确认", description, value: true },
@@ -724,7 +732,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       const currentModel = core.getSnapshot().currentModel
       const protectsProvider = currentModel?.providerId === current.id
       const action = await selectItem<"edit" | "add" | "delete" | "done" | ModelConfigEntry>(
-        renderer,
+        overlays,
         "provider-manager",
         [
           {
@@ -783,7 +791,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     const current = core.getSnapshot().currentModel
     const protectedModel = current?.providerId === provider.id && current.modelId === model.id
     const action = await selectItem<"edit" | "copy" | "delete">(
-      renderer,
+      overlays,
       "model-manager",
       [
         {
@@ -846,7 +854,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         const selected =
           directProvider ??
           (await selectItem<ProviderConfigEntry | "add">(
-            renderer,
+            overlays,
             "model-config-providers",
             [
               ...config.providers.map((provider) => ({
@@ -902,7 +910,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     while (!exiting) {
       if (!(await dispatchWithError({ type: "list_views" }, "读取视图失败")).ok) return false
       const action = await selectRichItem(
-        renderer,
+        overlays,
         "session-settings",
         sessionSettingsItems(draft, core.getSnapshot().views, mode),
         {
@@ -958,7 +966,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       const sessions = core.getSnapshot().sessions
       if (sessions.length === 0) return createSession()
       const selected = await selectItem(
-        renderer,
+        overlays,
         "session-selector",
         [
           {
@@ -991,11 +999,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   } finally {
     unsubscribe()
-    editor.destroy()
     try {
       await actions.flush()
       await core.dispose()
     } finally {
+      overlays.dispose()
+      editor.destroy()
+      view.destroy()
       if (!options.testing) destroyRenderer(renderer)
     }
   }
