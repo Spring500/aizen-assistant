@@ -274,7 +274,9 @@ test("历史没有变化时不重复写入 scrollback", async () => {
     const firstOutput = setup.externalOutput.takeText().replace(/\s+/g, "")
     expect(firstOutput).toContain("▶你旧轮次用户消息")
     expect(firstOutput).toContain("▶助手旧轮次助手正文")
-    expect(firstOutput).toContain("声明目的：验证全部测试是否通过")
+    expect(firstOutput).toContain("[bash]验证全部测试是否通过")
+    expect(firstOutput).toContain("›buntest")
+    expect(firstOutput).toContain("✓allpassed")
     expect(firstOutput).toContain("1m2s")
     expect(firstOutput).toContain("allpassed")
 

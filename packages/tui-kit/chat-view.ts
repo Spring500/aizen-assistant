@@ -1,4 +1,14 @@
-import { BoxRenderable, type CliRenderer, CliRenderEvents, type RenderContext, TextRenderable } from "@opentui/core"
+import {
+  BoxRenderable,
+  type CliRenderer,
+  CliRenderEvents,
+  createTextAttributes,
+  parseColor,
+  type RenderContext,
+  StyledText,
+  type TextChunk,
+  TextRenderable,
+} from "@opentui/core"
 import type { FoldPreferences } from "../core/app-preferences-store.ts"
 import type { Timing, ToolCallPart, ToolMessage } from "../core/session-format.ts"
 import type { CoreSnapshot } from "../core/types.ts"
@@ -16,8 +26,13 @@ export type ChatView = {
 
 type ToolDisplay = {
   id: string
-  call: string
-  result: string
+  name: string
+  intent?: string
+  input: string
+  output: string
+  timeoutSeconds?: number
+  isError: boolean
+  waiting: boolean
   timing?: Timing
 }
 
@@ -33,7 +48,7 @@ const blockColors = {
   user: "#66551a",
   assistant: "#1f2937",
   thinking: "#252936",
-  tool: "#34373d",
+  tool: "#292c31",
   toolGroup: "#292c31",
 } as const
 
@@ -61,28 +76,29 @@ function declaredIntentText(argumentsValue: unknown): string {
   return typeof intent === "string" && intent.trim() ? intent.trim() : ""
 }
 
-function toolCallText(name: string, argumentsValue: unknown): string {
+function toolInputText(name: string, argumentsValue: unknown): string {
   const argumentsObject = objectValue(argumentsValue)
-  if (name === "bash" && typeof argumentsObject?.command === "string") {
-    const timeout = typeof argumentsObject.timeout === "number" ? `（超时 ${argumentsObject.timeout} 秒）` : ""
-    return `[bash] ${oneLine(argumentsObject.command)}${timeout}`
-  }
+  if (name === "bash" && typeof argumentsObject?.command === "string") return oneLine(argumentsObject.command)
   if (name === "read" && typeof argumentsObject?.path === "string") {
     const options = [
       typeof argumentsObject.offset === "number" ? `第 ${argumentsObject.offset} 行起` : "",
       typeof argumentsObject.limit === "number" ? `最多 ${argumentsObject.limit} 行` : "",
     ].filter(Boolean)
-    return `[read] ${oneLine(argumentsObject.path)}${options.length > 0 ? `（${options.join("，")}）` : ""}`
+    return `${oneLine(argumentsObject.path)}${options.length > 0 ? ` · ${options.join(" · ")}` : ""}`
   }
   if (name === "edit" && typeof argumentsObject?.path === "string") {
     const editCount = Array.isArray(argumentsObject.edits) ? argumentsObject.edits.length : 0
-    return `[edit] ${oneLine(argumentsObject.path)}（${editCount} 处修改）`
+    return `${oneLine(argumentsObject.path)} · ${editCount} 处修改`
   }
   if (name === "write" && typeof argumentsObject?.path === "string") {
     const contentLength = typeof argumentsObject.content === "string" ? argumentsObject.content.length : 0
-    return `[write] ${oneLine(argumentsObject.path)}（写入 ${contentLength} 字符）`
+    return `${oneLine(argumentsObject.path)} · 写入 ${contentLength} 字符`
   }
-  return `[${name}] ${jsonPreview(argumentsValue)}`
+  return jsonPreview(argumentsValue)
+}
+
+function toolCallText(name: string, argumentsValue: unknown): string {
+  return `[${name}] ${toolInputText(name, argumentsValue)}`
 }
 
 /** 将毫秒时长格式化为紧凑的天、时、分、秒文本。 */
@@ -130,15 +146,20 @@ function toolMessageText(message: ToolMessage): string {
     .filter((part) => part.kind === "text")
     .map((part) => part.text)
     .join("\n")
-  return `[工具结果:${message.name}] ${outputPreview(text)}`
+  return outputPreview(text)
 }
 
 function toolDisplay(call: ToolCallPart, result: ToolMessage | undefined): ToolDisplay {
-  const callText = toolCallText(call.name, call.arguments)
+  const argumentsObject = objectValue(call.arguments)
   return {
     id: call.callId,
-    call: call.declaredIntent ? `${callText}\n声明目的：${call.declaredIntent}` : callText,
-    result: result ? toolMessageText(result) : `[等待结果:${call.name}]`,
+    name: call.name,
+    ...(call.declaredIntent ? { intent: call.declaredIntent } : {}),
+    input: toolInputText(call.name, call.arguments),
+    output: result ? toolMessageText(result) : "等待结果",
+    ...(typeof argumentsObject?.timeout === "number" ? { timeoutSeconds: argumentsObject.timeout } : {}),
+    isError: result?.isError ?? false,
+    waiting: result === undefined,
     ...(result?.timing ? { timing: result.timing } : {}),
   }
 }
@@ -211,8 +232,11 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
       } else if (!calls.has(entry.message.callId)) {
         const tool: ToolDisplay = {
           id: entry.message.callId,
-          call: `[未知工具调用:${entry.message.name}]`,
-          result: toolMessageText(entry.message),
+          name: entry.message.name,
+          input: "未知调用参数",
+          output: toolMessageText(entry.message),
+          isError: entry.message.isError,
+          waiting: false,
           ...(entry.message.timing ? { timing: entry.message.timing } : {}),
         }
         blocks.push({
@@ -250,7 +274,7 @@ function makeBox(context: RenderContext, id: string, color: string, marginBottom
   })
 }
 
-function makeText(context: RenderContext, id: string, content: string, color: string): TextRenderable {
+function makeText(context: RenderContext, id: string, content: string | StyledText, color: string): TextRenderable {
   return new TextRenderable(context, {
     id,
     width: color === blockColors.tool ? "100%" : "auto",
@@ -260,6 +284,41 @@ function makeText(context: RenderContext, id: string, content: string, color: st
     bg: color,
     content,
   })
+}
+
+function styledToolText(tool: ToolDisplay, detailsExpanded: boolean): StyledText {
+  const chunks: TextChunk[] = []
+  const push = (text: string, color: string, attributes: { bold?: boolean; italic?: boolean; dim?: boolean } = {}) => {
+    chunks.push({
+      __isChunk: true,
+      text,
+      fg: parseColor(color),
+      attributes: createTextAttributes(attributes),
+    })
+  }
+  push(`[${tool.name}]`, systemColors.secondary, { bold: true })
+  push(tool.intent ? `  ${tool.intent}` : "  未提供调用目的", systemColors.header, { bold: !!tool.intent })
+  const metadata = [
+    tool.timeoutSeconds === undefined ? "" : `限时 ${formatDurationText(tool.timeoutSeconds * 1000)}`,
+    tool.timing ? timingText(tool.timing) : "",
+  ].filter(Boolean)
+  if (metadata.length > 0) push(`  ·  ${metadata.join(" · ")}`, systemColors.secondary, { dim: true })
+  if (detailsExpanded) {
+    push("\n  › ", systemColors.secondary, { dim: true })
+    push(tool.input, systemColors.secondary, { dim: true, italic: true })
+    push(
+      `\n  ${tool.waiting ? "…" : tool.isError ? "×" : "✓"} `,
+      tool.isError ? systemColors.statusError : systemColors.secondary,
+      {
+        dim: !tool.isError,
+      },
+    )
+    push(tool.output, tool.isError ? systemColors.statusError : systemColors.secondary, {
+      dim: !tool.isError,
+      italic: true,
+    })
+  }
+  return new StyledText(chunks)
 }
 
 function expanded(limit: number, turnAge: number): boolean {
@@ -302,7 +361,7 @@ function createHistoryBlock(
   const root = makeBox(context, rootId, blockColors.toolGroup)
   const groupExpanded = expanded(fold.toolGroupTurns, turnAge)
   const detailsExpanded = groupExpanded && expanded(fold.toolDetailTurns, turnAge)
-  const names = block.tools.map((tool) => tool.call.match(/^\[([^\]]+)]/)?.[1] ?? "工具").join("、")
+  const names = block.tools.map((tool) => tool.name).join(" / ")
   const meta = timingText(block.timing)
   root.add(
     makeText(
@@ -328,13 +387,9 @@ function createHistoryBlock(
         blockColors.tool,
         toolIndex === block.tools.length - 1 ? 0 : 1,
       )
-      const metaText = timingText(tool.timing)
-      const callLines = tool.call.split("\n")
-      const visibleCall = callLines.slice(0, callLines[1]?.startsWith("声明目的：") ? 2 : 1).join("\n")
-      const text = detailsExpanded
-        ? `${tool.call}${metaText ? `  ${metaText}` : ""}\n${tool.result}`
-        : `${visibleCall}${metaText ? `  ${metaText}` : ""}`
-      toolRoot.add(makeText(context, `${rootId}-tool-${toolIndex}-text`, text, blockColors.tool))
+      toolRoot.add(
+        makeText(context, `${rootId}-tool-${toolIndex}-text`, styledToolText(tool, detailsExpanded), blockColors.tool),
+      )
       content.add(toolRoot)
     }
     root.add(content)
