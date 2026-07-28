@@ -195,9 +195,9 @@ export class AizenCore implements CorePort {
   async #createSession(model: ModelReference, requestedViewId?: string): Promise<void> {
     const sessionId = crypto.randomUUID()
     const at = new Date().toISOString()
-    await this.#store.create({ sessionId, cwd: this.#cwd, createdAt: at })
     const viewId = requestedViewId ?? null
     const view = await this.#resolveView(viewId)
+    await this.#store.create({ sessionId, cwd: this.#cwd, createdAt: at })
     const actualModel = await this.#pi.create({ cwd: this.#cwd, model, view })
     const records: SessionRecord[] = [
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(actualModel) },
