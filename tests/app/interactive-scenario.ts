@@ -78,6 +78,15 @@ async function press(setup: Awaited<ReturnType<typeof createTestRenderer>>, sequ
   await setup.renderOnce()
 }
 
+async function waitForCondition(condition: () => boolean, description: string, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (condition()) return
+    await Bun.sleep(10)
+  }
+  throw new Error(`等待状态超时：${description}`)
+}
+
 async function waitForText(
   setup: Awaited<ReturnType<typeof createTestRenderer>>,
   expected: string,
@@ -157,9 +166,8 @@ async function noViews(): Promise<void> {
     await waitForText(setup, "会话设置 · 新建会话")
     await pressDown(setup, 4)
     await pressEnter(setup)
-    await Bun.sleep(30)
+    await waitForCondition(() => !!core.getSnapshot().currentSessionId, "创建会话")
     await setup.renderOnce()
-    if (!core.getSnapshot().currentSessionId) throw new Error("未创建会话")
     if (core.getSnapshot().currentViewId !== null) throw new Error("无视图没有生效")
     assertExcludes(setup.captureCharFrame(), "创建会话失败")
   } finally {
