@@ -283,10 +283,14 @@ export class PiSessionRuntime implements PiPort {
     return this.#requireSession().abort()
   }
 
-  async listModels(): Promise<ModelOption[]> {
+  async reloadModelConfig(): Promise<void> {
     await this.#modelRuntime.reloadConfig()
     const configError = this.#modelRuntime.getError()
     if (configError) throw new Error(`models.json 配置错误：${configError}`)
+  }
+
+  async listModels(): Promise<ModelOption[]> {
+    await this.reloadModelConfig()
     const available = new Set(
       (await this.#modelRuntime.getAvailable()).map((model) => `${model.provider}\0${model.id}`),
     )

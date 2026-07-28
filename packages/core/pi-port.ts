@@ -77,6 +77,7 @@ export interface PiPort {
   prompt(input: PiPromptInput): Promise<void>
   abort(): Promise<void>
   listModels(): Promise<ModelOption[]>
+  reloadModelConfig(): Promise<void>
   setModel(model: ModelReference): Promise<ModelRuntimeInfo>
 
   listAuthProviders(): Promise<AuthProviderOption[]>
