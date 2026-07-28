@@ -365,6 +365,10 @@ export class PiSessionRuntime implements PiPort {
     return this.#requireSession().agent.state.messages
   }
 
+  inspectSystemPrompt(): string {
+    return this.#requireSession().systemPrompt
+  }
+
   inspectSessionFile(): string | undefined {
     return this.#requireSession().sessionFile
   }
