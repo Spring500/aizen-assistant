@@ -1,4 +1,14 @@
-import { type CliRenderer, CliRenderEvents, type KeyEvent, TextareaRenderable, TextRenderable } from "@opentui/core"
+import {
+  type CliRenderer,
+  CliRenderEvents,
+  createTextAttributes,
+  type KeyEvent,
+  parseColor,
+  StyledText,
+  type TextChunk,
+  TextareaRenderable,
+  TextRenderable,
+} from "@opentui/core"
 import { overlayManager, type OverlayManager } from "./overlay-manager.ts"
 import { shortcutText } from "./status-bar.ts"
 import { systemColors } from "./theme.ts"
@@ -13,7 +23,7 @@ export type ChatEditor = {
   input: TextareaRenderable
   status: TextRenderable
   shortcuts: TextRenderable
-  setTitle(title: string): void
+  setSessionTitle(session: { name: string; sessionId: string } | undefined): void
   setStatus(content: string): void
   setShortcuts(content: string): void
   setBusy(busy: boolean): void
@@ -56,12 +66,33 @@ function inputVisualLines(value: string, width: number): number {
   return value.split("\n").reduce((total, line) => total + Math.max(1, Math.ceil(Bun.stringWidth(line) / safeWidth)), 0)
 }
 
-function titledSeparator(width: number, title: string): string {
+function titledSeparator(width: number, session: { name: string; sessionId: string } | undefined): StyledText {
   const safeWidth = Math.max(1, width)
   const suffix = "──"
   const availableTitleWidth = Math.max(0, safeWidth - Bun.stringWidth(suffix))
-  const label = `${truncateToCells(title, availableTitleWidth)}${suffix}`
-  return `${"─".repeat(Math.max(0, safeWidth - Bun.stringWidth(label)))}${label}`
+  const id = truncateToCells(session?.sessionId ?? "会话", availableTitleWidth)
+  const nameSpace = Math.max(0, availableTitleWidth - Bun.stringWidth(id) - 2)
+  const name = session?.name ? truncateToCells(session.name, nameSpace) : ""
+  const separator = "─".repeat(
+    Math.max(0, safeWidth - Bun.stringWidth(suffix) - Bun.stringWidth(id) - (name ? Bun.stringWidth(name) + 2 : 0)),
+  )
+  const chunks: TextChunk[] = [{ __isChunk: true, text: separator, fg: parseColor(systemColors.shortcuts) }]
+  if (name) {
+    chunks.push({
+      __isChunk: true,
+      text: `${name}  `,
+      fg: parseColor(systemColors.header),
+      attributes: createTextAttributes({ bold: true }),
+    })
+  }
+  chunks.push({
+    __isChunk: true,
+    text: id,
+    fg: parseColor(systemColors.shortcuts),
+    attributes: createTextAttributes({ italic: true, dim: true }),
+  })
+  chunks.push({ __isChunk: true, text: suffix, fg: parseColor(systemColors.shortcuts) })
+  return new StyledText(chunks)
 }
 
 export function createChatEditor(
@@ -71,7 +102,7 @@ export function createChatEditor(
 ): ChatEditor {
   let busy = false
   let inputVisible = true
-  let title = "会话"
+  let sessionTitle: { name: string; sessionId: string } | undefined
   let destroyed = false
 
   const topSeparator = new TextRenderable(renderer, {
@@ -92,7 +123,7 @@ export function createChatEditor(
       Math.min(maxInputHeight, Math.max(measuredLines, input.virtualLineCount || input.lineCount || 1)),
     )
     input.height = nextHeight
-    topSeparator.content = titledSeparator(renderer.terminalWidth, title)
+    topSeparator.content = titledSeparator(renderer.terminalWidth, sessionTitle)
     bottomSeparator.content = "─".repeat(Math.max(1, renderer.terminalWidth))
     manager.setBaseFooterHeight(chatViewHeight + (inputVisible ? nextHeight + 2 : 0) + 2)
   }
@@ -162,8 +193,8 @@ export function createChatEditor(
     input,
     status,
     shortcuts,
-    setTitle(value) {
-      title = value || "会话"
+    setSessionTitle(value) {
+      sessionTitle = value
       updateLayout()
     },
     setStatus(content) {

@@ -239,6 +239,27 @@ describe("核心编排", () => {
     await core.dispose()
   })
 
+  test("新建会话使用助记词 ID，且重命名允许清空并持久化", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const core = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
+    const created = await core.dispatch({ type: "create_session", model, viewId: null })
+    expect(created.ok).toBe(true)
+    const sessionId = core.getSnapshot().currentSessionId
+    expect(sessionId).toMatch(/^[a-z]+-[a-z]+-[a-z]+$/)
+    if (!sessionId) throw new Error("新建会话后缺少会话 ID")
+
+    expect((await core.dispatch({ type: "rename_session", sessionId, name: "  需求讨论  " })).ok).toBe(true)
+    expect(core.getSnapshot().currentSessionName).toBe("需求讨论")
+    expect((await store.list())[0]?.name).toBe("需求讨论")
+
+    expect((await core.dispatch({ type: "rename_session", sessionId, name: "   " })).ok).toBe(true)
+    expect(core.getSnapshot().currentSessionName).toBe("")
+    expect((await store.list())[0]?.name).toBe("")
+    await core.dispose()
+  })
+
   test("运行时创建失败时不留下空会话", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)

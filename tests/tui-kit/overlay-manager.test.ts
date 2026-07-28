@@ -52,7 +52,7 @@ test("同一次 Enter 不会穿透到新打开的子层", async () => {
   const setup = await createTestRenderer({ width: 50, height: 15 })
   const overlays = new OverlayManager(setup.renderer)
   try {
-    let child: Promise<string> | undefined
+    let child: Promise<string | undefined> | undefined
     const parent = overlays.open({
       id: "opener",
       title: "父层",

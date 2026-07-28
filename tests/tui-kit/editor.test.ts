@@ -104,14 +104,14 @@ test("编辑器高度随视觉行数变化并显示带标题分割线", async ()
       onAbort: () => {},
       onQuit: () => {},
     })
-    editor.setTitle("会话")
+    editor.setSessionTitle({ name: "修复登录重试", sessionId: "otter-builds-bridge" })
     editor.input.setText("第一行\n第二行\n第三行")
     await Bun.sleep(1)
     await setup.renderOnce()
     expect(editor.input.height).toBe(3)
     expect(setup.renderer.footerHeight).toBe(10)
     const frame = setup.captureCharFrame()
-    expect(frame).toContain("会话──")
+    expect(frame).toContain("修复登录重试  otter-builds-bridge──")
     expect(frame).toContain("第一行")
     expect(frame).toContain("第三行")
 
@@ -119,6 +119,25 @@ test("编辑器高度随视觉行数变化并显示带标题分割线", async ()
     for (let attempt = 0; attempt < 20 && editor.input.height !== 8; attempt += 1) await Bun.sleep(5)
     expect(editor.input.height).toBe(8)
     expect(setup.renderer.footerHeight).toBe(15)
+    editor.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("没有会话名时标题只显示会话 ID", async () => {
+  const setup = await createTestRenderer({ width: 40, height: 12 })
+  try {
+    const editor = createChatEditor(setup.renderer, {
+      onSubmit: () => {},
+      onAbort: () => {},
+      onQuit: () => {},
+    })
+    editor.setSessionTitle({ name: "", sessionId: "owl-carries-brook" })
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("owl-carries-brook──")
+    expect(frame).not.toContain("会话──")
     editor.destroy()
   } finally {
     setup.renderer.destroy()
