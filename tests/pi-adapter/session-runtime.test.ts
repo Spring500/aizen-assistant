@@ -63,7 +63,7 @@ describe("pi 内存会话", () => {
       },
     ]
 
-    await runtime.restore({ cwd: directory, model, viewId: null, records })
+    await runtime.restore({ cwd: directory, model, view: { viewId: "test", directory }, records })
     const messages = runtime.inspectMessages()
     expect(JSON.stringify(messages)).not.toContain("不要恢复")
     expect(JSON.stringify(messages)).toContain("需要恢复")
@@ -120,7 +120,7 @@ describe("pi 内存会话", () => {
       },
     ]
 
-    await runtime.restore({ cwd: directory, model, viewId: null, records })
+    await runtime.restore({ cwd: directory, model, view: { viewId: "test", directory }, records })
     const messages = JSON.stringify(runtime.inspectMessages())
     expect(messages).toContain("已完成输入")
     expect(messages).not.toContain("意外中断输入")
@@ -153,7 +153,7 @@ describe("pi 内存会话", () => {
     })
     try {
       runtime.setModelBaseUrl(model.providerId, model.modelId, `http://localhost:${server.port}`)
-      await runtime.create({ cwd: directory, model, viewId: null })
+      await runtime.create({ cwd: directory, model, view: { viewId: "test", directory } })
       const messageEvents: Array<{ runtimeRef: string }> = []
       runtime.subscribe((event) => {
         if (event.type === "message") messageEvents.push(event)

@@ -15,6 +15,8 @@ class FakePi implements PiPort {
   prompts: unknown[] = []
   create = async () => model
   restore = async () => model
+  refreshView = async () => {}
+  switchView = async () => model
   abort = async () => {}
   listModels = async () => [{ ...model, name: "测试模型", available: true }]
   setModel = async () => model

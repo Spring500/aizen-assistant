@@ -10,6 +10,7 @@ function snapshot(overrides: Partial<CoreSnapshot> = {}): CoreSnapshot {
     status: "idle",
     sessions: [],
     models: [],
+    views: [],
     authProviders: [],
     transcript: [],
     activeTools: [],

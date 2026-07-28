@@ -1,5 +1,10 @@
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
 
+export type ViewRuntimeInput = {
+  viewId: string
+  directory: string
+}
+
 export type ModelRuntimeInfo = ModelReference & {
   contextWindow?: number
 }
@@ -50,7 +55,7 @@ export type PiPortEvent =
 export type PiCreateInput = {
   cwd: string
   model: ModelReference
-  viewId: ViewId
+  view: ViewRuntimeInput
 }
 
 export type PiRestoreInput = PiCreateInput & {
@@ -67,6 +72,8 @@ export type PiPromptInput = {
 export interface PiPort {
   create(input: PiCreateInput): Promise<ModelRuntimeInfo>
   restore(input: PiRestoreInput): Promise<ModelRuntimeInfo>
+  refreshView(view: ViewRuntimeInput): Promise<void>
+  switchView(view: ViewRuntimeInput, records: SessionRecord[]): Promise<ModelRuntimeInfo>
   prompt(input: PiPromptInput): Promise<void>
   abort(): Promise<void>
   listModels(): Promise<ModelOption[]>

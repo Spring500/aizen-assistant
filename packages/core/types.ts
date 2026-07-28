@@ -1,3 +1,4 @@
+import type { ViewOption } from "./view-store.ts"
 import type { AuthPromptOption, AuthProviderOption, ModelOption, ModelRuntimeInfo } from "./pi-port.ts"
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
 import type { SessionSummary } from "./session-store.ts"
@@ -37,6 +38,7 @@ export type CoreSnapshot = {
   currentModel?: ModelRuntimeInfo
   currentViewId?: ViewId
   models: ModelOption[]
+  views: ViewOption[]
   authProviders: AuthProviderOption[]
   transcript: TranscriptEntry[]
   activeTools: ActiveTool[]
@@ -49,12 +51,16 @@ export type CoreSnapshot = {
 
 export type CoreCommand =
   | { type: "list_sessions" }
-  | { type: "create_session"; model: ModelReference }
+  | { type: "list_views" }
+  | { type: "create_session"; model: ModelReference; viewId?: string }
   | { type: "open_session"; sessionId: string }
   | { type: "send_prompt"; text: string }
   | { type: "abort" }
   | { type: "list_models" }
   | { type: "set_model"; model: ModelReference }
+  | { type: "set_view"; viewId: string }
+  | { type: "create_view"; id: string; name: string }
+  | { type: "remove_view"; viewId: string }
   | { type: "list_auth_providers" }
   | { type: "login_api_key"; providerId: string }
   | { type: "answer_auth_prompt"; promptId: string; value: string }
