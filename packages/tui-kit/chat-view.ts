@@ -361,38 +361,34 @@ function createHistoryBlock(
   const root = makeBox(context, rootId, blockColors.toolGroup)
   const groupExpanded = expanded(fold.toolGroupTurns, turnAge)
   const detailsExpanded = groupExpanded && expanded(fold.toolDetailTurns, turnAge)
-  const names = block.tools.map((tool) => tool.name).join(" / ")
-  const meta = timingText(block.timing)
-  root.add(
-    makeText(
-      context,
-      `${rootId}-header`,
-      `${groupExpanded ? "▼" : "▶"} ${block.tools.length} 个工具调用：${names}${meta ? `  ${meta}` : ""}`,
-      blockColors.toolGroup,
-    ),
-  )
-  if (groupExpanded) {
-    const content = new BoxRenderable(context, {
-      id: `${rootId}-content`,
+  if (!groupExpanded) {
+    const names = block.tools.map((tool) => tool.name).join(" / ")
+    const meta = timingText(block.timing)
+    root.add(
+      makeText(
+        context,
+        `${rootId}-header`,
+        `▶ ${block.tools.length} 个工具调用：${names}${meta ? `  ${meta}` : ""}`,
+        blockColors.toolGroup,
+      ),
+    )
+    return root
+  }
+
+  for (const [toolIndex, tool] of block.tools.entries()) {
+    const toolRoot = new BoxRenderable(context, {
+      id: `${rootId}-tool-${toolIndex}`,
       width: "100%",
       height: "auto",
       flexDirection: "column",
-      paddingTop: 1,
-      backgroundColor: blockColors.toolGroup,
+      paddingLeft: 1,
+      paddingRight: 1,
+      backgroundColor: blockColors.tool,
     })
-    for (const [toolIndex, tool] of block.tools.entries()) {
-      const toolRoot = makeBox(
-        context,
-        `${rootId}-tool-${toolIndex}`,
-        blockColors.tool,
-        toolIndex === block.tools.length - 1 ? 0 : 1,
-      )
-      toolRoot.add(
-        makeText(context, `${rootId}-tool-${toolIndex}-text`, styledToolText(tool, detailsExpanded), blockColors.tool),
-      )
-      content.add(toolRoot)
-    }
-    root.add(content)
+    toolRoot.add(
+      makeText(context, `${rootId}-tool-${toolIndex}-text`, styledToolText(tool, detailsExpanded), blockColors.tool),
+    )
+    root.add(toolRoot)
   }
   return root
 }
