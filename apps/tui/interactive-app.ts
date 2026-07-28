@@ -1,3 +1,4 @@
+import type { CliRenderer } from "@opentui/core"
 import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import type {
@@ -11,6 +12,7 @@ import type {
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
+import type { CorePort } from "../../packages/core/types.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
@@ -26,7 +28,11 @@ import { selectItem } from "../../packages/tui-kit/selector.ts"
 import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
 import { viewSelectionItems } from "./view-flow.ts"
 
-export type InteractiveAppOptions = { cwd: string; dataDirectory: string }
+export type InteractiveAppOptions = {
+  cwd: string
+  dataDirectory: string
+  testing?: { renderer: CliRenderer; core: CorePort }
+}
 
 const authPromptLabels: Record<string, string> = {
   "Enter AWS profile name": "AWS 配置名称",
@@ -46,19 +52,23 @@ const authOptionLabels: Record<string, string> = {
 }
 
 export async function runInteractiveApp(options: InteractiveAppOptions): Promise<void> {
-  const renderer = await createAizenRenderer()
-  const pi = await PiSessionRuntime.create({
-    authPath: join(options.dataDirectory, "auth.json"),
-    modelsPath: join(options.dataDirectory, "models.json"),
-  })
+  const renderer = options.testing?.renderer ?? (await createAizenRenderer())
+  const pi = options.testing
+    ? undefined
+    : await PiSessionRuntime.create({
+        authPath: join(options.dataDirectory, "auth.json"),
+        modelsPath: join(options.dataDirectory, "models.json"),
+      })
   const store = new SessionStore(join(options.dataDirectory, "sessions", projectDirectoryName(options.cwd)))
-  const core = new AizenCore({
-    cwd: options.cwd,
-    store,
-    pi,
-    modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "models.json")),
-    views: new ViewStore(join(options.dataDirectory, "views.json")),
-  })
+  const core =
+    options.testing?.core ??
+    new AizenCore({
+      cwd: options.cwd,
+      store,
+      pi: pi as PiSessionRuntime,
+      modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "models.json")),
+      views: new ViewStore(join(options.dataDirectory, "views.json")),
+    })
   const view = createChatView(renderer)
   const interactionController = new AbortController()
   let exiting = false
@@ -74,7 +84,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     if (status === "running" || status === "aborting") core.dispatch({ type: "abort" }).catch(() => {})
   }
   const showError = async (title: string, error: string) => {
-    await Bun.sleep(0)
     await selectItem(renderer, `error-${crypto.randomUUID()}`, [{ name: "返回", description: error, value: true }], {
       title,
       signal: interactionController.signal,
@@ -855,7 +864,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       await actions.flush()
       await core.dispose()
     } finally {
-      destroyRenderer(renderer)
+      if (!options.testing) destroyRenderer(renderer)
     }
   }
 }
