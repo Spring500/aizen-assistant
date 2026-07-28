@@ -179,12 +179,19 @@ test("工具调用时也显示当前回复耗时", async () => {
       snapshot({
         status: "running",
         responseMetrics: { startedAt: Date.now(), elapsedSeconds: 9, outputTokens: 0 },
-        activeTools: [{ callId: "c1", name: "bash", arguments: { command: "bun test" } }],
+        activeTools: [
+          {
+            callId: "c1",
+            name: "bash",
+            arguments: { command: "bun test", declaredIntent: "验证测试" },
+          },
+        ],
       }),
     )
     await setup.renderOnce()
     const footer = setup.captureCharFrame()
     expect(footer).toContain("[bash] bun test")
+    expect(footer).toContain("目的：验证测试")
     expect(footer).toContain("耗时 9s")
   } finally {
     setup.renderer.destroy()

@@ -56,6 +56,11 @@ function jsonPreview(value: unknown): string {
   }
 }
 
+function declaredIntentText(argumentsValue: unknown): string {
+  const intent = objectValue(argumentsValue)?.declaredIntent
+  return typeof intent === "string" && intent.trim() ? intent.trim() : ""
+}
+
 function toolCallText(name: string, argumentsValue: unknown): string {
   const argumentsObject = objectValue(argumentsValue)
   if (name === "bash" && typeof argumentsObject?.command === "string") {
@@ -345,7 +350,8 @@ function liveText(snapshot: CoreSnapshot): string {
   const active = snapshot.activeTools.at(-1)
   if (active) {
     const output = active.outputPreview ? outputPreview(active.outputPreview) : "等待输出"
-    return `${toolCallText(active.name, active.arguments)} | ${active.isFinished ? "完成" : "运行中"}：${output}${metricText}`
+    const intent = declaredIntentText(active.arguments)
+    return `${toolCallText(active.name, active.arguments)}${intent ? ` | 目的：${intent}` : ""} | ${active.isFinished ? "完成" : "运行中"}：${output}${metricText}`
   }
   if (snapshot.streamingText) return `[助手流式] ${outputPreview(snapshot.streamingText)}${metricText}`
   if (snapshot.streamingThinking) return `[思考流式] ${outputPreview(snapshot.streamingThinking)}${metricText}`
