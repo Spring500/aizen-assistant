@@ -1,6 +1,8 @@
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 
+import { WordTripletIdGenerator, type MnemonicIdGenerator } from "./mnemonic-id.ts"
+
 export type ViewDefinition = {
   id: string
   name: string
@@ -58,10 +60,12 @@ export function parseViewsValue(value: unknown): ViewsFile {
 export class ViewStore {
   readonly #file: string
   readonly #baseDirectory: string
+  readonly #idGenerator: MnemonicIdGenerator
 
-  constructor(file: string) {
+  constructor(file: string, options: { idGenerator?: MnemonicIdGenerator } = {}) {
     this.#file = file
     this.#baseDirectory = dirname(file)
+    this.#idGenerator = options.idGenerator ?? new WordTripletIdGenerator()
   }
 
   async #read(): Promise<ViewsFile> {
@@ -118,8 +122,15 @@ export class ViewStore {
     return { ...view, directory }
   }
 
-  async create(input: { id: string; name: string }): Promise<ResolvedView> {
-    const parsed = parseViewsValue({ version: 1, views: [{ ...input, path: join("views", input.id) }] }).views[0]
+  async suggestId(): Promise<string> {
+    const file = await this.#read()
+    const existing = new Set(file.views.map((view) => view.id.toLowerCase()))
+    return this.#idGenerator.generate((candidate) => existing.has(candidate.toLowerCase()))
+  }
+
+  async create(input: { id?: string; name: string }): Promise<ResolvedView> {
+    const id = input.id ?? (await this.suggestId())
+    const parsed = parseViewsValue({ version: 1, views: [{ id, name: input.name, path: join("views", id) }] }).views[0]
     if (!parsed) throw new Error("无法创建视图")
     const file = await this.#read()
     if (file.views.some((view) => view.id === parsed.id)) throw new Error(`视图 ID 重复：${parsed.id}`)

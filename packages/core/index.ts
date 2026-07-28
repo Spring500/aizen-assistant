@@ -1,4 +1,5 @@
 export * from "./aizen-core.ts"
+export * from "./mnemonic-id.ts"
 export * from "./paths.ts"
 export * from "./pi-port.ts"
 export * from "./session-format.ts"

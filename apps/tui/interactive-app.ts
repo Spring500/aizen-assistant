@@ -17,6 +17,7 @@ import { ViewStore } from "../../packages/core/view-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
+import { selectRichItem } from "../../packages/tui-kit/rich-selector.ts"
 import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
 
 import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
@@ -27,6 +28,7 @@ import { selectItem } from "../../packages/tui-kit/selector.ts"
 
 import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
+import { sessionSettingsItems, type SessionSettingsDraft } from "./session-settings.ts"
 import { viewSelectionItems } from "./view-flow.ts"
 
 const createViewValue = ":create-view"
@@ -103,20 +105,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       else if (value === "/new") runAction(createSession)
       else if (value === "/sessions") runAction(chooseSession)
       else if (value === "/views") runAction(manageViews)
-      else if (value === "/view")
-        runAction(async () => {
-          const viewId = await chooseView()
-          if (viewId !== undefined && core.getSnapshot().currentSessionId)
-            await dispatchWithError({ type: "set_view", viewId }, "切换视图失败")
-        })
+      else if (value === "/view" || value === "/model") runAction(() => openSessionSettings("existing"))
       else if (value === "/fold") runAction(chooseFold)
       else if (value === "/models") runAction(manageModels)
-      else if (value === "/model")
-        runAction(async () => {
-          const model = await chooseModel()
-          if (model && core.getSnapshot().currentSessionId)
-            await dispatchWithError({ type: "set_model", model }, "切换模型失败")
-        })
       else runAction(() => dispatchWithError({ type: "send_prompt", text: value }, "发送消息失败"))
     },
     onAbort: () => void core.dispatch({ type: "abort" }),
@@ -198,13 +189,17 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   })
 
-  async function createView(): Promise<string | undefined> {
-    const id = await promptLine(renderer, "view-id", "视图 ID：", { signal: interactionController.signal })
-    if (!id) return undefined
+  async function createView(): Promise<void> {
     const name = await promptLine(renderer, "view-name", "视图名称：", { signal: interactionController.signal })
-    if (!name) return undefined
-    const result = await dispatchWithError({ type: "create_view", id, name }, "创建视图失败")
-    return result.ok ? id : undefined
+    if (!name) return
+    const result = await dispatchWithError({ type: "create_view", name }, "创建视图失败")
+    if (!result.ok) return
+    const created = core.getSnapshot().views.find((item) => item.name === name)
+    if (!created) return
+    await showError(
+      "视图已创建",
+      `请编辑 SYSTEM.md：${join(created.directory, "SYSTEM.md")}；AGENTS.md：${join(created.directory, "AGENTS.md")}；Skills：${join(created.directory, "skills")}`,
+    )
   }
 
   async function chooseView(): Promise<string | null | undefined> {
@@ -224,8 +219,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           { title: "选择视图", signal: interactionController.signal },
         )
         if (selected === createViewValue) {
-          const created = await createView()
-          if (created) return created
+          await createView()
           continue
         }
         if (selected === manageViewsValue) {
@@ -888,11 +882,72 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
+  async function openSessionSettings(mode: "new" | "existing"): Promise<boolean> {
+    let draft: SessionSettingsDraft = { viewId: null }
+    if (mode === "existing") {
+      const snapshot = core.getSnapshot()
+      const current = snapshot.currentModel
+      if (!current) return false
+      draft = {
+        model: {
+          ...current,
+          name:
+            snapshot.models.find((item) => item.providerId === current.providerId && item.modelId === current.modelId)
+              ?.name ?? current.modelId,
+          available: true,
+        },
+        viewId: snapshot.currentViewId ?? null,
+      }
+    }
+    while (!exiting) {
+      if (!(await dispatchWithError({ type: "list_views" }, "读取视图失败")).ok) return false
+      const action = await selectRichItem(
+        renderer,
+        "session-settings",
+        sessionSettingsItems(draft, core.getSnapshot().views, mode),
+        {
+          title: mode === "new" ? "会话设置 · 新建会话" : "会话设置 · 当前会话",
+          signal: interactionController.signal,
+        },
+      )
+      if (!action || action === "cancel") return false
+      if (action === "model") {
+        const model = await chooseModel()
+        if (model) draft = { ...draft, model }
+      } else if (action === "view") {
+        const viewId = await chooseView()
+        if (viewId !== undefined) draft = { ...draft, viewId }
+      } else if (action === "manage-models") await manageModels("standalone")
+      else if (action === "manage-views") await manageViews()
+      else if (action === "apply") {
+        if (mode === "new") {
+          if (!draft.model) {
+            await showError("无法应用设置", "请先选择模型")
+            continue
+          }
+          const result = await dispatchWithError(
+            { type: "create_session", model: draft.model, viewId: draft.viewId },
+            "创建会话失败",
+          )
+          return result.ok
+        }
+        if (!draft.model) continue
+        const snapshot = core.getSnapshot()
+        const current = snapshot.currentModel
+        if (!current || current.providerId !== draft.model.providerId || current.modelId !== draft.model.modelId) {
+          if (!(await dispatchWithError({ type: "set_model", model: draft.model }, "切换模型失败")).ok) continue
+        }
+        if (snapshot.currentViewId !== draft.viewId) {
+          if (!(await dispatchWithError({ type: "set_view", viewId: draft.viewId }, "切换视图失败")).ok) continue
+        }
+        return true
+      }
+    }
+    return false
+  }
+
   async function createSession() {
-    const model = await chooseModel()
-    if (!model) return
-    const viewId = await chooseView()
-    if (viewId !== undefined) await dispatchWithError({ type: "create_session", model, viewId }, "创建会话失败")
+    await openSessionSettings("new")
   }
 
   async function chooseSession() {

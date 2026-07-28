@@ -72,7 +72,7 @@ export type CoreCommand =
   | { type: "delete_model"; revision: string; providerId: string; modelId: string }
   | { type: "set_model"; model: ModelReference }
   | { type: "set_view"; viewId: ViewId }
-  | { type: "create_view"; id: string; name: string }
+  | { type: "create_view"; name: string; id?: string }
   | { type: "update_view"; viewId: string; name?: string; path?: string }
   | { type: "ensure_view_file"; viewId: string; name: "SYSTEM.md" | "AGENTS.md" }
   | { type: "remove_view"; viewId: string; deleteDirectory?: boolean }

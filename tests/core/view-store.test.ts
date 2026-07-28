@@ -48,6 +48,10 @@ describe("视图配置", () => {
     await store.remove("dev")
     expect(await readFile(join(created.directory, "AGENTS.md"), "utf8")).toContain("视图说明")
 
+    const generated = await store.create({ name: "自动 ID" })
+    expect(generated.id.split("-")).toHaveLength(3)
+    expect(generated.path).toBe(join("views", generated.id))
+
     await store.create({ id: "gone", name: "删除" })
     const gone = await store.resolve("gone")
     await store.deleteDirectory("gone")

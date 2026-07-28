@@ -56,10 +56,18 @@ function key(text: string): KeyEvent {
   return new KeyEvent(parsed)
 }
 
-async function pressEnter(setup: Awaited<ReturnType<typeof createTestRenderer>>) {
-  setup.renderer.keyInput.emit("keypress", key("\r"))
+async function press(setup: Awaited<ReturnType<typeof createTestRenderer>>, sequence: string) {
+  setup.renderer.keyInput.emit("keypress", key(sequence))
   await Bun.sleep(10)
   await setup.renderOnce()
+}
+
+async function pressEnter(setup: Awaited<ReturnType<typeof createTestRenderer>>) {
+  await press(setup, "\r")
+}
+
+async function pressDown(setup: Awaited<ReturnType<typeof createTestRenderer>>, count = 1) {
+  for (let index = 0; index < count; index++) await press(setup, "\x1b[B")
 }
 
 test("真实完整 TUI 链路：非法 models.json 的错误持续显示且不会返回会话选择", async () => {
@@ -83,6 +91,10 @@ test("真实完整 TUI 链路：非法 models.json 的错误持续显示且不�
   let firstFrame = ""
   let laterFrame = ""
   try {
+    await Bun.sleep(20)
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain("会话设置 · 新建会话")
+    await pressEnter(setup)
     await Bun.sleep(20)
     await setup.renderOnce()
     firstFrame = setup.captureCharFrame()
@@ -123,12 +135,15 @@ test("真实完整 TUI 链路：没有 views.json 时选择无视图并成功进
   try {
     await Bun.sleep(20)
     await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain("会话设置 · 新建会话")
+    await pressEnter(setup)
     expect(setup.captureCharFrame()).toContain("选择供应商")
     await pressEnter(setup)
     expect(setup.captureCharFrame()).toContain("选择模型")
     await pressEnter(setup)
-    expect(setup.captureCharFrame()).toContain("选择视图")
-    expect(setup.captureCharFrame()).toContain("无视图")
+    expect(setup.captureCharFrame()).toContain("会话设置 · 新建会话")
+    expect(setup.captureCharFrame()).toContain("anthropic")
+    await pressDown(setup, 4)
     await pressEnter(setup)
     await Bun.sleep(30)
     await setup.renderOnce()
@@ -161,14 +176,15 @@ test("完整 TUI 链路：创建失败错误不会被选择无视图的 Enter �
   try {
     await Bun.sleep(10)
     await setup.renderOnce()
-    expect(setup.captureCharFrame()).toContain("选择供应商")
+    expect(setup.captureCharFrame()).toContain("会话设置 · 新建会话")
 
+    await pressEnter(setup)
+    expect(setup.captureCharFrame()).toContain("选择供应商")
     await pressEnter(setup)
     expect(setup.captureCharFrame()).toContain("选择模型")
     await pressEnter(setup)
-    expect(setup.captureCharFrame()).toContain("选择视图")
-    expect(setup.captureCharFrame()).toContain("无视图")
-
+    expect(setup.captureCharFrame()).toContain("会话设置 · 新建会话")
+    await pressDown(setup, 4)
     await pressEnter(setup)
     await Bun.sleep(20)
     await setup.renderOnce()
