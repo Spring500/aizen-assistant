@@ -70,6 +70,12 @@ async function pressDown(setup: Awaited<ReturnType<typeof createTestRenderer>>, 
   for (let index = 0; index < count; index++) await press(setup, "\x1b[B")
 }
 
+async function destroyTestRenderer(setup: Awaited<ReturnType<typeof createTestRenderer>>) {
+  setup.renderer.destroy()
+  // OpenTUI native teardown completes asynchronously on Windows CI.
+  await Bun.sleep(100)
+}
+
 test("真实完整 TUI 链路：非法 models.json 的错误持续显示且不会返回会话选择", async () => {
   const root = await copyAppFixture("invalid-model")
   const setup = await createTestRenderer({
@@ -78,6 +84,7 @@ test("真实完整 TUI 链路：非法 models.json 的错误持续显示且不�
     screenMode: "split-footer",
     footerHeight: 9,
     externalOutputMode: "capture-stdout",
+    useThread: false,
   })
   const pi = await PiSessionRuntime.create({ authPath: `${root}/auth.json`, modelsPath: `${root}/models.json` })
   const core = new AizenCore({
@@ -104,7 +111,7 @@ test("真实完整 TUI 链路：非法 models.json 的错误持续显示且不�
   } finally {
     setup.renderer.keyInput.emit("keypress", key("\x03"))
     await running
-    setup.renderer.destroy()
+    await destroyTestRenderer(setup)
     await rm(root, { recursive: true, force: true })
   }
   expect(firstFrame).toContain("models.json")
@@ -121,6 +128,7 @@ test("真实完整 TUI 链路：没有 views.json 时选择无视图并成功进
     screenMode: "split-footer",
     footerHeight: 9,
     externalOutputMode: "capture-stdout",
+    useThread: false,
   })
   const pi = await PiSessionRuntime.create({ authPath: `${root}/auth.json`, modelsPath: null })
   await pi.setRuntimeApiKey("anthropic", "fixture-key")
@@ -154,7 +162,7 @@ test("真实完整 TUI 链路：没有 views.json 时选择无视图并成功进
   } finally {
     setup.renderer.keyInput.emit("keypress", key("\x03"))
     await running
-    setup.renderer.destroy()
+    await destroyTestRenderer(setup)
     await rm(root, { recursive: true, force: true })
   }
 })
@@ -166,6 +174,7 @@ test("完整 TUI 链路：创建失败错误不会被选择无视图的 Enter �
     screenMode: "split-footer",
     footerHeight: 9,
     externalOutputMode: "capture-stdout",
+    useThread: false,
   })
   const core = new ThrowingCreateCore()
   const running = runInteractiveApp({
@@ -198,6 +207,6 @@ test("完整 TUI 链路：创建失败错误不会被选择无视图的 Enter �
   } finally {
     setup.renderer.keyInput.emit("keypress", key("\x03"))
     await Promise.race([running, Bun.sleep(1000)])
-    setup.renderer.destroy()
+    await destroyTestRenderer(setup)
   }
 })
