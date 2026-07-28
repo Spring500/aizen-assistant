@@ -78,6 +78,22 @@ async function press(setup: Awaited<ReturnType<typeof createTestRenderer>>, sequ
   await setup.renderOnce()
 }
 
+async function waitForText(
+  setup: Awaited<ReturnType<typeof createTestRenderer>>,
+  expected: string,
+  timeoutMs = 1000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs
+  let frame = ""
+  while (Date.now() < deadline) {
+    await setup.renderOnce()
+    frame = setup.captureCharFrame()
+    if (frame.includes(expected)) return frame
+    await Bun.sleep(10)
+  }
+  throw new Error(`等待界面内容超时：${JSON.stringify(expected)}\n${frame}`)
+}
+
 const pressEnter = (setup: Awaited<ReturnType<typeof createTestRenderer>>) => press(setup, "\r")
 async function pressDown(setup: Awaited<ReturnType<typeof createTestRenderer>>, count: number) {
   for (let index = 0; index < count; index++) await press(setup, "\x1b[B")
@@ -132,15 +148,13 @@ async function noViews(): Promise<void> {
   })
   const running = runInteractiveApp({ cwd: root, dataDirectory: root, testing: { renderer: setup.renderer, core } })
   try {
-    await Bun.sleep(20)
-    await setup.renderOnce()
-    assertIncludes(setup.captureCharFrame(), "会话设置 · 新建会话")
+    await waitForText(setup, "会话设置 · 新建会话")
     await pressEnter(setup)
-    assertIncludes(setup.captureCharFrame(), "选择供应商")
+    await waitForText(setup, "选择供应商")
     await pressEnter(setup)
-    assertIncludes(setup.captureCharFrame(), "选择模型")
+    await waitForText(setup, "选择模型")
     await pressEnter(setup)
-    assertIncludes(setup.captureCharFrame(), "会话设置 · 新建会话")
+    await waitForText(setup, "会话设置 · 新建会话")
     await pressDown(setup, 4)
     await pressEnter(setup)
     await Bun.sleep(30)
