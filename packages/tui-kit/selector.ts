@@ -7,7 +7,7 @@ import {
 } from "@opentui/core"
 import { systemColors } from "./theme.ts"
 
-export type SelectorItem<T> = { name: string; description: string; value: T }
+export type SelectorItem<T> = { name: string; description: string; value: T; disabled?: boolean }
 export type SelectorOptions = { title: string; signal?: AbortSignal }
 
 export function selectItem<T>(
@@ -53,20 +53,24 @@ export function selectItem<T>(
       if (settled) return
       settled = true
       renderer.keyInput.off("keypress", onKeyPress)
+      selector.off(SelectRenderableEvents.ITEM_SELECTED, onSelected)
       options.signal?.removeEventListener("abort", onAbort)
       selector.destroy()
       title.destroy()
       renderer.footerHeight = previousFooterHeight
       resolve(value)
     }
+    const onSelected = () => {
+      const selected = selector.getSelectedOption()
+      const item = items.find((candidate) => candidate.value === selected?.value)
+      if (!item?.disabled) finish(selected?.value as T | undefined)
+    }
     const onKeyPress = (key: KeyEvent) => {
       if (key.name === "escape") finish(undefined)
     }
     const onAbort = () => finish(undefined)
     renderer.keyInput.on("keypress", onKeyPress)
-    selector.once(SelectRenderableEvents.ITEM_SELECTED, () =>
-      finish(selector.getSelectedOption()?.value as T | undefined),
-    )
+    selector.on(SelectRenderableEvents.ITEM_SELECTED, onSelected)
     if (options.signal?.aborted) finish(undefined)
     else options.signal?.addEventListener("abort", onAbort, { once: true })
   })

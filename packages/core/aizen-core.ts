@@ -1,3 +1,4 @@
+import type { ModelConfigStore } from "./model-config-store.ts"
 import type { PiPort, PiPortEvent } from "./pi-port.ts"
 import type {
   AssistantMessage,
@@ -16,7 +17,7 @@ import {
   recordsToTranscript,
 } from "./types.ts"
 
-export type AizenCoreOptions = { cwd: string; store: SessionStore; pi: PiPort }
+export type AizenCoreOptions = { cwd: string; store: SessionStore; pi: PiPort; modelConfigStore?: ModelConfigStore }
 
 function sessionModel(model: ModelReference): ModelReference {
   return {
@@ -31,6 +32,7 @@ export class AizenCore implements CorePort {
   readonly #cwd: string
   readonly #store: SessionStore
   readonly #pi: PiPort
+  readonly #modelConfigStore: ModelConfigStore | undefined
   readonly #listeners = new Set<(event: CoreEvent) => void>()
   readonly #unsubscribePi: () => void
   #snapshot: CoreSnapshot
@@ -46,6 +48,7 @@ export class AizenCore implements CorePort {
     this.#cwd = options.cwd
     this.#store = options.store
     this.#pi = options.pi
+    this.#modelConfigStore = options.modelConfigStore
     this.#snapshot = {
       cwd: options.cwd,
       status: "idle",
@@ -87,6 +90,50 @@ export class AizenCore implements CorePort {
           break
         case "list_models":
           this.#snapshot.models = await this.#pi.listModels()
+          break
+        case "load_model_config":
+          this.#snapshot.modelConfig = await this.#requireModelConfigStore().read()
+          break
+        case "save_provider":
+          await this.#changeModelConfig(() =>
+            this.#requireModelConfigStore().upsertProvider(
+              command.revision,
+              command.provider,
+              command.create ? "create" : "update",
+            ),
+          )
+          break
+        case "delete_provider":
+          if (this.#snapshot.currentModel?.providerId === command.providerId)
+            throw new Error("不能删除当前会话正在使用的供应商，请先切换模型")
+          await this.#changeModelConfig(() =>
+            this.#requireModelConfigStore().deleteProvider(command.revision, command.providerId),
+          )
+          break
+        case "save_model":
+          if (
+            this.#snapshot.currentModel?.providerId === command.providerId &&
+            this.#snapshot.currentModel.modelId === command.model.id
+          )
+            throw new Error("不能修改当前会话正在使用的模型，请先切换模型")
+          await this.#changeModelConfig(() =>
+            this.#requireModelConfigStore().upsertModel(
+              command.revision,
+              command.providerId,
+              command.model,
+              command.create ? "create" : "update",
+            ),
+          )
+          break
+        case "delete_model":
+          if (
+            this.#snapshot.currentModel?.providerId === command.providerId &&
+            this.#snapshot.currentModel.modelId === command.modelId
+          )
+            throw new Error("不能删除当前会话正在使用的模型，请先切换模型")
+          await this.#changeModelConfig(() =>
+            this.#requireModelConfigStore().deleteModel(command.revision, command.providerId, command.modelId),
+          )
           break
         case "list_auth_providers":
           this.#snapshot.authProviders = await this.#pi.listAuthProviders()
@@ -149,6 +196,26 @@ export class AizenCore implements CorePort {
     this.#unsubscribePi()
     await this.#pi.dispose()
     this.#listeners.clear()
+  }
+
+  #requireModelConfigStore(): ModelConfigStore {
+    if (!this.#modelConfigStore) throw new Error("当前运行模式不支持编辑模型配置")
+    return this.#modelConfigStore
+  }
+
+  async #changeModelConfig(change: () => Promise<string>): Promise<void> {
+    const store = this.#requireModelConfigStore()
+    const previous = await store.source()
+    await change()
+    try {
+      await this.#pi.reloadModelConfig()
+    } catch (error) {
+      await store.restore(previous)
+      await this.#pi.reloadModelConfig()
+      throw new Error(`模型配置未生效，已恢复原配置：${error instanceof Error ? error.message : String(error)}`)
+    }
+    this.#snapshot.modelConfig = await store.read()
+    this.#snapshot.models = await this.#pi.listModels()
   }
 
   async #createSession(model: ModelReference): Promise<void> {
