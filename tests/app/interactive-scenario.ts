@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { runInteractiveApp } from "../../apps/tui/interactive-app.ts"
+import { defaultAppPreferences } from "../../packages/core/app-preferences-store.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
@@ -26,6 +27,7 @@ class ThrowingCreateCore implements CorePort {
     status: "idle",
     sessions: [],
     models: [model],
+    preferences: structuredClone(defaultAppPreferences),
     views: [],
     authProviders: [{ id: "anthropic", name: "Anthropic", configured: true, supportsApiKey: true }],
     transcript: [],

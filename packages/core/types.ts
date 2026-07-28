@@ -1,3 +1,4 @@
+import type { AppPreferences, FoldPreferences } from "./app-preferences-store.ts"
 import type { EditableModelConfig, EditableProviderConfig, ModelConfigSnapshot } from "./model-config-store.ts"
 import type { ViewOption } from "./view-store.ts"
 import type { AuthPromptOption, AuthProviderOption, ModelOption, ModelRuntimeInfo } from "./pi-port.ts"
@@ -40,6 +41,7 @@ export type CoreSnapshot = {
   currentViewId?: ViewId
   models: ModelOption[]
   modelConfig?: ModelConfigSnapshot
+  preferences: AppPreferences
   views: ViewOption[]
   authProviders: AuthProviderOption[]
   transcript: TranscriptEntry[]
@@ -52,6 +54,8 @@ export type CoreSnapshot = {
 }
 
 export type CoreCommand =
+  | { type: "load_preferences" }
+  | { type: "save_fold_preferences"; fold: FoldPreferences }
   | { type: "list_sessions" }
   | { type: "list_views" }
   | { type: "create_session"; model: ModelReference; viewId: ViewId }

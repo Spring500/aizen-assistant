@@ -1,5 +1,6 @@
 import type { CliRenderer } from "@opentui/core"
 import { join } from "node:path"
+import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import type {
   ConfigurableApi,
@@ -74,6 +75,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       store,
       pi: pi as PiSessionRuntime,
       modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "models.json")),
+      preferencesStore: new AppPreferencesStore(join(options.dataDirectory, "preferences.json")),
       views: new ViewStore(join(options.dataDirectory, "views.json")),
     })
   const view = createChatView(renderer)
@@ -892,6 +894,21 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
   async function openSessionSettings(mode: "new" | "existing"): Promise<boolean> {
     let draft: SessionSettingsDraft = { viewId: null }
+    if (mode === "new") {
+      await dispatchWithError({ type: "load_preferences" }, "读取应用偏好失败")
+      const preferred = core.getSnapshot().preferences.newSession
+      if (preferred.model) {
+        await core.dispatch({ type: "list_models" })
+        const available = core
+          .getSnapshot()
+          .models.find(
+            (item) =>
+              item.providerId === preferred.model?.providerId && item.modelId === preferred.model.modelId && item.available,
+          )
+        if (available) draft = { model: { ...available, thinkingLevel: preferred.model.thinkingLevel }, viewId: preferred.viewId }
+        else draft = { viewId: preferred.viewId }
+      } else draft = { viewId: preferred.viewId }
+    }
     if (mode === "existing") {
       const snapshot = core.getSnapshot()
       const current = snapshot.currentModel

@@ -1,3 +1,4 @@
+import { defaultAppPreferences, type AppPreferencesStore, parseAppPreferences } from "./app-preferences-store.ts"
 import type { ModelConfigStore } from "./model-config-store.ts"
 import type { PiPort, PiPortEvent } from "./pi-port.ts"
 import type {
@@ -35,6 +36,7 @@ export type AizenCoreOptions = {
   views?: ViewStore
   extraMessages?: ExtraMessageProvider
   modelConfigStore?: ModelConfigStore
+  preferencesStore?: AppPreferencesStore
 }
 
 function sessionModel(model: ModelReference): ModelReference {
@@ -53,6 +55,7 @@ export class AizenCore implements CorePort {
   readonly #views: ViewStore | undefined
   readonly #extraMessages: ExtraMessageProvider
   readonly #modelConfigStore: ModelConfigStore | undefined
+  readonly #preferencesStore: AppPreferencesStore | undefined
   readonly #listeners = new Set<(event: CoreEvent) => void>()
   readonly #unsubscribePi: () => void
   #snapshot: CoreSnapshot
@@ -74,6 +77,7 @@ export class AizenCore implements CorePort {
       status: "idle",
       sessions: [],
       models: [],
+      preferences: structuredClone(defaultAppPreferences),
       views: [],
       authProviders: [],
       transcript: [],
@@ -84,6 +88,7 @@ export class AizenCore implements CorePort {
     this.#views = options.views
     this.#extraMessages = options.extraMessages ?? (async () => [])
     this.#modelConfigStore = options.modelConfigStore
+    this.#preferencesStore = options.preferencesStore
     this.#unsubscribePi = this.#pi.subscribe((event) => this.#handlePiEvent(event))
   }
 
@@ -110,6 +115,14 @@ export class AizenCore implements CorePort {
         throw new Error("当前操作尚未完成")
       }
       switch (command.type) {
+        case "load_preferences":
+          this.#snapshot.preferences = await this.#readPreferences()
+          break
+        case "save_fold_preferences": {
+          const preferences = parseAppPreferences({ ...this.#snapshot.preferences, fold: command.fold })
+          await this.#writePreferences(preferences)
+          break
+        }
         case "list_sessions":
           this.#snapshot.sessions = await this.#store.list()
           break
@@ -254,6 +267,22 @@ export class AizenCore implements CorePort {
     this.#listeners.clear()
   }
 
+  async #readPreferences() {
+    return this.#preferencesStore ? this.#preferencesStore.read() : structuredClone(this.#snapshot.preferences)
+  }
+
+  async #writePreferences(preferences: CoreSnapshot["preferences"]): Promise<void> {
+    if (this.#preferencesStore) await this.#preferencesStore.write(preferences)
+    this.#snapshot.preferences = preferences
+  }
+
+  async #rememberSessionDefaults(model: ModelReference, viewId: ViewId): Promise<void> {
+    await this.#writePreferences({
+      ...this.#snapshot.preferences,
+      newSession: { model: sessionModel(model), viewId },
+    })
+  }
+
   #requireModelConfigStore(): ModelConfigStore {
     if (!this.#modelConfigStore) throw new Error("当前运行模式不支持编辑模型配置")
     return this.#modelConfigStore
@@ -299,6 +328,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     delete this.#snapshot.lastError
     this.#snapshot.sessions = await this.#store.list()
+    await this.#rememberSessionDefaults(actualModel, viewId)
   }
 
   async #openSession(sessionId: string): Promise<void> {
@@ -334,6 +364,7 @@ export class AizenCore implements CorePort {
     delete this.#snapshot.responseMetrics
     if (loaded.warnings.length > 0) this.#snapshot.lastError = loaded.warnings.join("；")
     else if (this.#runtimeReady) delete this.#snapshot.lastError
+    await this.#rememberSessionDefaults(actualModel, viewRecord.viewId)
   }
 
   async #sendPrompt(text: string): Promise<void> {
@@ -438,6 +469,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.currentViewId = viewId
     this.#snapshot.currentModel = actual
     this.#runtimeReady = true
+    await this.#rememberSessionDefaults(actual, viewId)
   }
 
   async #resolveView(viewId: ViewId) {
@@ -461,6 +493,7 @@ export class AizenCore implements CorePort {
     this.#records.push(record)
     this.#snapshot.currentModel = actual
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
+    await this.#rememberSessionDefaults(actual, this.#snapshot.currentViewId ?? null)
   }
 
   #handlePiEvent(event: PiPortEvent): void {

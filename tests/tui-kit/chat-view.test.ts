@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { createTestRenderer } from "@opentui/core/testing"
+import { defaultAppPreferences } from "../../packages/core/app-preferences-store.ts"
 import type { CoreSnapshot } from "../../packages/core/types.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
@@ -10,6 +11,7 @@ function snapshot(overrides: Partial<CoreSnapshot> = {}): CoreSnapshot {
     status: "idle",
     sessions: [],
     models: [],
+    preferences: structuredClone(defaultAppPreferences),
     views: [],
     authProviders: [],
     transcript: [],
