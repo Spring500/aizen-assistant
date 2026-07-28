@@ -59,21 +59,24 @@ function createViewLoader(
   view: ViewRuntimeInput,
   settingsManager: SettingsManager,
 ): DefaultResourceLoader {
-  const systemPath = join(view.directory, "SYSTEM.md")
-  const agentsPath = join(view.directory, "AGENTS.md")
+  const emptyView = view.viewId === null
+  const directory = emptyView ? cwd : view.directory
+  const systemPath = join(directory, "SYSTEM.md")
+  const agentsPath = join(directory, "AGENTS.md")
   return new DefaultResourceLoader({
     cwd,
-    agentDir: view.directory,
+    agentDir: directory,
     settingsManager,
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    additionalSkillPaths: existsSync(join(view.directory, "skills")) ? [join(view.directory, "skills")] : [],
-    systemPromptOverride: () => (existsSync(systemPath) ? readFileSync(systemPath, "utf8") : undefined),
+    additionalSkillPaths: !emptyView && existsSync(join(directory, "skills")) ? [join(directory, "skills")] : [],
+    systemPromptOverride: () => (!emptyView && existsSync(systemPath) ? readFileSync(systemPath, "utf8") : undefined),
     agentsFilesOverride: () => ({
-      agentsFiles: existsSync(agentsPath) ? [{ path: agentsPath, content: readFileSync(agentsPath, "utf8") }] : [],
+      agentsFiles:
+        !emptyView && existsSync(agentsPath) ? [{ path: agentsPath, content: readFileSync(agentsPath, "utf8") }] : [],
     }),
   })
 }
@@ -466,9 +469,9 @@ export class PiSessionRuntime implements PiPort {
     throw new Error("上下文压缩位置无法对应到会话记录")
   }
 
-  #validateViewLoader(loader: ResourceLoader, viewId: string): void {
+  #validateViewLoader(loader: ResourceLoader, viewId: ViewRuntimeInput["viewId"]): void {
     const diagnostics = loader.getSkills().diagnostics
-    if (diagnostics.length === 0) return
+    if (viewId === null || diagnostics.length === 0) return
     const details = diagnostics.map((item) => `${item.path ?? "Skill"}: ${item.message}`).join("；")
     throw new Error(`视图 ${viewId} 的 Skill 无效：${details}`)
   }

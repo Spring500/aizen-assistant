@@ -86,7 +86,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       else if (value === "/view")
         runAction(async () => {
           const viewId = await chooseView()
-          if (viewId && core.getSnapshot().currentSessionId) await core.dispatch({ type: "set_view", viewId })
+          if (viewId !== undefined && core.getSnapshot().currentSessionId)
+            await core.dispatch({ type: "set_view", viewId })
         })
       else if (value === "/fold") runAction(chooseFold)
       else if (value === "/models") runAction(manageModels)
@@ -176,16 +177,22 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   })
 
-  async function chooseView(): Promise<string | undefined> {
+  async function chooseView(): Promise<string | null | undefined> {
     beginInteraction()
     try {
       if (!(await core.dispatch({ type: "list_views" })).ok) return undefined
       const available = core.getSnapshot().views.filter((item) => item.valid)
-      if (available.length === 0) return undefined
-      return selectItem(
+      return selectItem<string | null>(
         renderer,
         "view-selector",
-        available.map((item) => ({ name: item.name, description: `${item.id} · ${item.directory}`, value: item.id })),
+        [
+          { name: "无视图", description: "使用内建提示词，不加载 AGENTS.md 和 Skills", value: null },
+          ...available.map((item) => ({
+            name: item.name,
+            description: `${item.id} · ${item.directory}`,
+            value: item.id,
+          })),
+        ],
         { title: "选择视图", signal: interactionController.signal },
       )
     } finally {
@@ -790,7 +797,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     const model = await chooseModel()
     if (!model) return
     const viewId = await chooseView()
-    if (viewId) await core.dispatch({ type: "create_session", model, viewId })
+    if (viewId !== undefined) await core.dispatch({ type: "create_session", model, viewId })
   }
 
   async function chooseSession() {
@@ -824,8 +831,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   }
 
   try {
-    await chooseSession()
-    if (!core.getSnapshot().currentSessionId) quit()
+    while (!exiting && !core.getSnapshot().currentSessionId) {
+      await chooseSession()
+      if (!core.getSnapshot().currentSessionId) await Bun.sleep(50)
+    }
     while (!exiting) {
       await Bun.sleep(50)
     }

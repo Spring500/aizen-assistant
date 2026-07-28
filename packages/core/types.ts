@@ -54,7 +54,7 @@ export type CoreSnapshot = {
 export type CoreCommand =
   | { type: "list_sessions" }
   | { type: "list_views" }
-  | { type: "create_session"; model: ModelReference; viewId?: string }
+  | { type: "create_session"; model: ModelReference; viewId: ViewId }
   | { type: "open_session"; sessionId: string }
   | { type: "send_prompt"; text: string }
   | { type: "abort" }
@@ -71,7 +71,7 @@ export type CoreCommand =
     }
   | { type: "delete_model"; revision: string; providerId: string; modelId: string }
   | { type: "set_model"; model: ModelReference }
-  | { type: "set_view"; viewId: string }
+  | { type: "set_view"; viewId: ViewId }
   | { type: "create_view"; id: string; name: string }
   | { type: "remove_view"; viewId: string }
   | { type: "list_auth_providers" }

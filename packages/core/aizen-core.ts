@@ -260,10 +260,9 @@ export class AizenCore implements CorePort {
     this.#snapshot.models = await this.#pi.listModels()
   }
 
-  async #createSession(model: ModelReference, requestedViewId?: string): Promise<void> {
+  async #createSession(model: ModelReference, viewId: ViewId): Promise<void> {
     const sessionId = crypto.randomUUID()
     const at = new Date().toISOString()
-    const viewId = requestedViewId ?? null
     const view = await this.#resolveView(viewId)
     await this.#store.create({ sessionId, cwd: this.#cwd, createdAt: at })
     const actualModel = await this.#pi.create({ cwd: this.#cwd, model, view })
@@ -407,7 +406,7 @@ export class AizenCore implements CorePort {
     }
   }
 
-  async #setView(viewId: string): Promise<void> {
+  async #setView(viewId: ViewId): Promise<void> {
     const sessionId = this.#snapshot.currentSessionId
     if (!sessionId) throw new Error("请先新建或恢复会话")
     const view = await this.#resolveView(viewId)
@@ -428,10 +427,7 @@ export class AizenCore implements CorePort {
   }
 
   async #resolveView(viewId: ViewId) {
-    if (viewId === null) {
-      if (this.#views) throw new Error("该会话的视图已失效，请选择有效视图")
-      return { viewId: "legacy-empty", directory: this.#cwd }
-    }
+    if (viewId === null) return { viewId: null }
     if (!this.#views) return { viewId, directory: this.#cwd }
     const view = await this.#views.resolve(viewId)
     return { viewId, directory: view.directory }

@@ -1,9 +1,11 @@
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
 
-export type ViewRuntimeInput = {
-  viewId: string
-  directory: string
-}
+export type ViewRuntimeInput =
+  | { viewId: null }
+  | {
+      viewId: string
+      directory: string
+    }
 
 export type ModelRuntimeInfo = ModelReference & {
   contextWindow?: number

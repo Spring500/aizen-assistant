@@ -155,6 +155,24 @@ describe("pi 内存会话", () => {
     await runtime.dispose()
   })
 
+  test("无视图会话使用内建提示词且不加载工作目录上下文", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    await mkdir(join(directory, "skills", "hidden"), { recursive: true })
+    await writeFile(join(directory, "SYSTEM.md"), "不应加载的系统提示词")
+    await writeFile(join(directory, "AGENTS.md"), "不应加载的项目规则")
+    await writeFile(join(directory, "skills", "hidden", "SKILL.md"), "---\nname: hidden\ndescription: 不应加载\n---\n")
+
+    await runtime.create({ cwd: directory, model, view: { viewId: null } })
+    expect(runtime.inspectSystemPrompt()).toContain("You are an expert coding assistant")
+    expect(runtime.inspectSystemPrompt()).not.toContain("不应加载")
+    expect(runtime.inspectSystemPrompt()).not.toContain("hidden")
+    await runtime.dispose()
+  })
+
   test("SYSTEM 缺失时采用 Pi 内建提示词", async () => {
     const { directory, runtime } = await makeRuntime()
     const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")

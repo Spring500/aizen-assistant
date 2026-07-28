@@ -75,7 +75,7 @@ test("真实 pi 链路完成两轮并恢复第三轮", async () => {
     const core = new AizenCore({ cwd: root, store, pi })
     const createResult = await traceStage(
       "创建会话",
-      () => core.dispatch({ type: "create_session", model }),
+      () => core.dispatch({ type: "create_session", model, viewId: null }),
       () => coreDetails(core),
     )
     expect(createResult.ok).toBe(true)
