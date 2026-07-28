@@ -189,7 +189,7 @@ export class AizenCore implements CorePort {
           break
         case "create_view":
           if (!this.#views) throw new Error("未配置视图存储")
-          await this.#views.create({ id: command.id, name: command.name })
+          await this.#views.create({ name: command.name, ...(command.id === undefined ? {} : { id: command.id }) })
           this.#snapshot.views = await this.#views.list()
           break
         case "update_view":
