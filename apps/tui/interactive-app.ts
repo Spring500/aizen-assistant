@@ -2,6 +2,7 @@ import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
+import { ViewStore } from "../../packages/core/view-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
@@ -37,7 +38,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     modelsPath: join(options.dataDirectory, "models.json"),
   })
   const store = new SessionStore(join(options.dataDirectory, "sessions", projectDirectoryName(options.cwd)))
-  const core = new AizenCore({ cwd: options.cwd, store, pi })
+  const views = new ViewStore(join(options.dataDirectory, "views.json"))
+  const core = new AizenCore({ cwd: options.cwd, store, pi, views })
   const view = createChatView(renderer)
   const interactionController = new AbortController()
   let exiting = false
@@ -64,6 +66,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       if (value === "/quit") quit()
       else if (value === "/new") runAction(createSession)
       else if (value === "/sessions") runAction(chooseSession)
+      else if (value === "/view")
+        runAction(async () => {
+          const viewId = await chooseView()
+          if (viewId && core.getSnapshot().currentSessionId) await core.dispatch({ type: "set_view", viewId })
+        })
+      else if (value === "/views") runAction(manageViews)
       else if (value === "/fold") runAction(chooseFold)
       else if (value === "/model")
         runAction(async () => {
@@ -150,6 +158,60 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       })
     }
   })
+
+  async function chooseView(): Promise<string | undefined> {
+    beginInteraction()
+    try {
+      const listed = await core.dispatch({ type: "list_views" })
+      if (!listed.ok) return undefined
+      const available = core.getSnapshot().views.filter((item) => item.valid)
+      if (available.length === 0) return undefined
+      return await selectItem(
+        renderer,
+        "view-selector",
+        available.map((item) => ({ name: item.name, description: `${item.id} · ${item.directory}`, value: item.id })),
+        { title: "选择视图", signal: interactionController.signal },
+      )
+    } finally {
+      endInteraction()
+    }
+  }
+
+  async function manageViews() {
+    beginInteraction()
+    try {
+      while (!exiting) {
+        const listed = await core.dispatch({ type: "list_views" })
+        if (!listed.ok) return
+        const selected = await selectItem(
+          renderer,
+          "views-manager",
+          [
+            { name: "刷新", description: "重新读取 views.json 和目录状态", value: "__refresh__" },
+            { name: "创建视图模板", description: "创建 AGENTS.md 和 skills 目录", value: "__create__" },
+            ...core.getSnapshot().views.map((item) => ({
+              name: `${item.valid ? "✓" : "!"} ${item.name}`,
+              description: `${item.id} · ${item.error ?? item.directory}`,
+              value: item.id,
+            })),
+          ],
+          { title: "管理视图（选择已有视图可移除注册）", signal: interactionController.signal },
+        )
+        if (!selected) return
+        if (selected === "__refresh__") continue
+        if (selected === "__create__") {
+          const id = await promptLine(renderer, "view-id", "视图 ID：", { signal: interactionController.signal })
+          if (!id) continue
+          const name = await promptLine(renderer, "view-name", "视图名称：", { signal: interactionController.signal })
+          if (name) await core.dispatch({ type: "create_view", id, name })
+          continue
+        }
+        await core.dispatch({ type: "remove_view", viewId: selected })
+      }
+    } finally {
+      endInteraction()
+    }
+  }
 
   async function chooseFold() {
     beginInteraction()
@@ -260,7 +322,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
   async function createSession() {
     const model = await chooseModel()
-    if (model) await core.dispatch({ type: "create_session", model })
+    if (!model) return
+    const viewId = await chooseView()
+    if (viewId) await core.dispatch({ type: "create_session", model, viewId })
   }
 
   async function chooseSession() {
