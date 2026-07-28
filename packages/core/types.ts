@@ -1,3 +1,4 @@
+import type { EditableModelConfig, EditableProviderConfig, ModelConfigSnapshot } from "./model-config-store.ts"
 import type { ViewOption } from "./view-store.ts"
 import type { AuthPromptOption, AuthProviderOption, ModelOption, ModelRuntimeInfo } from "./pi-port.ts"
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
@@ -38,6 +39,7 @@ export type CoreSnapshot = {
   currentModel?: ModelRuntimeInfo
   currentViewId?: ViewId
   models: ModelOption[]
+  modelConfig?: ModelConfigSnapshot
   views: ViewOption[]
   authProviders: AuthProviderOption[]
   transcript: TranscriptEntry[]
@@ -57,6 +59,17 @@ export type CoreCommand =
   | { type: "send_prompt"; text: string }
   | { type: "abort" }
   | { type: "list_models" }
+  | { type: "load_model_config" }
+  | { type: "save_provider"; revision: string; provider: EditableProviderConfig; create?: boolean }
+  | { type: "delete_provider"; revision: string; providerId: string }
+  | {
+      type: "save_model"
+      revision: string
+      providerId: string
+      model: EditableModelConfig
+      create?: boolean
+    }
+  | { type: "delete_model"; revision: string; providerId: string; modelId: string }
   | { type: "set_model"; model: ModelReference }
   | { type: "set_view"; viewId: string }
   | { type: "create_view"; id: string; name: string }
