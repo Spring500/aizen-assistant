@@ -97,7 +97,8 @@ export class AizenCore implements CorePort {
   }
 
   async dispatch(command: CoreCommand): Promise<CoreCommandResult> {
-    if (this.#disposed) return { ok: false, error: "核心已经关闭" }
+    if (this.#disposed)
+      return { ok: false, error: { code: "CORE_DISPOSED", message: "核心已经关闭", severity: "fatal" } }
     try {
       delete this.#snapshot.lastError
       if (
@@ -224,7 +225,7 @@ export class AizenCore implements CorePort {
       this.#snapshot.lastError = message
       if (this.#snapshot.status !== "running" && this.#snapshot.status !== "aborting") this.#snapshot.status = "idle"
       this.#notify()
-      return { ok: false, error: message }
+      return { ok: false, error: { code: "COMMAND_FAILED", message, severity: "error" } }
     }
   }
 

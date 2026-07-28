@@ -161,7 +161,7 @@ describe("核心编排", () => {
     revision = core.getSnapshot().modelConfig?.revision ?? ""
     expect(await core.dispatch({ type: "delete_model", revision, providerId: "test", modelId: "model" })).toEqual({
       ok: false,
-      error: "不能删除当前会话正在使用的模型，请先切换模型",
+      error: { code: "COMMAND_FAILED", message: "不能删除当前会话正在使用的模型，请先切换模型", severity: "error" },
     })
     await core.dispose()
   })
@@ -224,7 +224,7 @@ describe("核心编排", () => {
 
     expect(await core.dispatch({ type: "create_session", model, viewId: null })).toEqual({
       ok: false,
-      error: "无法创建运行时",
+      error: { code: "COMMAND_FAILED", message: "无法创建运行时", severity: "error" },
     })
     expect(core.getSnapshot().currentSessionId).toBeUndefined()
     expect(await store.list()).toEqual([])

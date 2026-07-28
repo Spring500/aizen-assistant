@@ -90,7 +90,13 @@ export type CoreEvent =
       options?: AuthPromptOption[]
     }
 
-export type CoreCommandResult = { ok: true } | { ok: false; error: string }
+export type CoreError = {
+  code: string
+  message: string
+  severity: "error" | "fatal"
+}
+
+export type CoreCommandResult = { ok: true } | { ok: false; error: CoreError }
 
 export interface CorePort {
   dispatch(command: CoreCommand): Promise<CoreCommandResult>

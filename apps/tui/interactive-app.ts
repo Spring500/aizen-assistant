@@ -23,6 +23,9 @@ import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { createAizenRenderer, destroyRenderer } from "../../packages/tui-kit/renderer.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
 
+import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
+import { viewSelectionItems } from "./view-flow.ts"
+
 export type InteractiveAppOptions = { cwd: string; dataDirectory: string }
 
 const authPromptLabels: Record<string, string> = {
@@ -59,7 +62,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const view = createChatView(renderer)
   const interactionController = new AbortController()
   let exiting = false
-  let action = Promise.resolve()
   let authProviderName: string | undefined
   let interactionDepth = 0
 
@@ -71,23 +73,17 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     if (status === "authenticating") core.dispatch({ type: "cancel_auth" }).catch(() => {})
     if (status === "running" || status === "aborting") core.dispatch({ type: "abort" }).catch(() => {})
   }
-  const runAction = (operation: () => Promise<unknown>) => {
-    action = action.then(operation).then(
-      () => {},
-      () => {},
-    )
-  }
   const showError = async (title: string, error: string) => {
+    await Bun.sleep(0)
     await selectItem(renderer, `error-${crypto.randomUUID()}`, [{ name: "返回", description: error, value: true }], {
       title,
       signal: interactionController.signal,
     })
   }
-  const dispatchWithError = async (command: Parameters<typeof core.dispatch>[0], title: string) => {
-    const result = await core.dispatch(command)
-    if (!result.ok) await showError(title, result.error)
-    return result
-  }
+  const actions = new ActionQueue(showError)
+  const runAction = (operation: () => Promise<unknown>) => actions.run(operation)
+  const dispatchWithError = (command: Parameters<typeof core.dispatch>[0], title: string) =>
+    dispatchOrPresent(core, command, title, showError)
   const editor = createChatEditor(renderer, {
     onSubmit: (value) => {
       if (value === "/quit") quit()
@@ -193,23 +189,14 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     try {
       const listed = await core.dispatch({ type: "list_views" })
       if (!listed.ok) {
-        await showError("读取视图失败", listed.error)
+        await showError("读取视图失败", listed.error.message)
         return undefined
       }
-      const available = core.getSnapshot().views.filter((item) => item.valid)
-      return selectItem<string | null>(
-        renderer,
-        "view-selector",
-        [
-          { name: "无视图", description: "使用内建提示词，不加载 AGENTS.md 和 Skills", value: null },
-          ...available.map((item) => ({
-            name: item.name,
-            description: `${item.id} · ${item.directory}`,
-            value: item.id,
-          })),
-        ],
-        { title: "选择视图", signal: interactionController.signal },
-      )
+      const available = core.getSnapshot().views
+      return selectItem<string | null>(renderer, "view-selector", viewSelectionItems(available), {
+        title: "选择视图",
+        signal: interactionController.signal,
+      })
     } finally {
       endInteraction()
     }
@@ -221,7 +208,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       while (!exiting) {
         const listed = await core.dispatch({ type: "list_views" })
         if (!listed.ok) {
-          await showError("读取视图失败", listed.error)
+          await showError("读取视图失败", listed.error.message)
           return
         }
         const selected = await selectItem(
@@ -824,7 +811,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     try {
       const listed = await core.dispatch({ type: "list_sessions" })
       if (!listed.ok) {
-        await showError("读取会话失败", listed.error)
+        await showError("读取会话失败", listed.error.message)
         return
       }
       const sessions = core.getSnapshot().sessions
@@ -865,7 +852,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     unsubscribe()
     editor.destroy()
     try {
-      await action
+      await actions.flush()
       await core.dispose()
     } finally {
       destroyRenderer(renderer)

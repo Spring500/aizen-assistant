@@ -1,0 +1,4 @@
+{
+  "version": 1,
+  "views": [{ "id": "missing", "name": "失效视图", "path": "views/missing" }]
+}

@@ -1,0 +1,19 @@
+{
+  "providers": {
+    "fixture": {
+      "name": "Fixture Provider",
+      "baseUrl": "__MOCK_URL__",
+      "api": "anthropic-messages",
+      "models": [
+        {
+          "id": "fixture-model",
+          "name": "Fixture Model",
+          "reasoning": false,
+          "input": ["text"],
+          "contextWindow": 32000,
+          "maxTokens": 4096
+        }
+      ]
+    }
+  }
+}
