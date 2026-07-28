@@ -116,7 +116,7 @@ test("编辑器高度随视觉行数变化并显示带标题分割线", async ()
     expect(frame).toContain("第三行")
 
     editor.input.setText(Array.from({ length: 12 }, (_, index) => `第 ${index} 行`).join("\n"))
-    await Bun.sleep(1)
+    for (let attempt = 0; attempt < 20 && editor.input.height !== 8; attempt += 1) await Bun.sleep(5)
     expect(editor.input.height).toBe(8)
     expect(setup.renderer.footerHeight).toBe(15)
     editor.destroy()

@@ -44,8 +44,14 @@ describe("会话格式", () => {
         message: {
           role: "assistant",
           parts: [
-            { kind: "thinking", text: "分析", signature: "sig" },
-            { kind: "tool_call", callId: "c1", name: "bash", arguments: { command: "bun test" } },
+            { kind: "thinking", text: "分析", signature: "sig", timing: { startedAt: 1000, finishedAt: 2500 } },
+            {
+              kind: "tool_call",
+              callId: "c1",
+              name: "bash",
+              arguments: { command: "bun test" },
+              declaredIntent: "运行测试以验证修改",
+            },
           ],
           source: { providerId: "anthropic", modelId: "model", api: "anthropic-messages" },
           stopReason: "tool_use",
@@ -86,6 +92,7 @@ describe("会话格式", () => {
         name: "read",
         parts: [{ kind: "image", mimeType: "image/png", data: "aW1hZ2U=" }],
         isError: false,
+        timing: { startedAt: 1000, finishedAt: 2000 },
       },
     }
 
@@ -115,6 +122,48 @@ describe("会话格式", () => {
       },
     }
     expect(() => parseSessionLine(JSON.stringify(record))).toThrow("Base64")
+  })
+
+  test("拒绝超过五十个字符的工具声明目的", () => {
+    const record = {
+      kind: "message",
+      recordId: "r1",
+      turnId: "t1",
+      at: "2026-07-23T10:00:00.000Z",
+      message: {
+        role: "assistant",
+        parts: [
+          {
+            kind: "tool_call",
+            callId: "c1",
+            name: "read",
+            arguments: { path: "README.md" },
+            declaredIntent: "目".repeat(51),
+          },
+        ],
+        source: { providerId: "p", modelId: "m", api: "a" },
+        stopReason: "tool_use",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    }
+    expect(() => parseSessionLine(JSON.stringify(record))).toThrow("必须为 1 至 50 个字符")
+  })
+
+  test("拒绝无效的内容时序", () => {
+    const record = {
+      kind: "message",
+      recordId: "r1",
+      turnId: "t1",
+      at: "2026-07-23T10:00:00.000Z",
+      message: {
+        role: "assistant",
+        parts: [{ kind: "text", text: "回复", timing: { startedAt: 2000, finishedAt: 1000 } }],
+        source: { providerId: "p", modelId: "m", api: "a" },
+        stopReason: "stop",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    }
+    expect(() => parseSessionLine(JSON.stringify(record))).toThrow("finishedAt 不能早于 startedAt")
   })
 
   test("拒绝非 JSON 值和 pi 内部字段", () => {

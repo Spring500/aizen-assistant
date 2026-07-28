@@ -11,14 +11,21 @@ export type ModelReference = {
   thinkingLevel: string
 }
 
-export type TextPart = { kind: "text"; text: string }
+export type Timing = {
+  startedAt: number
+  finishedAt: number
+}
+
+export type TextPart = { kind: "text"; text: string; timing?: Timing }
 export type ImagePart = { kind: "image"; mimeType: string; data: string }
-export type ThinkingPart = { kind: "thinking"; text: string; signature?: string }
+export type ThinkingPart = { kind: "thinking"; text: string; signature?: string; timing?: Timing }
 export type ToolCallPart = {
   kind: "tool_call"
   callId: string
   name: string
   arguments: JsonValue
+  /** 模型声明的调用目的，仅表达模型意图，不代表工具的实际行为。 */
+  declaredIntent?: string
   signature?: string
 }
 
@@ -89,6 +96,7 @@ export type ToolMessage = {
   name: string
   parts: Array<TextPart | ImagePart>
   isError: boolean
+  timing?: Timing
   details?: JsonValue
 }
 
@@ -192,12 +200,28 @@ function modelReference(value: unknown): ModelReference {
   }
 }
 
+function timing(value: unknown, label: string): Timing {
+  const source = object(value, label)
+  exact(source, ["startedAt", "finishedAt"], label)
+  const startedAt = finiteNumber(source.startedAt, `${label}.startedAt`)
+  const finishedAt = finiteNumber(source.finishedAt, `${label}.finishedAt`)
+  if (!Number.isSafeInteger(startedAt) || !Number.isSafeInteger(finishedAt))
+    throw new Error(`${label} 必须使用安全整数毫秒时间戳`)
+  if (finishedAt < startedAt) throw new Error(`${label}.finishedAt 不能早于 startedAt`)
+  return { startedAt, finishedAt }
+}
+
+function optionalTiming(value: unknown, label: string): Timing | undefined {
+  return value === undefined ? undefined : timing(value, label)
+}
+
 function inputPart(value: unknown): TextPart | ImagePart {
   const source = object(value, "输入内容块")
   const kind = string(source.kind, "输入内容块.kind")
   if (kind === "text") {
-    exact(source, ["kind", "text"], "文字内容块")
-    return { kind, text: string(source.text, "文字内容块.text") }
+    exact(source, ["kind", "text", "timing"], "文字内容块")
+    const partTiming = optionalTiming(source.timing, "文字内容块.timing")
+    return { kind, text: string(source.text, "文字内容块.text"), ...(partTiming ? { timing: partTiming } : {}) }
   }
   if (kind === "image") {
     exact(source, ["kind", "mimeType", "data"], "图片内容块")
@@ -215,18 +239,28 @@ function assistantPart(value: unknown): TextPart | ThinkingPart | ToolCallPart {
   const kind = string(source.kind, "助手内容块.kind")
   if (kind === "text") return inputPart(source) as TextPart
   if (kind === "thinking") {
-    exact(source, ["kind", "text", "signature"], "思考内容块")
+    exact(source, ["kind", "text", "signature", "timing"], "思考内容块")
     const signature = optionalString(source.signature, "思考内容块.signature")
-    return { kind, text: string(source.text, "思考内容块.text"), ...(signature === undefined ? {} : { signature }) }
+    const partTiming = optionalTiming(source.timing, "思考内容块.timing")
+    return {
+      kind,
+      text: string(source.text, "思考内容块.text"),
+      ...(signature === undefined ? {} : { signature }),
+      ...(partTiming ? { timing: partTiming } : {}),
+    }
   }
   if (kind === "tool_call") {
-    exact(source, ["kind", "callId", "name", "arguments", "signature"], "工具调用内容块")
+    exact(source, ["kind", "callId", "name", "arguments", "declaredIntent", "signature"], "工具调用内容块")
     const signature = optionalString(source.signature, "工具调用内容块.signature")
+    const declaredIntent = optionalString(source.declaredIntent, "工具调用内容块.declaredIntent")
+    if (declaredIntent !== undefined && (declaredIntent.length === 0 || Array.from(declaredIntent).length > 50))
+      throw new Error("工具调用内容块.declaredIntent 必须为 1 至 50 个字符")
     return {
       kind,
       callId: string(source.callId, "工具调用内容块.callId"),
       name: string(source.name, "工具调用内容块.name"),
       arguments: jsonValue(source.arguments, "工具调用内容块.arguments"),
+      ...(declaredIntent === undefined ? {} : { declaredIntent }),
       ...(signature === undefined ? {} : { signature }),
     }
   }
@@ -288,13 +322,15 @@ function message(value: unknown): AssistantMessage | ToolMessage {
     }
   }
   if (role === "tool") {
-    exact(source, ["role", "callId", "name", "parts", "isError", "details"], "工具消息")
+    exact(source, ["role", "callId", "name", "parts", "isError", "timing", "details"], "工具消息")
+    const messageTiming = optionalTiming(source.timing, "工具消息.timing")
     return {
       role,
       callId: string(source.callId, "message.callId"),
       name: string(source.name, "message.name"),
       parts: source.parts.map(inputPart),
       isError: boolean(source.isError, "message.isError"),
+      ...(messageTiming ? { timing: messageTiming } : {}),
       ...(source.details === undefined ? {} : { details: jsonValue(source.details, "message.details") }),
     }
   }

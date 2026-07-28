@@ -1,5 +1,16 @@
-import { BoxRenderable, type CliRenderer, CliRenderEvents, type RenderContext, TextRenderable } from "@opentui/core"
-import type { ToolCallPart, ToolMessage } from "../core/session-format.ts"
+import {
+  BoxRenderable,
+  type CliRenderer,
+  CliRenderEvents,
+  createTextAttributes,
+  parseColor,
+  type RenderContext,
+  StyledText,
+  type TextChunk,
+  TextRenderable,
+} from "@opentui/core"
+import type { FoldPreferences } from "../core/app-preferences-store.ts"
+import type { Timing, ToolCallPart, ToolMessage } from "../core/session-format.ts"
 import type { CoreSnapshot } from "../core/types.ts"
 import { systemColors } from "./theme.ts"
 
@@ -9,39 +20,35 @@ export type ChatView = {
   status: TextRenderable
   destroy(): void
   update(snapshot: CoreSnapshot): void
-  getCollapseItems(): ChatCollapseItem[]
-  toggleCollapse(id: string): boolean
-  collapseAll(collapsed: boolean, kind?: ChatCollapseItem["kind"]): boolean
-}
-
-export type ChatCollapseItem = {
-  id: string
-  kind: "assistant" | "tool_group"
-  name: string
-  description: string
-  collapsed: boolean
+  getFoldPreferences(): FoldPreferences
+  setFoldPreferences(fold: FoldPreferences): void
 }
 
 type ToolDisplay = {
   id: string
-  call: string
-  result: string
+  name: string
+  intent?: string
+  input: string
+  output: string
+  timeoutSeconds?: number
+  isError: boolean
+  waiting: boolean
+  timing?: Timing
 }
 
 type DisplayBlock =
-  | { kind: "plain"; id: string; content: string }
-  | { kind: "user"; id: string; content: string }
-  | { kind: "assistant"; id: string; content: string }
-  | { kind: "tool"; id: string; tool: ToolDisplay }
-  | { kind: "tool_group"; id: string; tools: ToolDisplay[] }
-
-type CollapseTarget = Omit<ChatCollapseItem, "collapsed">
+  | { kind: "plain"; id: string; turnId: string; content: string }
+  | { kind: "user"; id: string; turnId: string; content: string }
+  | { kind: "assistant"; id: string; turnId: string; content: string; timing?: Timing }
+  | { kind: "thinking"; id: string; turnId: string; content: string; timing?: Timing }
+  | { kind: "tool_group"; id: string; turnId: string; tools: ToolDisplay[]; timing?: Timing }
 
 const blockColors = {
   plain: "#252936",
   user: "#66551a",
   assistant: "#1f2937",
-  tool: "#34373d",
+  thinking: "#252936",
+  tool: "#292c31",
   toolGroup: "#292c31",
 } as const
 
@@ -55,10 +62,6 @@ function oneLine(value: string): string {
   return value.replace(/\r?\n/g, " ↵ ").replace(/\s+/g, " ").trim()
 }
 
-function collapsedAssistantText(content: string): string {
-  return `▶ 助手 ${oneLine(content).slice(0, 80)}...`
-}
-
 function jsonPreview(value: unknown): string {
   try {
     const serialized = JSON.stringify(value) ?? String(value)
@@ -68,28 +71,61 @@ function jsonPreview(value: unknown): string {
   }
 }
 
-function toolCallText(name: string, argumentsValue: unknown): string {
+function declaredIntentText(argumentsValue: unknown): string {
+  const intent = objectValue(argumentsValue)?.declaredIntent
+  return typeof intent === "string" && intent.trim() ? intent.trim() : ""
+}
+
+function toolInputText(name: string, argumentsValue: unknown): string {
   const argumentsObject = objectValue(argumentsValue)
-  if (name === "bash" && typeof argumentsObject?.command === "string") {
-    const timeout = typeof argumentsObject.timeout === "number" ? `（超时 ${argumentsObject.timeout} 秒）` : ""
-    return `[bash] ${oneLine(argumentsObject.command)}${timeout}`
-  }
+  if (name === "bash" && typeof argumentsObject?.command === "string") return oneLine(argumentsObject.command)
   if (name === "read" && typeof argumentsObject?.path === "string") {
     const options = [
       typeof argumentsObject.offset === "number" ? `第 ${argumentsObject.offset} 行起` : "",
       typeof argumentsObject.limit === "number" ? `最多 ${argumentsObject.limit} 行` : "",
     ].filter(Boolean)
-    return `[read] ${oneLine(argumentsObject.path)}${options.length > 0 ? `（${options.join("，")}）` : ""}`
+    return `${oneLine(argumentsObject.path)}${options.length > 0 ? ` · ${options.join(" · ")}` : ""}`
   }
   if (name === "edit" && typeof argumentsObject?.path === "string") {
     const editCount = Array.isArray(argumentsObject.edits) ? argumentsObject.edits.length : 0
-    return `[edit] ${oneLine(argumentsObject.path)}（${editCount} 处修改）`
+    return `${oneLine(argumentsObject.path)} · ${editCount} 处修改`
   }
   if (name === "write" && typeof argumentsObject?.path === "string") {
     const contentLength = typeof argumentsObject.content === "string" ? argumentsObject.content.length : 0
-    return `[write] ${oneLine(argumentsObject.path)}（写入 ${contentLength} 字符）`
+    return `${oneLine(argumentsObject.path)} · 写入 ${contentLength} 字符`
   }
-  return `[${name}] ${jsonPreview(argumentsValue)}`
+  return jsonPreview(argumentsValue)
+}
+
+function toolCallText(name: string, argumentsValue: unknown): string {
+  return `[${name}] ${toolInputText(name, argumentsValue)}`
+}
+
+/** 将毫秒时长格式化为紧凑的天、时、分、秒文本。 */
+export function formatDurationText(durationMs: number): string {
+  let seconds = Math.max(0, Math.floor(durationMs / 1000))
+  const days = Math.floor(seconds / 86400)
+  seconds %= 86400
+  const hours = Math.floor(seconds / 3600)
+  seconds %= 3600
+  const minutes = Math.floor(seconds / 60)
+  seconds %= 60
+  return [days ? `${days}d` : "", hours ? `${hours}h` : "", minutes ? `${minutes}m` : "", `${seconds}s`]
+    .filter(Boolean)
+    .join(" ")
+}
+
+/** 将毫秒时间戳格式化为固定宽度的本地时间文本。 */
+export function formatTimestampText(timestamp: number): string {
+  const date = new Date(timestamp)
+  const pad = (value: number) => String(value).padStart(2, "0")
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}`
+}
+
+function timingText(timing: Timing | undefined): string {
+  return timing
+    ? `${formatDurationText(timing.finishedAt - timing.startedAt)} · ${formatTimestampText(timing.finishedAt)}`
+    : ""
 }
 
 function lastOutputLine(text: string): { lastLine: string; omitted: boolean } {
@@ -110,47 +146,52 @@ function toolMessageText(message: ToolMessage): string {
     .filter((part) => part.kind === "text")
     .map((part) => part.text)
     .join("\n")
-  return `[工具结果:${message.name}] ${outputPreview(text)}`
+  return outputPreview(text)
 }
 
 function toolDisplay(call: ToolCallPart, result: ToolMessage | undefined): ToolDisplay {
+  const argumentsObject = objectValue(call.arguments)
   return {
     id: call.callId,
-    call: toolCallText(call.name, call.arguments),
-    result: result ? toolMessageText(result) : `[等待结果:${call.name}]`,
+    name: call.name,
+    ...(call.declaredIntent ? { intent: call.declaredIntent } : {}),
+    input: toolInputText(call.name, call.arguments),
+    output: result ? toolMessageText(result) : "等待结果",
+    ...(typeof argumentsObject?.timeout === "number" ? { timeoutSeconds: argumentsObject.timeout } : {}),
+    isError: result?.isError ?? false,
+    waiting: result === undefined,
+    ...(result?.timing ? { timing: result.timing } : {}),
   }
 }
 
-function groupConsecutiveTools(blocks: DisplayBlock[]): DisplayBlock[] {
-  const grouped: DisplayBlock[] = []
-  for (let index = 0; index < blocks.length; ) {
-    const block = blocks[index] as DisplayBlock
-    if (block.kind !== "tool") {
-      grouped.push(block)
-      index += 1
+function groupTiming(tools: ToolDisplay[]): Timing | undefined {
+  const timings = tools.flatMap((tool) => (tool.timing ? [tool.timing] : []))
+  if (timings.length === 0) return undefined
+  return {
+    startedAt: Math.min(...timings.map((item) => item.startedAt)),
+    finishedAt: Math.max(...timings.map((item) => item.finishedAt)),
+  }
+}
+
+function mergeConsecutiveToolGroups(blocks: DisplayBlock[]): DisplayBlock[] {
+  const merged: DisplayBlock[] = []
+  for (const block of blocks) {
+    const previous = merged.at(-1)
+    if (block.kind !== "tool_group" || previous?.kind !== "tool_group" || previous.turnId !== block.turnId) {
+      merged.push(block)
       continue
     }
-    const tools: ToolDisplay[] = []
-    while (index < blocks.length) {
-      const next = blocks[index] as DisplayBlock
-      if (next.kind !== "tool") break
-      tools.push(next.tool)
-      index += 1
+    const tools = [...previous.tools, ...block.tools]
+    const timing = groupTiming(tools)
+    merged[merged.length - 1] = {
+      kind: "tool_group",
+      id: `tools-${tools.map((tool) => tool.id).join("-")}`,
+      turnId: block.turnId,
+      tools,
+      ...(timing ? { timing } : {}),
     }
-    if (tools.length === 1)
-      grouped.push({
-        kind: "tool",
-        id: tools[0]?.id ?? "tool",
-        tool: tools[0] as ToolDisplay,
-      })
-    else
-      grouped.push({
-        kind: "tool_group",
-        id: `tools-${tools.map((tool) => tool.id).join("-")}`,
-        tools,
-      })
   }
-  return grouped
+  return merged
 }
 
 function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
@@ -173,78 +214,70 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
         blocks.push({
           kind: item.source === "user" ? "user" : "plain",
           id: `input-${entry.turnId}-${itemIndex}`,
+          turnId: entry.turnId,
           content: item.source === "user" ? `[你] ${text}` : `[额外消息:${item.source}] ${text}`,
         })
       }
     } else if (entry.type === "message") {
       if (entry.message.role === "assistant") {
+        const tools: ToolDisplay[] = []
         for (const [partIndex, part] of entry.message.parts.entries()) {
-          if (part.kind === "text") {
+          if (part.kind === "text")
             blocks.push({
               kind: "assistant",
               id: `assistant-${entry.turnId}-${entryIndex}-${partIndex}`,
+              turnId: entry.turnId,
               content: part.text,
+              ...(part.timing ? { timing: part.timing } : {}),
             })
-          }
-          if (part.kind === "thinking") {
+          else if (part.kind === "thinking")
             blocks.push({
-              kind: "plain",
+              kind: "thinking",
               id: `thinking-${entry.turnId}-${entryIndex}-${partIndex}`,
-              content: `[思考] ${part.text}`,
+              turnId: entry.turnId,
+              content: part.text,
+              ...(part.timing ? { timing: part.timing } : {}),
             })
-          }
-          if (part.kind === "tool_call") {
-            blocks.push({
-              kind: "tool",
-              id: part.callId,
-              tool: toolDisplay(part, results.get(part.callId)),
-            })
-          }
+          else tools.push(toolDisplay(part, results.get(part.callId)))
+        }
+        if (tools.length > 0) {
+          const timing = groupTiming(tools)
+          blocks.push({
+            kind: "tool_group",
+            id: `tools-${tools.map((tool) => tool.id).join("-")}`,
+            turnId: entry.turnId,
+            tools,
+            ...(timing ? { timing } : {}),
+          })
         }
       } else if (!calls.has(entry.message.callId)) {
-        blocks.push({
-          kind: "tool",
+        const tool: ToolDisplay = {
           id: entry.message.callId,
-          tool: {
-            id: entry.message.callId,
-            call: `[未知工具调用:${entry.message.name}]`,
-            result: toolMessageText(entry.message),
-          },
+          name: entry.message.name,
+          input: "未知调用参数",
+          output: toolMessageText(entry.message),
+          isError: entry.message.isError,
+          waiting: false,
+          ...(entry.message.timing ? { timing: entry.message.timing } : {}),
+        }
+        blocks.push({
+          kind: "tool_group",
+          id: `tools-${entry.message.callId}`,
+          turnId: entry.turnId,
+          tools: [tool],
+          ...(tool.timing ? { timing: tool.timing } : {}),
         })
       }
     } else if (entry.outcome !== "completed") {
       blocks.push({
         kind: "plain",
         id: `outcome-${entry.turnId}`,
+        turnId: entry.turnId,
         content: entry.outcome === "aborted" ? "[已中止]" : "[执行失败]",
       })
     }
   }
-  return groupConsecutiveTools(blocks)
-}
-
-function collapseTargets(blocks: DisplayBlock[]): CollapseTarget[] {
-  const targets: CollapseTarget[] = []
-  for (const block of blocks) {
-    if (block.kind !== "assistant" && block.kind !== "tool_group") continue
-    if (block.kind === "assistant") {
-      targets.push({
-        id: block.id,
-        kind: block.kind,
-        name: "助手",
-        description: oneLine(block.content).slice(0, 80),
-      })
-      continue
-    }
-    const names = block.tools.map((tool) => tool.call.match(/^\[([^\]]+)]/)?.[1] ?? "工具")
-    targets.push({
-      id: block.id,
-      kind: block.kind,
-      name: `工具：${names.join("、")}`,
-      description: `${block.tools.length} 个连续工具调用`,
-    })
-  }
-  return targets
+  return mergeConsecutiveToolGroups(blocks)
 }
 
 function makeBox(context: RenderContext, id: string, color: string, marginBottom = 0): BoxRenderable {
@@ -262,87 +295,133 @@ function makeBox(context: RenderContext, id: string, color: string, marginBottom
   })
 }
 
-function makeText(context: RenderContext, id: string, content: string, color?: string): TextRenderable {
+function makeText(context: RenderContext, id: string, content: string | StyledText, color: string): TextRenderable {
   return new TextRenderable(context, {
     id,
-    width: color && color !== blockColors.tool ? "auto" : "100%",
+    width: color === blockColors.tool ? "100%" : "auto",
     height: "auto",
     wrapMode: color === blockColors.tool ? "none" : "word",
     truncate: color === blockColors.tool,
-    ...(color ? { bg: color } : {}),
+    bg: color,
     content,
   })
 }
 
-function createToolBox(context: RenderContext, id: string, tool: ToolDisplay, marginBottom = 0): BoxRenderable {
-  const root = makeBox(context, id, blockColors.tool, marginBottom)
-  root.add(makeText(context, `${id}-text`, `${tool.call}\n${tool.result}`, blockColors.tool))
-  return root
+function styledToolText(tool: ToolDisplay, detailsExpanded: boolean): StyledText {
+  const chunks: TextChunk[] = []
+  const push = (text: string, color: string, attributes: { bold?: boolean; italic?: boolean; dim?: boolean } = {}) => {
+    chunks.push({
+      __isChunk: true,
+      text,
+      fg: parseColor(color),
+      attributes: createTextAttributes(attributes),
+    })
+  }
+  push(`[${tool.name}]`, systemColors.secondary, { bold: true })
+  push(tool.intent ? `  ${tool.intent}` : "  未提供调用目的", systemColors.header, { bold: !!tool.intent })
+  const metadata = [
+    tool.timeoutSeconds === undefined ? "" : `限时 ${formatDurationText(tool.timeoutSeconds * 1000)}`,
+    tool.timing ? timingText(tool.timing) : "",
+  ].filter(Boolean)
+  if (metadata.length > 0) push(`  ·  ${metadata.join(" · ")}`, systemColors.secondary, { dim: true })
+  if (detailsExpanded) {
+    push("\n  › ", systemColors.secondary, { dim: true })
+    push(tool.input, systemColors.secondary, { dim: true, italic: true })
+    push(
+      `\n  ${tool.waiting ? "…" : tool.isError ? "×" : "✓"} `,
+      tool.isError ? systemColors.statusError : systemColors.secondary,
+      {
+        dim: !tool.isError,
+      },
+    )
+    push(tool.output, tool.isError ? systemColors.statusError : systemColors.secondary, {
+      dim: !tool.isError,
+      italic: true,
+    })
+  }
+  return new StyledText(chunks)
+}
+
+function expanded(limit: number, turnAge: number): boolean {
+  return limit === 0 || turnAge < limit
 }
 
 function createHistoryBlock(
   context: RenderContext,
   index: number,
   block: DisplayBlock,
-  collapsedState: Map<string, boolean>,
-): TextRenderable | BoxRenderable {
+  fold: FoldPreferences,
+  turnAge: number,
+): BoxRenderable {
   const rootId = `history-entry-${index}`
   if (block.kind === "plain") {
-    const root = makeBox(context, rootId, blockColors.plain, 0)
+    const root = makeBox(context, rootId, blockColors.plain)
     root.add(makeText(context, `${rootId}-text`, block.content, blockColors.plain))
     return root
   }
   if (block.kind === "user") {
     const root = makeBox(context, rootId, blockColors.user)
-    root.add(makeText(context, `${rootId}-text`, block.content, blockColors.user))
+    const content = expanded(fold.userTurns, turnAge) ? block.content : `▶ 你 ${oneLine(block.content).slice(4, 84)}...`
+    root.add(makeText(context, `${rootId}-text`, content, blockColors.user))
     return root
   }
-  if (block.kind === "assistant") {
-    const root = makeBox(context, rootId, blockColors.assistant)
-    const content = collapsedState.get(block.id) ? collapsedAssistantText(block.content) : `▼ 助手\n${block.content}`
-    root.add(makeText(context, `${rootId}-text`, content, blockColors.assistant))
+  if (block.kind === "assistant" || block.kind === "thinking") {
+    const isThinking = block.kind === "thinking"
+    const color = isThinking ? blockColors.thinking : blockColors.assistant
+    const isExpanded = expanded(isThinking ? fold.thinkingTurns : fold.assistantTurns, turnAge)
+    const label = isThinking ? "思考" : "助手"
+    const meta = timingText(block.timing)
+    const content = isExpanded
+      ? `▼ ${label}${meta ? `  ${meta}` : ""}\n${block.content}`
+      : `▶ ${label} ${oneLine(block.content).slice(0, 80)}...${meta ? `  ${meta}` : ""}`
+    const root = makeBox(context, rootId, color)
+    root.add(makeText(context, `${rootId}-text`, content, color))
     return root
   }
-  if (block.kind === "tool") return createToolBox(context, rootId, block.tool)
 
   const root = makeBox(context, rootId, blockColors.toolGroup)
-  const names = block.tools.map((tool) => tool.call.match(/^\[([^\]]+)]/)?.[1] ?? "工具").join("、")
-  const collapsed = collapsedState.get(block.id) ?? true
+  const groupExpanded = expanded(fold.toolGroupTurns, turnAge)
+  const detailsExpanded = groupExpanded && expanded(fold.toolDetailTurns, turnAge)
+  const names = block.tools.map((tool) => tool.name).join(" / ")
+  const meta = timingText(block.timing)
   root.add(
     makeText(
       context,
       `${rootId}-header`,
-      `${collapsed ? "▶" : "▼"} ${block.tools.length} 个工具调用：${names}`,
+      `${groupExpanded ? "▼" : "▶"} ${block.tools.length} 个工具调用：${names}${meta ? `  ${meta}` : ""}`,
       blockColors.toolGroup,
     ),
   )
-  if (!collapsed) {
-    const content = new BoxRenderable(context, {
-      id: `${rootId}-content`,
+  if (!groupExpanded) return root
+
+  for (const [toolIndex, tool] of block.tools.entries()) {
+    const toolRoot = new BoxRenderable(context, {
+      id: `${rootId}-tool-${toolIndex}`,
       width: "100%",
       height: "auto",
       flexDirection: "column",
-      paddingTop: 1,
-      backgroundColor: blockColors.toolGroup,
+      paddingLeft: 1,
+      paddingRight: 1,
+      backgroundColor: blockColors.tool,
     })
-    for (const [toolIndex, tool] of block.tools.entries()) {
-      content.add(
-        createToolBox(context, `${rootId}-tool-${toolIndex}`, tool, toolIndex === block.tools.length - 1 ? 0 : 1),
-      )
-    }
-    root.add(content)
+    toolRoot.add(
+      makeText(context, `${rootId}-tool-${toolIndex}-text`, styledToolText(tool, detailsExpanded), blockColors.tool),
+    )
+    root.add(toolRoot)
   }
   return root
 }
 
 function liveText(snapshot: CoreSnapshot): string {
   const metrics = snapshot.responseMetrics
-  const metricText = metrics ? ` | 耗时 ${metrics.elapsedSeconds}s · 生成 ${metrics.outputTokens} tokens` : ""
-
+  const metricText = metrics
+    ? ` | 耗时 ${formatDurationText(metrics.elapsedSeconds * 1000)} · 生成 ${metrics.outputTokens} tokens`
+    : ""
   const active = snapshot.activeTools.at(-1)
   if (active) {
     const output = active.outputPreview ? outputPreview(active.outputPreview) : "等待输出"
-    return `${toolCallText(active.name, active.arguments)} | ${active.isFinished ? "完成" : "运行中"}：${output}${metricText}`
+    const intent = declaredIntentText(active.arguments)
+    return `${toolCallText(active.name, active.arguments)}${intent ? ` | 目的：${intent}` : ""} | ${active.isFinished ? "完成" : "运行中"}：${output}${metricText}`
   }
   if (snapshot.streamingText) return `[助手流式] ${outputPreview(snapshot.streamingText)}${metricText}`
   if (snapshot.streamingThinking) return `[思考流式] ${outputPreview(snapshot.streamingThinking)}${metricText}`
@@ -367,7 +446,6 @@ export function createChatView(renderer: CliRenderer): ChatView {
     fg: systemColors.header,
     content: "AizenAssistant",
   })
-
   const live = new TextRenderable(renderer, {
     id: "live",
     width: "100%",
@@ -377,50 +455,39 @@ export function createChatView(renderer: CliRenderer): ChatView {
     fg: systemColors.live,
     content: "",
   })
-
-  const status = new TextRenderable(renderer, {
-    id: "status",
-    height: 1,
-    fg: systemColors.statusIdle,
-    content: "空闲",
-  })
-
+  const status = new TextRenderable(renderer, { id: "status", height: 1, fg: systemColors.statusIdle, content: "空闲" })
   renderer.root.add(header)
   renderer.root.add(live)
   renderer.root.add(status)
 
-  const collapsedState = new Map<string, boolean>()
   let blocks: DisplayBlock[] = []
-  let targets: CollapseTarget[] = []
+  let fold: FoldPreferences = {
+    userTurns: 0,
+    assistantTurns: 3,
+    thinkingTurns: 1,
+    toolGroupTurns: 1,
+    toolDetailTurns: 1,
+  }
   let committedFingerprints: string[] = []
   let latestSnapshot: CoreSnapshot | undefined
   let notice = ""
   let resizeTimer: ReturnType<typeof setTimeout> | undefined
 
-  const prepareCollapseState = () => {
-    targets = collapseTargets(blocks)
-    for (const target of targets) {
-      if (!collapsedState.has(target.id)) collapsedState.set(target.id, target.kind === "tool_group")
-    }
+  const turnAges = () => {
+    const ids = [...new Set(blocks.map((block) => block.turnId))]
+    return new Map(ids.map((id, index) => [id, ids.length - index - 1]))
   }
 
-  const renderedFingerprints = () => {
-    return blocks.map((block) =>
-      JSON.stringify({
-        block,
-        collapsed: collapsedState.get(block.id),
-      }),
-    )
-  }
+  const renderedFingerprints = () => blocks.map((block) => JSON.stringify({ block, fold }))
 
   const commitBlocks = (startIndex: number) => {
     if (startIndex >= blocks.length) return
+    const ages = turnAges()
     const surface = renderer.createScrollbackSurface()
     try {
       for (let index = startIndex; index < blocks.length; index += 1) {
-        surface.root.add(
-          createHistoryBlock(surface.renderContext, index, blocks[index] as DisplayBlock, collapsedState),
-        )
+        const block = blocks[index] as DisplayBlock
+        surface.root.add(createHistoryBlock(surface.renderContext, index, block, fold, ages.get(block.turnId) ?? 0))
       }
       surface.render()
       surface.commitRows(0, surface.height)
@@ -430,7 +497,6 @@ export function createChatView(renderer: CliRenderer): ChatView {
   }
 
   const syncHistory = (forceReplay = false) => {
-    prepareCollapseState()
     const nextFingerprints = renderedFingerprints()
     if (
       !forceReplay &&
@@ -438,7 +504,6 @@ export function createChatView(renderer: CliRenderer): ChatView {
       nextFingerprints.every((value, index) => committedFingerprints[index] === value)
     )
       return
-
     const canAppend =
       !forceReplay &&
       nextFingerprints.length >= committedFingerprints.length &&
@@ -448,7 +513,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
       try {
         renderer.resetSplitFooterForReplay({ clearSavedLines: true })
       } catch (error) {
-        // OpenTUI 的离屏测试渲染器没有活动终端，无法执行 ANSI 清屏；仍继续提交回放快照以验证内容。
+        // OpenTUI 的离屏测试渲染器没有活动终端，无法执行 ANSI 清屏；仍继续提交回放快照。
         if (!(error instanceof Error) || error.message !== "resetSplitFooterForReplay requires an active terminal")
           throw error
       }
@@ -459,44 +524,15 @@ export function createChatView(renderer: CliRenderer): ChatView {
 
   const refreshFooter = () => {
     if (!latestSnapshot) return
-    const snapshot = latestSnapshot
-    header.content = `AizenAssistant | /fold 管理折叠`
-    live.content = liveText(snapshot)
-    status.content = notice || statusText(snapshot)
+    header.content = "AizenAssistant | /fold 折叠设置"
+    live.content = liveText(latestSnapshot)
+    status.content = notice || statusText(latestSnapshot)
     status.fg =
-      snapshot.lastError || snapshot.status === "error"
+      latestSnapshot.lastError || latestSnapshot.status === "error"
         ? systemColors.statusError
-        : snapshot.status === "idle"
+        : latestSnapshot.status === "idle"
           ? systemColors.statusIdle
           : systemColors.statusRunning
-  }
-
-  const toggleCollapse = (id: string): boolean => {
-    const target = targets.find((item) => item.id === id)
-    if (!target) {
-      notice = "找不到要切换的折叠内容"
-      refreshFooter()
-      return false
-    }
-    collapsedState.set(target.id, !(collapsedState.get(target.id) ?? false))
-    notice = `已切换${target.name}，并全量回放会话`
-    syncHistory(true)
-    refreshFooter()
-    return true
-  }
-
-  const collapseAll = (collapsed: boolean, kind?: ChatCollapseItem["kind"]): boolean => {
-    let changed = false
-    for (const target of targets) {
-      if (kind && target.kind !== kind) continue
-      if ((collapsedState.get(target.id) ?? false) === collapsed) continue
-      collapsedState.set(target.id, collapsed)
-      changed = true
-    }
-    notice = changed ? `已${collapsed ? "折叠" : "展开"}所选内容，并全量回放会话` : "折叠状态没有变化"
-    if (changed) syncHistory(true)
-    refreshFooter()
-    return changed
   }
 
   const onResize = () => {
@@ -524,17 +560,19 @@ export function createChatView(renderer: CliRenderer): ChatView {
     update(snapshot) {
       latestSnapshot = snapshot
       notice = ""
+      fold = { ...snapshot.preferences.fold }
       blocks = displayBlocks(snapshot)
       syncHistory()
       refreshFooter()
     },
-    getCollapseItems() {
-      return targets.map((target) => ({
-        ...target,
-        collapsed: collapsedState.get(target.id) ?? false,
-      }))
+    getFoldPreferences() {
+      return { ...fold }
     },
-    toggleCollapse,
-    collapseAll,
+    setFoldPreferences(next) {
+      fold = { ...next }
+      notice = "已应用折叠设置，并全量回放会话"
+      syncHistory(true)
+      refreshFooter()
+    },
   }
 }

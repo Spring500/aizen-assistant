@@ -1,5 +1,6 @@
 import type { CliRenderer } from "@opentui/core"
 import { join } from "node:path"
+import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import type {
   ConfigurableApi,
@@ -74,6 +75,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       store,
       pi: pi as PiSessionRuntime,
       modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "models.json")),
+      preferencesStore: new AppPreferencesStore(join(options.dataDirectory, "preferences.json")),
       views: new ViewStore(join(options.dataDirectory, "views.json")),
     })
   const view = createChatView(renderer)
@@ -329,38 +331,60 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   async function chooseFold() {
     beginInteraction()
     try {
+      let draft = view.getFoldPreferences()
+      const fields = [
+        { key: "userTurns", name: "用户消息" },
+        { key: "assistantTurns", name: "助手回复" },
+        { key: "thinkingTurns", name: "思考过程" },
+        { key: "toolGroupTurns", name: "工具组" },
+        { key: "toolDetailTurns", name: "工具详情" },
+      ] as const
       while (!exiting) {
-        const selected = await selectItem<
-          { type: "toggle"; id: string } | { type: "collapse_tools" } | { type: "expand_all" }
-        >(
+        const selected = await selectItem<(typeof fields)[number]["key"] | "reset" | "apply">(
           overlays,
           "fold-selector",
           [
-            {
-              name: "折叠全部工具组",
-              description: "收起所有连续工具调用",
-              value: { type: "collapse_tools" },
-            },
-            {
-              name: "全部展开",
-              description: "展开助手回复和工具组",
-              value: { type: "expand_all" },
-            },
-            ...view.getCollapseItems().map((item) => ({
-              name: `[${item.collapsed ? "折叠" : "展开"}] ${item.name}`,
-              description: item.description,
-              value: { type: "toggle" as const, id: item.id },
+            ...fields.map((field) => ({
+              name: `${field.name.padEnd(6, "　")} ${draft[field.key] === 0 ? "全部展开" : `最近 ${draft[field.key]} 轮`}`,
+              description: field.key === "toolDetailTurns" ? "不能超过工具组；0 表示全部展开" : "0 表示全部展开",
+              value: field.key,
             })),
+            { name: "恢复默认", description: "恢复内置折叠范围", value: "reset" as const },
+            { name: "应用并返回", description: "保存设置并全量回放会话", value: "apply" as const },
           ],
-          {
-            title: "管理折叠（Enter 切换，Esc 返回）",
-            signal: interactionController.signal,
-          },
+          { title: "折叠设置", signal: interactionController.signal },
         )
         if (!selected) return
-        if (selected.type === "toggle") view.toggleCollapse(selected.id)
-        else if (selected.type === "collapse_tools") view.collapseAll(true, "tool_group")
-        else view.collapseAll(false)
+        if (selected === "reset") {
+          draft = { userTurns: 0, assistantTurns: 3, thinkingTurns: 1, toolGroupTurns: 1, toolDetailTurns: 1 }
+          continue
+        }
+        if (selected === "apply") {
+          const result = await dispatchWithError({ type: "save_fold_preferences", fold: draft }, "保存折叠设置失败")
+          if (result.ok) view.setFoldPreferences(draft)
+          return
+        }
+        const value = await promptLine(overlays, `fold-${selected}`, "展开轮次（0 表示全部）：", {
+          initialValue: String(draft[selected]),
+          signal: interactionController.signal,
+        })
+        if (!/^\d+$/.test(value)) continue
+        const parsed = Number(value)
+        if (!Number.isSafeInteger(parsed)) continue
+        draft = { ...draft, [selected]: parsed }
+        if (
+          selected === "toolGroupTurns" &&
+          draft.toolGroupTurns !== 0 &&
+          (draft.toolDetailTurns === 0 || draft.toolDetailTurns > draft.toolGroupTurns)
+        )
+          draft.toolDetailTurns = draft.toolGroupTurns
+        if (
+          selected === "toolDetailTurns" &&
+          (draft.toolDetailTurns === 0
+            ? draft.toolGroupTurns !== 0
+            : draft.toolGroupTurns !== 0 && draft.toolDetailTurns > draft.toolGroupTurns)
+        )
+          draft.toolGroupTurns = draft.toolDetailTurns
       }
     } finally {
       endInteraction()
@@ -892,6 +916,24 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
   async function openSessionSettings(mode: "new" | "existing"): Promise<boolean> {
     let draft: SessionSettingsDraft = { viewId: null }
+    if (mode === "new") {
+      await dispatchWithError({ type: "load_preferences" }, "读取应用偏好失败")
+      const preferred = core.getSnapshot().preferences.newSession
+      if (preferred.model) {
+        await core.dispatch({ type: "list_models" })
+        const available = core
+          .getSnapshot()
+          .models.find(
+            (item) =>
+              item.providerId === preferred.model?.providerId &&
+              item.modelId === preferred.model.modelId &&
+              item.available,
+          )
+        if (available)
+          draft = { model: { ...available, thinkingLevel: preferred.model.thinkingLevel }, viewId: preferred.viewId }
+        else draft = { viewId: preferred.viewId }
+      } else draft = { viewId: preferred.viewId }
+    }
     if (mode === "existing") {
       const snapshot = core.getSnapshot()
       const current = snapshot.currentModel

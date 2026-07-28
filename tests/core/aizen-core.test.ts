@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import type { PiPort, PiPortEvent } from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
@@ -109,6 +110,28 @@ afterEach(async () => {
 })
 
 describe("核心编排", () => {
+  test("创建会话前先读取已有偏好并只更新默认会话配置", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
+    await preferencesStore.write({
+      version: 1,
+      newSession: { viewId: null },
+      fold: { userTurns: 2, assistantTurns: 4, thinkingTurns: 1, toolGroupTurns: 3, toolDetailTurns: 1 },
+    })
+    const core = new AizenCore({
+      cwd: "E:\\project",
+      store: new SessionStore(join(root, "sessions")),
+      pi: new FakePi(),
+      preferencesStore,
+    })
+
+    expect(await core.dispatch({ type: "create_session", model, viewId: null })).toEqual({ ok: true })
+    expect((await preferencesStore.read()).fold.assistantTurns).toBe(4)
+    expect((await preferencesStore.read()).newSession.model).toEqual(model)
+    await core.dispose()
+  })
+
   test("模型配置变更重载运行时并保护当前模型", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)

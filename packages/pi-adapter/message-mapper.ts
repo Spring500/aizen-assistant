@@ -9,8 +9,10 @@ import type {
 import type {
   AssistantMessage,
   ImagePart,
+  JsonValue,
   MessageRecord,
   TextPart,
+  Timing,
   ToolMessage,
   TurnInputItem,
 } from "../core/session-format.ts"
@@ -92,7 +94,10 @@ export function coreMessageToPi(
         type: "toolCall" as const,
         id: part.callId,
         name: part.name,
-        arguments: part.arguments as Record<string, unknown>,
+        arguments: {
+          ...(part.arguments as Record<string, unknown>),
+          ...(part.declaredIntent ? { declaredIntent: part.declaredIntent } : {}),
+        },
         ...(part.signature ? { thoughtSignature: part.signature } : {}),
       }
     }),
@@ -112,24 +117,45 @@ export function coreMessageToPi(
   }
 }
 
-export function piMessageToCore(message: AgentMessage): MessageRecord["message"] {
+export type MessageTimingMetadata = {
+  content?: Map<number, Timing>
+  tools?: Map<string, Timing>
+}
+
+function toolArguments(argumentsValue: Record<string, unknown>): {
+  arguments: JsonValue
+  declaredIntent?: string
+} {
+  const { declaredIntent, ...actualArguments } = argumentsValue
+  return {
+    arguments: actualArguments as JsonValue,
+    ...(typeof declaredIntent === "string" && declaredIntent.trim() ? { declaredIntent: declaredIntent.trim() } : {}),
+  }
+}
+
+export function piMessageToCore(message: AgentMessage, timing: MessageTimingMetadata = {}): MessageRecord["message"] {
   if (message.role === "assistant") {
     const result: AssistantMessage = {
       role: "assistant",
-      parts: message.content.map((part) => {
-        if (part.type === "text") return { kind: "text" as const, text: part.text }
+      parts: message.content.map((part, index) => {
+        const partTiming = timing.content?.get(index)
+        if (part.type === "text")
+          return { kind: "text" as const, text: part.text, ...(partTiming ? { timing: partTiming } : {}) }
         if (part.type === "thinking") {
           return {
             kind: "thinking" as const,
             text: part.thinking,
             ...(part.thinkingSignature ? { signature: part.thinkingSignature } : {}),
+            ...(partTiming ? { timing: partTiming } : {}),
           }
         }
+        const mappedArguments = toolArguments(part.arguments)
         return {
           kind: "tool_call" as const,
           callId: part.id,
           name: part.name,
-          arguments: part.arguments,
+          arguments: mappedArguments.arguments,
+          ...(mappedArguments.declaredIntent ? { declaredIntent: mappedArguments.declaredIntent } : {}),
           ...(part.thoughtSignature ? { signature: part.thoughtSignature } : {}),
         }
       }),
@@ -153,12 +179,14 @@ export function piMessageToCore(message: AgentMessage): MessageRecord["message"]
     return result
   }
   if (message.role === "toolResult") {
+    const messageTiming = timing.tools?.get(message.toolCallId)
     const result: ToolMessage = {
       role: "tool",
       callId: message.toolCallId,
       name: message.toolName,
       parts: message.content.map(piPartToCore),
       isError: message.isError,
+      ...(messageTiming ? { timing: messageTiming } : {}),
       ...(message.details === undefined ? {} : { details: message.details }),
     }
     return result

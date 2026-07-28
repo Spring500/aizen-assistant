@@ -5,12 +5,18 @@ import type { Api, AuthPrompt, Model } from "@earendil-works/pi-ai"
 import {
   type AgentSession,
   createAgentSession,
+  createBashTool,
+  createEditTool,
+  createReadTool,
+  createWriteTool,
   DefaultResourceLoader,
   ModelRuntime,
   type ResourceLoader,
   SessionManager,
   SettingsManager,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
+import { Type } from "typebox"
 import type {
   AuthProviderOption,
   ModelOption,
@@ -119,6 +125,27 @@ function toolResultText(result: unknown): string {
     .join("\n")
 }
 
+function auditedTools(cwd: string): ToolDefinition[] {
+  const intent = Type.Object({
+    declaredIntent: Type.String({
+      minLength: 1,
+      maxLength: 50,
+      description: "用不超过 50 个字符的一句话说明本次工具调用的目的，供用户阅读和审计",
+    }),
+  })
+  return [createReadTool(cwd), createBashTool(cwd), createEditTool(cwd), createWriteTool(cwd)].map((tool) => ({
+    name: tool.name,
+    label: tool.label,
+    description: tool.description,
+    parameters: Type.Intersect([tool.parameters, intent]),
+    ...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
+    async execute(callId, params, signal, onUpdate) {
+      const { declaredIntent: _declaredIntent, ...actualParams } = params as Record<string, unknown>
+      return tool.execute(callId, actualParams as never, signal, onUpdate)
+    },
+  }))
+}
+
 export class PiSessionRuntime implements PiPort {
   readonly #modelRuntime: ModelRuntime
   readonly #listeners = new Set<(event: PiPortEvent) => void>()
@@ -132,6 +159,10 @@ export class PiSessionRuntime implements PiPort {
   #viewLoader: MutableViewLoader | undefined
   #settingsManager: SettingsManager | undefined
   #cwd: string | undefined
+  #contentStarts = new Map<number, number>()
+  #contentTimings = new Map<number, { startedAt: number; finishedAt: number }>()
+  #toolStarts = new Map<string, number>()
+  #toolTimings = new Map<string, { startedAt: number; finishedAt: number }>()
 
   private constructor(modelRuntime: ModelRuntime) {
     this.#modelRuntime = modelRuntime
@@ -171,12 +202,25 @@ export class PiSessionRuntime implements PiPort {
       model,
       thinkingLevel: asThinkingLevel(input.model.thinkingLevel),
       tools: ["read", "bash", "edit", "write"],
+      customTools: auditedTools(input.cwd),
       resourceLoader,
       sessionManager,
       settingsManager,
     })
     this.#session = session
     this.#unsubscribeAgent = session.agent.subscribe((event) => {
+      if (event.type === "message_update") {
+        const update = event.assistantMessageEvent
+        if (update.type === "text_start" || update.type === "thinking_start") {
+          this.#contentStarts.set(update.contentIndex, Date.now())
+        } else if (update.type === "text_end" || update.type === "thinking_end") {
+          const finishedAt = Date.now()
+          this.#contentTimings.set(update.contentIndex, {
+            startedAt: this.#contentStarts.get(update.contentIndex) ?? finishedAt,
+            finishedAt,
+          })
+        }
+      }
       if (event.type !== "message_end" || (event.message.role !== "assistant" && event.message.role !== "toolResult"))
         return
       const entries = session.sessionManager.getEntries()
@@ -184,7 +228,11 @@ export class PiSessionRuntime implements PiPort {
       if (entry?.type !== "message" || entry.message !== event.message) throw new Error("pi 没有保存已完成消息")
       const runtimeRef = this.#entryRuntimeRefs.get(entry.id) ?? entry.id
       this.#entryRuntimeRefs.set(entry.id, runtimeRef)
-      this.#emit({ type: "message", runtimeRef, record: piMessageToCore(event.message) })
+      this.#emit({
+        type: "message",
+        runtimeRef,
+        record: piMessageToCore(event.message, { content: this.#contentTimings, tools: this.#toolTimings }),
+      })
     })
     this.#unsubscribe = session.subscribe((event) => {
       if (event.type === "message_update") {
@@ -205,6 +253,7 @@ export class PiSessionRuntime implements PiPort {
           contextTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
         })
       } else if (event.type === "tool_execution_start") {
+        this.#toolStarts.set(event.toolCallId, Date.now())
         this.#emit({ type: "tool_started", callId: event.toolCallId, name: event.toolName, arguments: event.args })
       } else if (event.type === "tool_execution_update") {
         this.#emit({
@@ -214,6 +263,11 @@ export class PiSessionRuntime implements PiPort {
           output: toolResultText(event.partialResult),
         })
       } else if (event.type === "tool_execution_end") {
+        const finishedAt = Date.now()
+        this.#toolTimings.set(event.toolCallId, {
+          startedAt: this.#toolStarts.get(event.toolCallId) ?? finishedAt,
+          finishedAt,
+        })
         this.#emit({ type: "tool_finished", callId: event.toolCallId, name: event.toolName, isError: event.isError })
       } else if (event.type === "agent_settled") {
         this.#emit({ type: "settled" })
@@ -263,6 +317,10 @@ export class PiSessionRuntime implements PiPort {
   async prompt(input: PiPromptInput): Promise<void> {
     const session = this.#requireSession()
     if (!session.isIdle) throw new Error("当前会话仍在运行")
+    this.#contentStarts.clear()
+    this.#contentTimings.clear()
+    this.#toolStarts.clear()
+    this.#toolTimings.clear()
     const mapped = turnInputToPi(input.items, Date.now())
     const allMessages = mapped.map((item) => item.message)
     const persistentMessages = mapped.filter((item) => item.persistent).map((item) => item.message)
@@ -412,6 +470,10 @@ export class PiSessionRuntime implements PiPort {
     this.#viewLoader = undefined
     this.#settingsManager = undefined
     this.#cwd = undefined
+    this.#contentStarts.clear()
+    this.#contentTimings.clear()
+    this.#toolStarts.clear()
+    this.#toolTimings.clear()
   }
 
   #registerEntry(recordId: string, entryId: string): void {

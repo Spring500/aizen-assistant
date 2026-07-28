@@ -2,6 +2,7 @@ import { rm } from "node:fs/promises"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { runInteractiveApp } from "../../apps/tui/interactive-app.ts"
+import { defaultAppPreferences } from "../../packages/core/app-preferences-store.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
@@ -26,6 +27,7 @@ class ThrowingCreateCore implements CorePort {
     status: "idle",
     sessions: [],
     models: [model],
+    preferences: structuredClone(defaultAppPreferences),
     views: [],
     authProviders: [{ id: "anthropic", name: "Anthropic", configured: true, supportsApiKey: true }],
     transcript: [],
@@ -74,6 +76,31 @@ async function press(setup: Awaited<ReturnType<typeof createTestRenderer>>, sequ
   setup.renderer.keyInput.emit("keypress", key(sequence))
   await Bun.sleep(10)
   await setup.renderOnce()
+}
+
+async function waitForCondition(condition: () => boolean, description: string, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (condition()) return
+    await Bun.sleep(10)
+  }
+  throw new Error(`等待状态超时：${description}`)
+}
+
+async function waitForText(
+  setup: Awaited<ReturnType<typeof createTestRenderer>>,
+  expected: string,
+  timeoutMs = 1000,
+): Promise<string> {
+  const deadline = Date.now() + timeoutMs
+  let frame = ""
+  while (Date.now() < deadline) {
+    await setup.renderOnce()
+    frame = setup.captureCharFrame()
+    if (frame.includes(expected)) return frame
+    await Bun.sleep(10)
+  }
+  throw new Error(`等待界面内容超时：${JSON.stringify(expected)}\n${frame}`)
 }
 
 const pressEnter = (setup: Awaited<ReturnType<typeof createTestRenderer>>) => press(setup, "\r")
@@ -130,20 +157,17 @@ async function noViews(): Promise<void> {
   })
   const running = runInteractiveApp({ cwd: root, dataDirectory: root, testing: { renderer: setup.renderer, core } })
   try {
-    await Bun.sleep(20)
-    await setup.renderOnce()
-    assertIncludes(setup.captureCharFrame(), "会话设置 · 新建会话")
+    await waitForText(setup, "会话设置 · 新建会话")
     await pressEnter(setup)
-    assertIncludes(setup.captureCharFrame(), "选择供应商")
+    await waitForText(setup, "选择供应商")
     await pressEnter(setup)
-    assertIncludes(setup.captureCharFrame(), "选择模型")
+    await waitForText(setup, "选择模型")
     await pressEnter(setup)
-    assertIncludes(setup.captureCharFrame(), "会话设置 · 新建会话")
+    await waitForText(setup, "会话设置 · 新建会话")
     await pressDown(setup, 4)
     await pressEnter(setup)
-    await Bun.sleep(30)
+    await waitForCondition(() => !!core.getSnapshot().currentSessionId, "创建会话")
     await setup.renderOnce()
-    if (!core.getSnapshot().currentSessionId) throw new Error("未创建会话")
     if (core.getSnapshot().currentViewId !== null) throw new Error("无视图没有生效")
     assertExcludes(setup.captureCharFrame(), "创建会话失败")
   } finally {
