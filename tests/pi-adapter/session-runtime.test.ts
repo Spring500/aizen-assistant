@@ -210,7 +210,10 @@ describe("pi 内存会话", () => {
     try {
       runtime.setModelBaseUrl(model.providerId, model.modelId, `http://localhost:${server.port}`)
       await runtime.create({ cwd: directory, model, view: { viewId: "test", directory } })
-      const messageEvents: Array<{ runtimeRef: string }> = []
+      const messageEvents: Array<{
+        runtimeRef: string
+        record: { role: string; parts?: Array<{ kind: string; timing?: { startedAt: number; finishedAt: number } }> }
+      }> = []
       runtime.subscribe((event) => {
         if (event.type === "message") messageEvents.push(event)
       })
@@ -224,6 +227,10 @@ describe("pi 内存会话", () => {
       const mappings = runtime.inspectEntryMappings()
       expect(mappings.some((item) => item.runtimeRef === "turn-record")).toBe(true)
       expect(messageEvents).toHaveLength(1)
+      expect(messageEvents[0]?.record.parts?.[0]?.timing).toEqual({
+        startedAt: expect.any(Number),
+        finishedAt: expect.any(Number),
+      })
       expect(mappings.some((item) => item.runtimeRef === messageEvents[0]?.runtimeRef)).toBe(true)
     } finally {
       server.stop(true)
