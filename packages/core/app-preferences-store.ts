@@ -63,7 +63,8 @@ export function parseAppPreferences(value: unknown): AppPreferences {
   if (source.version !== 1) throw new Error(`不支持的 preferences.json 版本：${String(source.version)}`)
   const newSession = object(source.newSession, "newSession")
   exact(newSession, ["model", "viewId"], "newSession")
-  if (newSession.viewId !== null && typeof newSession.viewId !== "string") throw new Error("newSession.viewId 必须是字符串或 null")
+  if (newSession.viewId !== null && typeof newSession.viewId !== "string")
+    throw new Error("newSession.viewId 必须是字符串或 null")
   const fold = object(source.fold, "fold")
   exact(fold, ["userTurns", "assistantTurns", "thinkingTurns", "toolGroupTurns", "toolDetailTurns"], "fold")
   const parsedFold: FoldPreferences = {

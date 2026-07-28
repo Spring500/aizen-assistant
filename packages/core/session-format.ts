@@ -205,7 +205,8 @@ function timing(value: unknown, label: string): Timing {
   exact(source, ["startedAt", "finishedAt"], label)
   const startedAt = finiteNumber(source.startedAt, `${label}.startedAt`)
   const finishedAt = finiteNumber(source.finishedAt, `${label}.finishedAt`)
-  if (!Number.isSafeInteger(startedAt) || !Number.isSafeInteger(finishedAt)) throw new Error(`${label} 必须使用安全整数毫秒时间戳`)
+  if (!Number.isSafeInteger(startedAt) || !Number.isSafeInteger(finishedAt))
+    throw new Error(`${label} 必须使用安全整数毫秒时间戳`)
   if (finishedAt < startedAt) throw new Error(`${label}.finishedAt 不能早于 startedAt`)
   return { startedAt, finishedAt }
 }

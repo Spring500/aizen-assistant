@@ -317,7 +317,12 @@ function createHistoryBlock(
       backgroundColor: blockColors.toolGroup,
     })
     for (const [toolIndex, tool] of block.tools.entries()) {
-      const toolRoot = makeBox(context, `${rootId}-tool-${toolIndex}`, blockColors.tool, toolIndex === block.tools.length - 1 ? 0 : 1)
+      const toolRoot = makeBox(
+        context,
+        `${rootId}-tool-${toolIndex}`,
+        blockColors.tool,
+        toolIndex === block.tools.length - 1 ? 0 : 1,
+      )
       const metaText = timingText(tool.timing)
       const text = detailsExpanded
         ? `${tool.call}${metaText ? `  ${metaText}` : ""}\n${tool.result}`
@@ -357,15 +362,34 @@ function statusText(snapshot: CoreSnapshot): string {
 }
 
 export function createChatView(renderer: CliRenderer): ChatView {
-  const header = new TextRenderable(renderer, { id: "header", height: 1, fg: systemColors.header, content: "AizenAssistant" })
-  const live = new TextRenderable(renderer, { id: "live", width: "100%", height: 1, wrapMode: "none", truncate: true, fg: systemColors.live, content: "" })
+  const header = new TextRenderable(renderer, {
+    id: "header",
+    height: 1,
+    fg: systemColors.header,
+    content: "AizenAssistant",
+  })
+  const live = new TextRenderable(renderer, {
+    id: "live",
+    width: "100%",
+    height: 1,
+    wrapMode: "none",
+    truncate: true,
+    fg: systemColors.live,
+    content: "",
+  })
   const status = new TextRenderable(renderer, { id: "status", height: 1, fg: systemColors.statusIdle, content: "空闲" })
   renderer.root.add(header)
   renderer.root.add(live)
   renderer.root.add(status)
 
   let blocks: DisplayBlock[] = []
-  let fold: FoldPreferences = { userTurns: 0, assistantTurns: 3, thinkingTurns: 1, toolGroupTurns: 3, toolDetailTurns: 1 }
+  let fold: FoldPreferences = {
+    userTurns: 0,
+    assistantTurns: 3,
+    thinkingTurns: 1,
+    toolGroupTurns: 3,
+    toolDetailTurns: 1,
+  }
   let committedFingerprints: string[] = []
   let latestSnapshot: CoreSnapshot | undefined
   let notice = ""
@@ -396,15 +420,24 @@ export function createChatView(renderer: CliRenderer): ChatView {
 
   const syncHistory = (forceReplay = false) => {
     const nextFingerprints = renderedFingerprints()
-    if (!forceReplay && nextFingerprints.length === committedFingerprints.length && nextFingerprints.every((value, index) => committedFingerprints[index] === value)) return
-    const canAppend = !forceReplay && nextFingerprints.length >= committedFingerprints.length && committedFingerprints.every((value, index) => nextFingerprints[index] === value)
+    if (
+      !forceReplay &&
+      nextFingerprints.length === committedFingerprints.length &&
+      nextFingerprints.every((value, index) => committedFingerprints[index] === value)
+    )
+      return
+    const canAppend =
+      !forceReplay &&
+      nextFingerprints.length >= committedFingerprints.length &&
+      committedFingerprints.every((value, index) => nextFingerprints[index] === value)
     if (canAppend) commitBlocks(committedFingerprints.length)
     else {
       try {
         renderer.resetSplitFooterForReplay({ clearSavedLines: true })
       } catch (error) {
         // OpenTUI 的离屏测试渲染器没有活动终端，无法执行 ANSI 清屏；仍继续提交回放快照。
-        if (!(error instanceof Error) || error.message !== "resetSplitFooterForReplay requires an active terminal") throw error
+        if (!(error instanceof Error) || error.message !== "resetSplitFooterForReplay requires an active terminal")
+          throw error
       }
       commitBlocks(0)
     }
@@ -416,7 +449,12 @@ export function createChatView(renderer: CliRenderer): ChatView {
     header.content = "AizenAssistant | /fold 折叠设置"
     live.content = liveText(latestSnapshot)
     status.content = notice || statusText(latestSnapshot)
-    status.fg = latestSnapshot.lastError || latestSnapshot.status === "error" ? systemColors.statusError : latestSnapshot.status === "idle" ? systemColors.statusIdle : systemColors.statusRunning
+    status.fg =
+      latestSnapshot.lastError || latestSnapshot.status === "error"
+        ? systemColors.statusError
+        : latestSnapshot.status === "idle"
+          ? systemColors.statusIdle
+          : systemColors.statusRunning
   }
 
   const onResize = () => {

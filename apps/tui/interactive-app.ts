@@ -925,9 +925,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           .getSnapshot()
           .models.find(
             (item) =>
-              item.providerId === preferred.model?.providerId && item.modelId === preferred.model.modelId && item.available,
+              item.providerId === preferred.model?.providerId &&
+              item.modelId === preferred.model.modelId &&
+              item.available,
           )
-        if (available) draft = { model: { ...available, thinkingLevel: preferred.model.thinkingLevel }, viewId: preferred.viewId }
+        if (available)
+          draft = { model: { ...available, thinkingLevel: preferred.model.thinkingLevel }, viewId: preferred.viewId }
         else draft = { viewId: preferred.viewId }
       } else draft = { viewId: preferred.viewId }
     }
