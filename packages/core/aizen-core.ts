@@ -192,10 +192,23 @@ export class AizenCore implements CorePort {
           await this.#views.create({ id: command.id, name: command.name })
           this.#snapshot.views = await this.#views.list()
           break
+        case "update_view":
+          if (!this.#views) throw new Error("未配置视图存储")
+          await this.#views.update(command.viewId, {
+            ...(command.name === undefined ? {} : { name: command.name }),
+            ...(command.path === undefined ? {} : { path: command.path }),
+          })
+          this.#snapshot.views = await this.#views.list()
+          break
+        case "ensure_view_file":
+          if (!this.#views) throw new Error("未配置视图存储")
+          await this.#views.ensureFile(command.viewId, command.name)
+          break
         case "remove_view":
           if (!this.#views) throw new Error("未配置视图存储")
           if (this.#snapshot.currentViewId === command.viewId) throw new Error("不能移除当前会话正在使用的视图")
-          await this.#views.remove(command.viewId)
+          if (command.deleteDirectory) await this.#views.deleteDirectory(command.viewId)
+          else await this.#views.remove(command.viewId)
           this.#snapshot.views = await this.#views.list()
           break
         case "set_model":

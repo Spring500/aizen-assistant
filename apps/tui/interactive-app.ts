@@ -26,7 +26,11 @@ import { createAizenRenderer, destroyRenderer } from "../../packages/tui-kit/ren
 import { selectItem } from "../../packages/tui-kit/selector.ts"
 
 import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
+import { openDirectory, openExternalEditor } from "./external-open.ts"
 import { viewSelectionItems } from "./view-flow.ts"
+
+const createViewValue = ":create-view"
+const manageViewsValue = ":manage-views"
 
 export type InteractiveAppOptions = {
   cwd: string
@@ -194,16 +198,43 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   })
 
+  async function createView(): Promise<string | undefined> {
+    const id = await promptLine(renderer, "view-id", "视图 ID：", { signal: interactionController.signal })
+    if (!id) return undefined
+    const name = await promptLine(renderer, "view-name", "视图名称：", { signal: interactionController.signal })
+    if (!name) return undefined
+    const result = await dispatchWithError({ type: "create_view", id, name }, "创建视图失败")
+    return result.ok ? id : undefined
+  }
+
   async function chooseView(): Promise<string | null | undefined> {
     beginInteraction()
     try {
-      const listed = await dispatchWithError({ type: "list_views" }, "读取视图失败")
-      if (!listed.ok) return undefined
-      const available = core.getSnapshot().views
-      return selectItem<string | null>(renderer, "view-selector", viewSelectionItems(available), {
-        title: "选择视图",
-        signal: interactionController.signal,
-      })
+      while (!exiting) {
+        const listed = await dispatchWithError({ type: "list_views" }, "读取视图失败")
+        if (!listed.ok) return undefined
+        const selected = await selectItem<string | null>(
+          renderer,
+          "view-selector",
+          [
+            ...viewSelectionItems(core.getSnapshot().views),
+            { name: "新建视图", description: "创建视图模板并立即使用", value: createViewValue },
+            { name: "管理视图", description: "编辑、移除或删除视图", value: manageViewsValue },
+          ],
+          { title: "选择视图", signal: interactionController.signal },
+        )
+        if (selected === createViewValue) {
+          const created = await createView()
+          if (created) return created
+          continue
+        }
+        if (selected === manageViewsValue) {
+          await manageViews()
+          continue
+        }
+        return selected
+      }
+      return undefined
     } finally {
       endInteraction()
     }
@@ -227,21 +258,69 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               value: item.id,
             })),
           ],
-          { title: "管理视图（选择已有视图可移除注册）", signal: interactionController.signal },
+          { title: "管理视图（选择视图后进入操作菜单）", signal: interactionController.signal },
         )
         if (!selected) return
         if (selected === "__refresh__") continue
         if (selected === "__create__") {
-          const id = await promptLine(renderer, "view-id", "视图 ID：", { signal: interactionController.signal })
-          if (!id) continue
-          const name = await promptLine(renderer, "view-name", "视图名称：", { signal: interactionController.signal })
-          if (name) await dispatchWithError({ type: "create_view", id, name }, "创建视图失败")
+          await createView()
           continue
         }
-        await dispatchWithError({ type: "remove_view", viewId: selected }, "移除视图失败")
+        await manageView(selected)
       }
     } finally {
       endInteraction()
+    }
+  }
+
+  async function manageView(viewId: string) {
+    const viewItem = core.getSnapshot().views.find((item) => item.id === viewId)
+    if (!viewItem) return
+    const action = await selectItem(
+      renderer,
+      "view-action",
+      [
+        { name: "编辑名称", description: viewItem.name, value: "name" },
+        { name: "编辑目录路径", description: viewItem.path, value: "path" },
+        { name: "编辑 SYSTEM.md", description: "不存在时自动创建", value: "system" },
+        { name: "编辑 AGENTS.md", description: "不存在时自动创建", value: "agents" },
+        { name: "打开 Skills 目录", description: viewItem.directory, value: "skills" },
+        { name: "移除注册", description: "保留视图目录和文件", value: "remove" },
+        { name: "删除视图目录", description: "同时删除注册和目录，需要再次确认", value: "delete" },
+      ],
+      { title: `管理视图 · ${viewItem.name}`, signal: interactionController.signal },
+    )
+    if (action === "name") {
+      const name = await promptLine(renderer, "view-edit-name", "新名称：", {
+        initialValue: viewItem.name,
+        signal: interactionController.signal,
+      })
+      if (name) await dispatchWithError({ type: "update_view", viewId, name }, "更新视图失败")
+    } else if (action === "path") {
+      const path = await promptLine(renderer, "view-edit-path", "新路径：", {
+        initialValue: viewItem.path,
+        signal: interactionController.signal,
+      })
+      if (path) await dispatchWithError({ type: "update_view", viewId, path }, "更新视图失败")
+    } else if (action === "system" || action === "agents") {
+      const name = action === "system" ? "SYSTEM.md" : "AGENTS.md"
+      const ensured = await dispatchWithError({ type: "ensure_view_file", viewId, name }, "创建视图文件失败")
+      if (ensured.ok) await openExternalEditor(join(viewItem.directory, name))
+    } else if (action === "skills") {
+      await openDirectory(join(viewItem.directory, "skills"))
+    } else if (action === "remove") {
+      await dispatchWithError({ type: "remove_view", viewId }, "移除视图失败")
+    } else if (action === "delete") {
+      const confirmed = await selectItem(
+        renderer,
+        "view-delete-confirm",
+        [
+          { name: "确认删除", description: viewItem.directory, value: true },
+          { name: "取消", description: "不做修改", value: false },
+        ],
+        { title: `永久删除视图 ${viewItem.name}？`, signal: interactionController.signal },
+      )
+      if (confirmed) await dispatchWithError({ type: "remove_view", viewId, deleteDirectory: true }, "删除视图失败")
     }
   }
 

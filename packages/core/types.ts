@@ -73,7 +73,9 @@ export type CoreCommand =
   | { type: "set_model"; model: ModelReference }
   | { type: "set_view"; viewId: ViewId }
   | { type: "create_view"; id: string; name: string }
-  | { type: "remove_view"; viewId: string }
+  | { type: "update_view"; viewId: string; name?: string; path?: string }
+  | { type: "ensure_view_file"; viewId: string; name: "SYSTEM.md" | "AGENTS.md" }
+  | { type: "remove_view"; viewId: string; deleteDirectory?: boolean }
   | { type: "list_auth_providers" }
   | { type: "login_api_key"; providerId: string }
   | { type: "answer_auth_prompt"; promptId: string; value: string }

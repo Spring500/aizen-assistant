@@ -136,6 +136,35 @@ export class ViewStore {
     return { ...parsed, directory }
   }
 
+  async update(id: string, changes: { name?: string; path?: string }): Promise<void> {
+    const file = await this.#read()
+    const index = file.views.findIndex((view) => view.id === id)
+    if (index < 0) throw new Error(`视图不存在：${id}`)
+    const current = file.views[index]
+    if (!current) throw new Error(`视图不存在：${id}`)
+    const updated = parseViewsValue({
+      version: 1,
+      views: [
+        {
+          ...current,
+          ...(changes.name === undefined ? {} : { name: changes.name }),
+          ...(changes.path === undefined ? {} : { path: changes.path }),
+        },
+      ],
+    }).views[0]
+    if (!updated) throw new Error("无法更新视图")
+    file.views[index] = updated
+    await mkdir(dirname(this.#file), { recursive: true })
+    await writeFile(this.#file, `${JSON.stringify(file, null, 2)}\n`)
+  }
+
+  async ensureFile(id: string, name: "SYSTEM.md" | "AGENTS.md"): Promise<string> {
+    const view = await this.resolve(id)
+    const path = join(view.directory, name)
+    await writeFile(path, "", { flag: "a" })
+    return path
+  }
+
   async remove(id: string): Promise<void> {
     const file = await this.#read()
     const index = file.views.findIndex((view) => view.id === id)

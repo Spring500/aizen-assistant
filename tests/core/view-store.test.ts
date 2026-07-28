@@ -38,6 +38,24 @@ describe("视图配置", () => {
     expect(await store.list()).toEqual([])
   })
 
+  test("更新视图元数据并区分移除注册与删除目录", async () => {
+    const { root, store } = await temporaryStore()
+    const created = await store.create({ id: "dev", name: "开发" })
+    await store.update("dev", { name: "开发视图", path: "views/dev" })
+    expect((await store.list())[0]).toMatchObject({ id: "dev", name: "开发视图", path: "views/dev" })
+    expect(await store.ensureFile("dev", "SYSTEM.md")).toBe(join(created.directory, "SYSTEM.md"))
+    expect(await readFile(join(created.directory, "SYSTEM.md"), "utf8")).toBe("")
+    await store.remove("dev")
+    expect(await readFile(join(created.directory, "AGENTS.md"), "utf8")).toContain("视图说明")
+
+    await store.create({ id: "gone", name: "删除" })
+    const gone = await store.resolve("gone")
+    await store.deleteDirectory("gone")
+    expect(store.resolve("gone")).rejects.toThrow("不存在")
+    expect(readFile(join(gone.directory, "AGENTS.md"), "utf8")).rejects.toThrow()
+    expect(root).toBeTruthy()
+  })
+
   test("报告失效路径和配置错误", async () => {
     const { root, store } = await temporaryStore()
     await writeFile(
