@@ -138,7 +138,7 @@ test("真实完整 TUI 链路：没有 views.json 时选择无视图并成功进
     expect(setup.captureCharFrame()).not.toContain("创建会话失败")
   } finally {
     setup.renderer.keyInput.emit("keypress", key("\x03"))
-    await Promise.race([running, Bun.sleep(1000)])
+    await running
     setup.renderer.destroy()
     await rm(root, { recursive: true, force: true })
   }

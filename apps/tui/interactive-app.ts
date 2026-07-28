@@ -110,9 +110,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       else if (value === "/model")
         runAction(async () => {
           const model = await chooseModel()
-          if (model && core.getSnapshot().currentSessionId) await core.dispatch({ type: "set_model", model })
+          if (model && core.getSnapshot().currentSessionId)
+            await dispatchWithError({ type: "set_model", model }, "切换模型失败")
         })
-      else runAction(() => core.dispatch({ type: "send_prompt", text: value }))
+      else runAction(() => dispatchWithError({ type: "send_prompt", text: value }, "发送消息失败"))
     },
     onAbort: () => void core.dispatch({ type: "abort" }),
     onQuit: quit,
@@ -196,11 +197,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   async function chooseView(): Promise<string | null | undefined> {
     beginInteraction()
     try {
-      const listed = await core.dispatch({ type: "list_views" })
-      if (!listed.ok) {
-        await showError("读取视图失败", listed.error.message)
-        return undefined
-      }
+      const listed = await dispatchWithError({ type: "list_views" }, "读取视图失败")
+      if (!listed.ok) return undefined
       const available = core.getSnapshot().views
       return selectItem<string | null>(renderer, "view-selector", viewSelectionItems(available), {
         title: "选择视图",
@@ -215,11 +213,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     beginInteraction()
     try {
       while (!exiting) {
-        const listed = await core.dispatch({ type: "list_views" })
-        if (!listed.ok) {
-          await showError("读取视图失败", listed.error.message)
-          return
-        }
+        const listed = await dispatchWithError({ type: "list_views" }, "读取视图失败")
+        if (!listed.ok) return
         const selected = await selectItem(
           renderer,
           "views-manager",
@@ -296,7 +291,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     try {
       const authenticateProvider = async (providerId?: string): Promise<string | undefined> => {
         while (!exiting) {
-          await core.dispatch({ type: "list_auth_providers" })
+          const providersResult = await dispatchWithError({ type: "list_auth_providers" }, "读取认证供应商失败")
+          if (!providersResult.ok) return undefined
           const providers = core.getSnapshot().authProviders
           const selectedProvider = providerId
             ? providers.find((provider) => provider.id === providerId)
@@ -312,7 +308,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               )
           if (!selectedProvider) return undefined
           authProviderName = selectedProvider.name
-          const login = await core.dispatch({ type: "login_api_key", providerId: selectedProvider.id })
+          const login = await dispatchWithError(
+            { type: "login_api_key", providerId: selectedProvider.id },
+            "供应商认证失败",
+          )
           authProviderName = undefined
           if (login.ok) return selectedProvider.id
           if (providerId) return undefined
@@ -322,10 +321,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
       let preferredProviderId: string | undefined
       while (!exiting) {
-        const listed = await core.dispatch({ type: "list_models" })
-        const authListed = await core.dispatch({ type: "list_auth_providers" })
-        const configLoaded = await core.dispatch({ type: "load_model_config" })
-        if (!listed.ok || !authListed.ok || !configLoaded.ok) return undefined
+        const listed = await dispatchWithError({ type: "list_models" }, "读取模型失败")
+        if (!listed.ok) return undefined
+        const authListed = await dispatchWithError({ type: "list_auth_providers" }, "读取认证供应商失败")
+        if (!authListed.ok) return undefined
+        const configLoaded = await dispatchWithError({ type: "load_model_config" }, "读取模型配置失败")
+        if (!configLoaded.ok) return undefined
         const snapshot = core.getSnapshot()
         const providers = modelProviderChoices(
           snapshot.models,
@@ -818,11 +819,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   async function chooseSession() {
     beginInteraction()
     try {
-      const listed = await core.dispatch({ type: "list_sessions" })
-      if (!listed.ok) {
-        await showError("读取会话失败", listed.error.message)
-        return
-      }
+      const listed = await dispatchWithError({ type: "list_sessions" }, "读取会话失败")
+      if (!listed.ok) return
       const sessions = core.getSnapshot().sessions
       if (sessions.length === 0) return createSession()
       const selected = await selectItem(
