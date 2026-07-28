@@ -52,6 +52,12 @@ class FakePi implements PiPort {
   }
 }
 
+class CreateFailingFakePi extends FakePi {
+  create = async () => {
+    throw new Error("无法创建运行时")
+  }
+}
+
 class CompactingFakePi extends FakePi {
   async prompt(input: { recordId: string }) {
     for (const listener of this.listeners) {
@@ -207,6 +213,21 @@ describe("核心编排", () => {
       message: "选择认证方式",
       options: [{ id: "token", label: "令牌" }],
     })
+    await core.dispose()
+  })
+
+  test("运行时创建失败时不留下空会话", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const core = new AizenCore({ cwd: "E:\\project", store, pi: new CreateFailingFakePi() })
+
+    expect(await core.dispatch({ type: "create_session", model, viewId: null })).toEqual({
+      ok: false,
+      error: "无法创建运行时",
+    })
+    expect(core.getSnapshot().currentSessionId).toBeUndefined()
+    expect(await store.list()).toEqual([])
     await core.dispose()
   })
 

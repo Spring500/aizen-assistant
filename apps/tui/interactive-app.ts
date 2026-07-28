@@ -77,6 +77,17 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       () => {},
     )
   }
+  const showError = async (title: string, error: string) => {
+    await selectItem(renderer, `error-${crypto.randomUUID()}`, [{ name: "返回", description: error, value: true }], {
+      title,
+      signal: interactionController.signal,
+    })
+  }
+  const dispatchWithError = async (command: Parameters<typeof core.dispatch>[0], title: string) => {
+    const result = await core.dispatch(command)
+    if (!result.ok) await showError(title, result.error)
+    return result
+  }
   const editor = createChatEditor(renderer, {
     onSubmit: (value) => {
       if (value === "/quit") quit()
@@ -87,7 +98,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         runAction(async () => {
           const viewId = await chooseView()
           if (viewId !== undefined && core.getSnapshot().currentSessionId)
-            await core.dispatch({ type: "set_view", viewId })
+            await dispatchWithError({ type: "set_view", viewId }, "切换视图失败")
         })
       else if (value === "/fold") runAction(chooseFold)
       else if (value === "/models") runAction(manageModels)
@@ -180,7 +191,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   async function chooseView(): Promise<string | null | undefined> {
     beginInteraction()
     try {
-      if (!(await core.dispatch({ type: "list_views" })).ok) return undefined
+      const listed = await core.dispatch({ type: "list_views" })
+      if (!listed.ok) {
+        await showError("读取视图失败", listed.error)
+        return undefined
+      }
       const available = core.getSnapshot().views.filter((item) => item.valid)
       return selectItem<string | null>(
         renderer,
@@ -204,7 +219,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     beginInteraction()
     try {
       while (!exiting) {
-        if (!(await core.dispatch({ type: "list_views" })).ok) return
+        const listed = await core.dispatch({ type: "list_views" })
+        if (!listed.ok) {
+          await showError("读取视图失败", listed.error)
+          return
+        }
         const selected = await selectItem(
           renderer,
           "views-manager",
@@ -225,10 +244,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           const id = await promptLine(renderer, "view-id", "视图 ID：", { signal: interactionController.signal })
           if (!id) continue
           const name = await promptLine(renderer, "view-name", "视图名称：", { signal: interactionController.signal })
-          if (name) await core.dispatch({ type: "create_view", id, name })
+          if (name) await dispatchWithError({ type: "create_view", id, name }, "创建视图失败")
           continue
         }
-        await core.dispatch({ type: "remove_view", viewId: selected })
+        await dispatchWithError({ type: "remove_view", viewId: selected }, "移除视图失败")
       }
     } finally {
       endInteraction()
@@ -797,13 +816,17 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     const model = await chooseModel()
     if (!model) return
     const viewId = await chooseView()
-    if (viewId !== undefined) await core.dispatch({ type: "create_session", model, viewId })
+    if (viewId !== undefined) await dispatchWithError({ type: "create_session", model, viewId }, "创建会话失败")
   }
 
   async function chooseSession() {
     beginInteraction()
     try {
-      await core.dispatch({ type: "list_sessions" })
+      const listed = await core.dispatch({ type: "list_sessions" })
+      if (!listed.ok) {
+        await showError("读取会话失败", listed.error)
+        return
+      }
       const sessions = core.getSnapshot().sessions
       if (sessions.length === 0) return createSession()
       const selected = await selectItem(
@@ -824,7 +847,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         { title: "选择会话", signal: interactionController.signal },
       )
       if (selected === "__new__") await createSession()
-      else if (selected) await core.dispatch({ type: "open_session", sessionId: selected })
+      else if (selected) await dispatchWithError({ type: "open_session", sessionId: selected }, "打开会话失败")
     } finally {
       endInteraction()
     }
