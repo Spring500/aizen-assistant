@@ -198,6 +198,96 @@ test("工具调用时也显示当前回复耗时", async () => {
   }
 })
 
+test("同一轮内跨助手消息的连续工具调用合并为一个工具组", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    view.update(
+      snapshot({
+        preferences: {
+          ...structuredClone(defaultAppPreferences),
+          fold: { userTurns: 0, assistantTurns: 0, thinkingTurns: 0, toolGroupTurns: 2, toolDetailTurns: 1 },
+        },
+        transcript: [
+          {
+            type: "message",
+            turnId: "tools",
+            message: {
+              role: "assistant",
+              parts: [
+                {
+                  kind: "tool_call",
+                  callId: "c1",
+                  name: "bash",
+                  arguments: { command: "bun test" },
+                  declaredIntent: "运行测试",
+                },
+              ],
+              source: { providerId: "test", modelId: "model", api: "a" },
+              stopReason: "tool_use",
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+          {
+            type: "message",
+            turnId: "tools",
+            message: {
+              role: "tool",
+              callId: "c1",
+              name: "bash",
+              parts: [{ kind: "text", text: "first" }],
+              isError: false,
+            },
+          },
+          {
+            type: "message",
+            turnId: "tools",
+            message: {
+              role: "assistant",
+              parts: [
+                {
+                  kind: "tool_call",
+                  callId: "c2",
+                  name: "bash",
+                  arguments: { command: "bun run typecheck" },
+                  declaredIntent: "检查类型",
+                },
+              ],
+              source: { providerId: "test", modelId: "model", api: "a" },
+              stopReason: "tool_use",
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+          {
+            type: "message",
+            turnId: "tools",
+            message: {
+              role: "tool",
+              callId: "c2",
+              name: "bash",
+              parts: [{ kind: "text", text: "second" }],
+              isError: false,
+            },
+          },
+          {
+            type: "input",
+            turnId: "recent",
+            items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "下一轮" }] }],
+          },
+        ],
+      }),
+    )
+    await setup.renderOnce()
+    const output = setup.externalOutput.takeText().replace(/\s+/g, "")
+    expect(output).toContain("▼2个工具调用：bash/bash")
+    expect(output.match(/个工具调用/g)).toHaveLength(1)
+    expect(output).toContain("[bash]运行测试")
+    expect(output).toContain("[bash]检查类型")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("耗时格式覆盖天时分秒", () => {
   expect(formatDurationText(0)).toBe("0s")
   expect(formatDurationText(62_000)).toBe("1m 2s")

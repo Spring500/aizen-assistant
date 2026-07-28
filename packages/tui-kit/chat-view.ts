@@ -173,6 +173,27 @@ function groupTiming(tools: ToolDisplay[]): Timing | undefined {
   }
 }
 
+function mergeConsecutiveToolGroups(blocks: DisplayBlock[]): DisplayBlock[] {
+  const merged: DisplayBlock[] = []
+  for (const block of blocks) {
+    const previous = merged.at(-1)
+    if (block.kind !== "tool_group" || previous?.kind !== "tool_group" || previous.turnId !== block.turnId) {
+      merged.push(block)
+      continue
+    }
+    const tools = [...previous.tools, ...block.tools]
+    const timing = groupTiming(tools)
+    merged[merged.length - 1] = {
+      kind: "tool_group",
+      id: `tools-${tools.map((tool) => tool.id).join("-")}`,
+      turnId: block.turnId,
+      tools,
+      ...(timing ? { timing } : {}),
+    }
+  }
+  return merged
+}
+
 function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
   const results = new Map<string, ToolMessage>()
   const calls = new Set<string>()
@@ -256,7 +277,7 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
       })
     }
   }
-  return blocks
+  return mergeConsecutiveToolGroups(blocks)
 }
 
 function makeBox(context: RenderContext, id: string, color: string, marginBottom = 0): BoxRenderable {
@@ -361,19 +382,17 @@ function createHistoryBlock(
   const root = makeBox(context, rootId, blockColors.toolGroup)
   const groupExpanded = expanded(fold.toolGroupTurns, turnAge)
   const detailsExpanded = groupExpanded && expanded(fold.toolDetailTurns, turnAge)
-  if (!groupExpanded) {
-    const names = block.tools.map((tool) => tool.name).join(" / ")
-    const meta = timingText(block.timing)
-    root.add(
-      makeText(
-        context,
-        `${rootId}-header`,
-        `▶ ${block.tools.length} 个工具调用：${names}${meta ? `  ${meta}` : ""}`,
-        blockColors.toolGroup,
-      ),
-    )
-    return root
-  }
+  const names = block.tools.map((tool) => tool.name).join(" / ")
+  const meta = timingText(block.timing)
+  root.add(
+    makeText(
+      context,
+      `${rootId}-header`,
+      `${groupExpanded ? "▼" : "▶"} ${block.tools.length} 个工具调用：${names}${meta ? `  ${meta}` : ""}`,
+      blockColors.toolGroup,
+    ),
+  )
+  if (!groupExpanded) return root
 
   for (const [toolIndex, tool] of block.tools.entries()) {
     const toolRoot = new BoxRenderable(context, {
