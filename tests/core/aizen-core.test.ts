@@ -172,6 +172,38 @@ describe("核心编排", () => {
     await restored.dispose()
   })
 
+  test("额外消息先写入会话且 useLater 语义交给适配器", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const pi = new FakePi()
+    const core = new AizenCore({
+      cwd: "E:\\project",
+      store,
+      pi,
+      extraMessages: async () => [
+        {
+          source: "clock",
+          role: "developer",
+          useLater: false,
+          parts: [{ kind: "text", text: "仅本轮" }],
+        },
+      ],
+    })
+
+    await core.dispatch({ type: "create_session", model })
+    const sessionId = core.getSnapshot().currentSessionId ?? ""
+    await core.dispatch({ type: "send_prompt", text: "用户消息" })
+    const loaded = await store.read(sessionId)
+    const started = loaded.records.find((record) => record.kind === "turn_started")
+    expect(started?.kind === "turn_started" ? started.items : []).toEqual([
+      { source: "clock", role: "developer", useLater: false, parts: [{ kind: "text", text: "仅本轮" }] },
+      { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "用户消息" }] },
+    ])
+    expect(pi.prompts[0]).toMatchObject({ items: started?.kind === "turn_started" ? started.items : [] })
+    await core.dispose()
+  })
+
   test("上下文压缩只保存核心记录 ID", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)

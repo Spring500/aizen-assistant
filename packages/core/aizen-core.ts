@@ -4,6 +4,7 @@ import type {
   ModelReference,
   SessionRecord,
   TurnFinishedRecord,
+  TurnInputItem,
   TurnStartedRecord,
   ViewId,
 } from "./session-format.ts"
@@ -18,7 +19,21 @@ import {
   recordsToTranscript,
 } from "./types.ts"
 
-export type AizenCoreOptions = { cwd: string; store: SessionStore; pi: PiPort; views?: ViewStore }
+export type ExtraMessageProvider = (input: {
+  cwd: string
+  sessionId: string
+  turnId: string
+  viewId: ViewId
+  text: string
+}) => Promise<TurnInputItem[]>
+
+export type AizenCoreOptions = {
+  cwd: string
+  store: SessionStore
+  pi: PiPort
+  views?: ViewStore
+  extraMessages?: ExtraMessageProvider
+}
 
 function sessionModel(model: ModelReference): ModelReference {
   return {
@@ -34,6 +49,7 @@ export class AizenCore implements CorePort {
   readonly #store: SessionStore
   readonly #pi: PiPort
   readonly #views: ViewStore | undefined
+  readonly #extraMessages: ExtraMessageProvider
   readonly #listeners = new Set<(event: CoreEvent) => void>()
   readonly #unsubscribePi: () => void
   #snapshot: CoreSnapshot
@@ -63,6 +79,7 @@ export class AizenCore implements CorePort {
       streamingThinking: "",
     }
     this.#views = options.views
+    this.#extraMessages = options.extraMessages ?? (async () => [])
     this.#unsubscribePi = this.#pi.subscribe((event) => this.#handlePiEvent(event))
   }
 
@@ -247,13 +264,18 @@ export class AizenCore implements CorePort {
     const view = await this.#resolveView(viewId)
     await this.#pi.refreshView(view)
     const turnId = crypto.randomUUID()
+    const extraItems = await this.#extraMessages({ cwd: this.#cwd, sessionId, turnId, viewId, text })
+    const items: TurnInputItem[] = [
+      ...extraItems,
+      { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text }] },
+    ]
     const started: TurnStartedRecord = {
       kind: "turn_started",
       recordId: crypto.randomUUID(),
       turnId,
       at: new Date().toISOString(),
       viewId,
-      items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text }] }],
+      items,
     }
     await this.#store.append(sessionId, started)
     this.#records.push(started)
