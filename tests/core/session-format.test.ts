@@ -124,6 +124,31 @@ describe("会话格式", () => {
     expect(() => parseSessionLine(JSON.stringify(record))).toThrow("Base64")
   })
 
+  test("拒绝超过五十个字符的工具声明目的", () => {
+    const record = {
+      kind: "message",
+      recordId: "r1",
+      turnId: "t1",
+      at: "2026-07-23T10:00:00.000Z",
+      message: {
+        role: "assistant",
+        parts: [
+          {
+            kind: "tool_call",
+            callId: "c1",
+            name: "read",
+            arguments: { path: "README.md" },
+            declaredIntent: "目".repeat(51),
+          },
+        ],
+        source: { providerId: "p", modelId: "m", api: "a" },
+        stopReason: "tool_use",
+        usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      },
+    }
+    expect(() => parseSessionLine(JSON.stringify(record))).toThrow("必须为 1 至 50 个字符")
+  })
+
   test("拒绝无效的内容时序", () => {
     const record = {
       kind: "message",

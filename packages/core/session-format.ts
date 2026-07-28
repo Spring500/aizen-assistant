@@ -253,6 +253,8 @@ function assistantPart(value: unknown): TextPart | ThinkingPart | ToolCallPart {
     exact(source, ["kind", "callId", "name", "arguments", "declaredIntent", "signature"], "工具调用内容块")
     const signature = optionalString(source.signature, "工具调用内容块.signature")
     const declaredIntent = optionalString(source.declaredIntent, "工具调用内容块.declaredIntent")
+    if (declaredIntent !== undefined && (declaredIntent.length === 0 || Array.from(declaredIntent).length > 50))
+      throw new Error("工具调用内容块.declaredIntent 必须为 1 至 50 个字符")
     return {
       kind,
       callId: string(source.callId, "工具调用内容块.callId"),

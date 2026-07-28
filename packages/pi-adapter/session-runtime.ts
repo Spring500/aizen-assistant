@@ -129,7 +129,8 @@ function auditedTools(cwd: string): ToolDefinition[] {
   const intent = Type.Object({
     declaredIntent: Type.String({
       minLength: 1,
-      description: "用一句简短、具体的话说明本次工具调用的目的，供用户阅读和审计",
+      maxLength: 50,
+      description: "用不超过 50 个字符的一句话说明本次工具调用的目的，供用户阅读和审计",
     }),
   })
   return [createReadTool(cwd), createBashTool(cwd), createEditTool(cwd), createWriteTool(cwd)].map((tool) => ({

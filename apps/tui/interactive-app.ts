@@ -356,7 +356,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         )
         if (!selected) return
         if (selected === "reset") {
-          draft = { userTurns: 0, assistantTurns: 3, thinkingTurns: 1, toolGroupTurns: 3, toolDetailTurns: 1 }
+          draft = { userTurns: 0, assistantTurns: 3, thinkingTurns: 1, toolGroupTurns: 1, toolDetailTurns: 1 }
           continue
         }
         if (selected === "apply") {

@@ -324,9 +324,11 @@ function createHistoryBlock(
         toolIndex === block.tools.length - 1 ? 0 : 1,
       )
       const metaText = timingText(tool.timing)
+      const callLines = tool.call.split("\n")
+      const visibleCall = callLines.slice(0, callLines[1]?.startsWith("声明目的：") ? 2 : 1).join("\n")
       const text = detailsExpanded
         ? `${tool.call}${metaText ? `  ${metaText}` : ""}\n${tool.result}`
-        : `${tool.call.split("\n")[0]}${metaText ? `  ${metaText}` : ""}`
+        : `${visibleCall}${metaText ? `  ${metaText}` : ""}`
       toolRoot.add(makeText(context, `${rootId}-tool-${toolIndex}-text`, text, blockColors.tool))
       content.add(toolRoot)
     }
@@ -387,7 +389,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
     userTurns: 0,
     assistantTurns: 3,
     thinkingTurns: 1,
-    toolGroupTurns: 3,
+    toolGroupTurns: 1,
     toolDetailTurns: 1,
   }
   let committedFingerprints: string[] = []
