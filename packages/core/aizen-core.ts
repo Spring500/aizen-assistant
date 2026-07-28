@@ -66,6 +66,7 @@ export class AizenCore implements CorePort {
   #runtimeRecords = new Map<string, string>()
   #abortRequested = false
   #runtimeReady = false
+  #preferencesLoaded = false
   #disposed = false
 
   constructor(options: AizenCoreOptions) {
@@ -117,6 +118,7 @@ export class AizenCore implements CorePort {
       switch (command.type) {
         case "load_preferences":
           this.#snapshot.preferences = await this.#readPreferences()
+          this.#preferencesLoaded = true
           break
         case "save_fold_preferences": {
           const preferences = parseAppPreferences({ ...this.#snapshot.preferences, fold: command.fold })
@@ -274,9 +276,14 @@ export class AizenCore implements CorePort {
   async #writePreferences(preferences: CoreSnapshot["preferences"]): Promise<void> {
     if (this.#preferencesStore) await this.#preferencesStore.write(preferences)
     this.#snapshot.preferences = preferences
+    this.#preferencesLoaded = true
   }
 
   async #rememberSessionDefaults(model: ModelReference, viewId: ViewId): Promise<void> {
+    if (!this.#preferencesLoaded) {
+      this.#snapshot.preferences = await this.#readPreferences()
+      this.#preferencesLoaded = true
+    }
     await this.#writePreferences({
       ...this.#snapshot.preferences,
       newSession: { model: sessionModel(model), viewId },
