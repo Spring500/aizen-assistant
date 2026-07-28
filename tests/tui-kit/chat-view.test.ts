@@ -84,6 +84,68 @@ test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态"
   }
 })
 
+test("历史块包含同底色的上下留白并记录思考内容", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    view.update(
+      snapshot({
+        transcript: [
+          {
+            type: "message",
+            turnId: "thinking-turn",
+            message: {
+              role: "assistant",
+              parts: [{ kind: "thinking", text: "内部分析内容", signature: "sig" }],
+              source: { providerId: "test", modelId: "model", api: "a" },
+              stopReason: "stop",
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+        ],
+      }),
+    )
+    await setup.renderOnce()
+    const output = setup.externalOutput.takeText()
+    expect(output).toContain("[思考] 内部分析内容")
+    const lines = output.split(/\r?\n/)
+    const contentIndex = lines.findIndex((line) => line.includes("[思考] 内部分析内容"))
+    expect(contentIndex).toBeGreaterThan(0)
+    expect(lines[contentIndex - 1]?.trim()).toBe("")
+    expect(lines[contentIndex + 1]?.trim()).toBe("")
+    view.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("resize 会按新宽度全量回放历史", async () => {
+  const setup = await setupRepl(80, 20)
+  try {
+    const view = createChatView(setup.renderer)
+    view.update(
+      snapshot({
+        transcript: [
+          {
+            type: "input",
+            turnId: "resize-turn",
+            items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "resize 内容" }] }],
+          },
+        ],
+      }),
+    )
+    await setup.renderOnce()
+    setup.externalOutput.takeText()
+    setup.renderer.resize(40, 20)
+    await Bun.sleep(100)
+    await setup.renderOnce()
+    expect(setup.externalOutput.takeText()).toContain("resize 内容")
+    view.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("footer 显示回复耗时、生成 token 和上下文用量", async () => {
   const setup = await setupRepl()
   try {

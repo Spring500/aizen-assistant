@@ -1,4 +1,4 @@
-import { BoxRenderable, type CliRenderer, type RenderContext, TextRenderable } from "@opentui/core"
+import { BoxRenderable, type CliRenderer, CliRenderEvents, type RenderContext, TextRenderable } from "@opentui/core"
 import type { ToolCallPart, ToolMessage } from "../core/session-format.ts"
 import type { CoreSnapshot } from "../core/types.ts"
 import { systemColors } from "./theme.ts"
@@ -7,6 +7,7 @@ export type ChatView = {
   header: TextRenderable
   live: TextRenderable
   status: TextRenderable
+  destroy(): void
   update(snapshot: CoreSnapshot): void
   getCollapseItems(): ChatCollapseItem[]
   toggleCollapse(id: string): boolean
@@ -37,6 +38,7 @@ type DisplayBlock =
 type CollapseTarget = Omit<ChatCollapseItem, "collapsed">
 
 const blockColors = {
+  plain: "#252936",
   user: "#66551a",
   assistant: "#1f2937",
   tool: "#34373d",
@@ -245,7 +247,7 @@ function collapseTargets(blocks: DisplayBlock[]): CollapseTarget[] {
   return targets
 }
 
-function makeBox(context: RenderContext, id: string, color: string, marginBottom = 1): BoxRenderable {
+function makeBox(context: RenderContext, id: string, color: string, marginBottom = 0): BoxRenderable {
   return new BoxRenderable(context, {
     id,
     width: "100%",
@@ -253,6 +255,8 @@ function makeBox(context: RenderContext, id: string, color: string, marginBottom
     flexDirection: "column",
     paddingLeft: 1,
     paddingRight: 1,
+    paddingTop: 1,
+    paddingBottom: 1,
     marginBottom,
     backgroundColor: color,
   })
@@ -270,7 +274,7 @@ function makeText(context: RenderContext, id: string, content: string, color?: s
   })
 }
 
-function createToolBox(context: RenderContext, id: string, tool: ToolDisplay, marginBottom = 1): BoxRenderable {
+function createToolBox(context: RenderContext, id: string, tool: ToolDisplay, marginBottom = 0): BoxRenderable {
   const root = makeBox(context, id, blockColors.tool, marginBottom)
   root.add(makeText(context, `${id}-text`, `${tool.call}\n${tool.result}`, blockColors.tool))
   return root
@@ -284,14 +288,9 @@ function createHistoryBlock(
 ): TextRenderable | BoxRenderable {
   const rootId = `history-entry-${index}`
   if (block.kind === "plain") {
-    return new TextRenderable(context, {
-      id: rootId,
-      width: "100%",
-      height: "auto",
-      marginBottom: 1,
-      fg: systemColors.secondary,
-      content: block.content,
-    })
+    const root = makeBox(context, rootId, blockColors.plain, 0)
+    root.add(makeText(context, `${rootId}-text`, block.content, blockColors.plain))
+    return root
   }
   if (block.kind === "user") {
     const root = makeBox(context, rootId, blockColors.user)
@@ -396,6 +395,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
   let committedFingerprints: string[] = []
   let latestSnapshot: CoreSnapshot | undefined
   let notice = ""
+  let resizeTimer: ReturnType<typeof setTimeout> | undefined
 
   const prepareCollapseState = () => {
     targets = collapseTargets(blocks)
@@ -499,10 +499,28 @@ export function createChatView(renderer: CliRenderer): ChatView {
     return changed
   }
 
+  const onResize = () => {
+    if (resizeTimer) clearTimeout(resizeTimer)
+    resizeTimer = setTimeout(() => {
+      resizeTimer = undefined
+      if (!latestSnapshot) return
+      syncHistory(true)
+      refreshFooter()
+    }, 75)
+  }
+  renderer.on(CliRenderEvents.RESIZE, onResize)
+
   return {
     header,
     live,
     status,
+    destroy() {
+      if (resizeTimer) clearTimeout(resizeTimer)
+      renderer.off(CliRenderEvents.RESIZE, onResize)
+      header.destroy()
+      live.destroy()
+      status.destroy()
+    },
     update(snapshot) {
       latestSnapshot = snapshot
       notice = ""
