@@ -2,8 +2,8 @@ import { rm } from "node:fs/promises"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { runInteractiveApp } from "../../apps/tui/interactive-app.ts"
-import { defaultAppPreferences } from "../../packages/core/app-preferences-store.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
+import { defaultAppPreferences } from "../../packages/core/app-preferences-store.ts"
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
@@ -162,6 +162,8 @@ async function noViews(): Promise<void> {
     await waitForText(setup, "选择供应商")
     await pressEnter(setup)
     await waitForText(setup, "选择模型")
+    await pressEnter(setup)
+    await waitForText(setup, "选择思考档位")
     await pressEnter(setup)
     await waitForText(setup, "会话设置 · 新建会话")
     await pressDown(setup, 4)

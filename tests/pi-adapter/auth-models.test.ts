@@ -101,6 +101,50 @@ describe("认证与模型", () => {
       name: "示例模型",
       contextWindow: 128000,
       available: false,
+      thinkingLevels: [],
+      offThinkingLevel: "off",
+    })
+    await runtime.dispose()
+  })
+
+  test("第三方模型向用户暴露自身档位名和默认档位", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
+    directories.push(directory)
+    const modelsPath = join(directory, "models.json")
+    await writeFile(
+      modelsPath,
+      JSON.stringify({
+        providers: {
+          example: {
+            name: "示例服务商",
+            baseUrl: "https://api.example.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "thinking-model",
+                reasoning: true,
+                thinkingLevelMap: {
+                  off: "关闭",
+                  minimal: "A",
+                  low: "B",
+                  medium: "C",
+                  high: null,
+                  xhigh: null,
+                  max: null,
+                },
+                aizenThinkingDefault: "B",
+              },
+            ],
+          },
+        },
+      }),
+    )
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath })
+
+    expect((await runtime.listModels()).find((item) => item.modelId === "thinking-model")).toMatchObject({
+      thinkingLevel: "B",
+      thinkingLevels: ["A", "B", "C"],
+      offThinkingLevel: "关闭",
     })
     await runtime.dispose()
   })

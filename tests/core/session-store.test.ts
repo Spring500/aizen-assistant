@@ -7,10 +7,16 @@ import { SessionStore } from "../../packages/core/session-store.ts"
 
 const temporaryDirectories: string[] = []
 
-async function makeStore(): Promise<{ root: string; store: SessionStore }> {
+async function makeStore(indexed = false): Promise<{ root: string; store: SessionStore; indexPath?: string }> {
   const root = await mkdtemp(join(tmpdir(), "aizen-session-"))
   temporaryDirectories.push(root)
-  return { root, store: new SessionStore(root) }
+  const indexPath = indexed ? join(root, "..", `${root.split(/[\\/]/).at(-1)}-cache`, "session-index.json") : undefined
+  if (indexPath) temporaryDirectories.push(join(indexPath, ".."))
+  return {
+    root,
+    store: new SessionStore(root, indexPath ? { indexPath } : {}),
+    ...(indexPath ? { indexPath } : {}),
+  }
 }
 
 afterEach(async () => {
@@ -94,6 +100,35 @@ describe("会话存储", () => {
     expect(listed.map((item) => item.sessionId)).toEqual(["s2", "s1"])
     expect(listed[0]).toMatchObject({ name: "第二个会话", preview: "第二项" })
     expect(listed[1]?.name).toBe("")
+  })
+
+  test("单文件摘要缓存可丢弃并随会话增删改自动修复", async () => {
+    const { root, store, indexPath } = await makeStore(true)
+    if (!indexPath) throw new Error("缺少测试索引路径")
+    await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" })
+    await store.append("s1", {
+      kind: "turn_started",
+      recordId: "r1",
+      turnId: "t1",
+      at: "2026-07-23T10:00:01.000Z",
+      viewId: null,
+      items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "初始预览" }] }],
+    })
+    expect((await store.list())[0]?.preview).toBe("初始预览")
+    expect(JSON.parse(await readFile(indexPath, "utf8"))).toMatchObject({ version: 1 })
+
+    await writeFile(indexPath, "损坏缓存")
+    expect((await store.list())[0]?.preview).toBe("初始预览")
+    await writeFile(indexPath, JSON.stringify({ version: 1, projects: { broken: { s1: {} } } }))
+    expect((await store.list())[0]?.preview).toBe("初始预览")
+
+    await store.append("s1", { kind: "session_renamed", recordId: "r2", at: new Date().toISOString(), name: "新名称" })
+    expect((await store.list())[0]?.name).toBe("新名称")
+
+    await rm(join(root, "s1.jsonl"))
+    expect(await store.list()).toEqual([])
+    const repaired = JSON.parse(await readFile(indexPath, "utf8"))
+    expect(Object.values(repaired.projects)[0]).toEqual({})
   })
 
   test("忽略损坏尾行并拒绝损坏中间行", async () => {

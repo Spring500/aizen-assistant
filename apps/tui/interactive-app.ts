@@ -1,7 +1,7 @@
-import type { CliRenderer } from "@opentui/core"
 import { join } from "node:path"
-import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
+import type { CliRenderer } from "@opentui/core"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
+import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import type {
   ConfigurableApi,
   EditableModelConfig,
@@ -18,20 +18,19 @@ import { ViewStore } from "../../packages/core/view-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
-import { selectRichItem } from "../../packages/tui-kit/rich-selector.ts"
-import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
-
 import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
 import { selectMultiple } from "../../packages/tui-kit/multi-select.ts"
 import { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
 import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { createAizenRenderer, destroyRenderer } from "../../packages/tui-kit/renderer.ts"
+import { selectRichItem } from "../../packages/tui-kit/rich-selector.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
+import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
 
 import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
-import { sessionSettingsItems, type SessionSettingsDraft } from "./session-settings.ts"
+import { type SessionSettingsDraft, sessionSettingsItems } from "./session-settings.ts"
 import { viewSelectionItems } from "./view-flow.ts"
 
 const createViewValue = ":create-view"
@@ -68,7 +67,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         authPath: join(options.dataDirectory, "auth.json"),
         modelsPath: join(options.dataDirectory, "models.json"),
       })
-  const store = new SessionStore(join(options.dataDirectory, "sessions", projectDirectoryName(options.cwd)))
+  const store = new SessionStore(join(options.dataDirectory, "sessions", projectDirectoryName(options.cwd)), {
+    indexPath: join(options.dataDirectory, "cache", "session-index.json"),
+  })
   const core =
     options.testing?.core ??
     new AizenCore({
@@ -540,7 +541,24 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           preferredProviderId = await authenticateProvider(provider.id)
           continue
         }
-        if (selected) return selected
+        if (selected) {
+          const levels = [
+            ...(selected.offThinkingLevel === undefined ? [] : [selected.offThinkingLevel]),
+            ...(selected.thinkingLevels ?? []),
+          ]
+          if (levels.length <= 1) return selected
+          const thinkingLevel = await selectItem<string>(
+            overlays,
+            "thinking-level-selector",
+            levels.map((level) => ({
+              name: level === selected.offThinkingLevel ? `关闭思考 · ${level}` : level,
+              description: level === selected.offThinkingLevel ? "关闭档位" : "思考档位",
+              value: level,
+            })),
+            { title: `选择思考档位 · 最多六个开启档位`, signal: interactionController.signal },
+          )
+          if (thinkingLevel) return { ...selected, thinkingLevel }
+        }
       }
       return undefined
     } finally {
@@ -662,6 +680,15 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       name: existing?.name ?? "",
       ...(existing?.api ? { api: existing.api } : {}),
       reasoning: existing?.reasoning ?? false,
+      ...(existing?.thinking
+        ? {
+            thinking: {
+              ...(existing.thinking.offLevel === undefined ? {} : { offLevel: existing.thinking.offLevel }),
+              levels: [...existing.thinking.levels],
+              defaultLevel: existing.thinking.defaultLevel,
+            },
+          }
+        : {}),
       input: existing ? [...existing.input] : ["text"],
       contextWindow: existing?.contextWindow ?? 128000,
       maxTokens: existing?.maxTokens ?? 16384,
@@ -684,7 +711,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           { name: `API              ${draft.api ?? "继承供应商"}`, description: "", value: "api" },
           { name: `输入模态         ${draft.input.join("、")}`, description: "多选", value: "input" },
           { name: "输出模态         当前 adapter 不支持配置", description: "查看扩展边界", value: "output" },
-          { name: `推理能力         ${draft.reasoning ? "支持" : "不支持"}`, description: "", value: "reasoning" },
+          {
+            name: `思考档位         ${draft.reasoning ? [draft.thinking?.offLevel, ...(draft.thinking?.levels ?? [])].filter(Boolean).join("、") : "不支持"}`,
+            description: draft.reasoning ? "关闭档位独立显示；最多六个开启档位" : "Enter 启用",
+            value: "reasoning",
+          },
           { name: `上下文窗口       ${draft.contextWindow}`, description: "", value: "context" },
           { name: `最大输出 token   ${draft.maxTokens}`, description: "", value: "max" },
           {
@@ -735,8 +766,48 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           })),
           interactionController.signal,
         )
-      } else if (action === "reasoning") draft.reasoning = !draft.reasoning
-      else if (action === "context")
+      } else if (action === "reasoning") {
+        const enabled = await selectItem<"disabled" | "default">(
+          overlays,
+          "thinking-config-mode",
+          [
+            { name: "不支持思考", description: "不配置任何思考档位", value: "disabled" },
+            {
+              name: "配置思考档位",
+              description: "关闭档位可选，开启档位最多六个；档位名用英文逗号分隔",
+              value: "default",
+            },
+          ],
+          { title: "思考能力", signal: interactionController.signal },
+        )
+        if (enabled === "disabled") {
+          draft.reasoning = false
+          delete draft.thinking
+        } else if (enabled === "default") {
+          const offLevel = await ask("关闭档位名（留空表示不能关闭）", draft.thinking?.offLevel ?? "off")
+          if (offLevel === undefined) continue
+          const levelsText = await ask(
+            "开启思考档位（最多六个，以英文逗号分隔）",
+            draft.thinking?.levels.join(",") ?? "medium",
+          )
+          if (levelsText === undefined) continue
+          const levels = levelsText
+            .split(",")
+            .map((level) => level.trim())
+            .filter(Boolean)
+          const defaultLevel = await askRequired(
+            "默认思考档位",
+            draft.thinking?.defaultLevel ?? levels[0] ?? offLevel.trim(),
+          )
+          if (!defaultLevel) continue
+          draft.reasoning = true
+          draft.thinking = {
+            ...(offLevel.trim() ? { offLevel: offLevel.trim() } : {}),
+            levels,
+            defaultLevel,
+          }
+        }
+      } else if (action === "context")
         draft.contextWindow = (await askNumber("上下文窗口", draft.contextWindow)) ?? draft.contextWindow
       else if (action === "max")
         draft.maxTokens = (await askNumber("最大输出 token", draft.maxTokens)) ?? draft.maxTokens
@@ -950,13 +1021,16 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       const snapshot = core.getSnapshot()
       const current = snapshot.currentModel
       if (!current) return false
+      const listed = snapshot.models.find(
+        (item) => item.providerId === current.providerId && item.modelId === current.modelId,
+      )
       draft = {
         model: {
           ...current,
-          name:
-            snapshot.models.find((item) => item.providerId === current.providerId && item.modelId === current.modelId)
-              ?.name ?? current.modelId,
+          name: listed?.name ?? current.modelId,
           available: true,
+          ...(listed?.thinkingLevels ? { thinkingLevels: [...listed.thinkingLevels] } : {}),
+          ...(listed?.offThinkingLevel ? { offThinkingLevel: listed.offThinkingLevel } : {}),
         },
         viewId: snapshot.currentViewId ?? null,
       }

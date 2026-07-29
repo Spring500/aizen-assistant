@@ -14,6 +14,8 @@ export type ModelRuntimeInfo = ModelReference & {
 export type ModelOption = ModelRuntimeInfo & {
   name: string
   available: boolean
+  thinkingLevels?: string[]
+  offThinkingLevel?: string
 }
 
 export type AuthProviderOption = {

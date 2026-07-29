@@ -55,6 +55,41 @@ describe("模型配置存储", () => {
     })
   })
 
+  test("保存模型自身思考档位并限制六个开启档位", async () => {
+    const { path, store } = await makeStore()
+    let snapshot = await store.read()
+    await store.upsertProvider(snapshot.revision, provider)
+    snapshot = await store.read()
+    await store.upsertModel(snapshot.revision, provider.id, {
+      ...model,
+      input: [...model.input],
+      reasoning: true,
+      thinking: { offLevel: "关闭", levels: ["A", "B", "C"], defaultLevel: "B" },
+    })
+
+    const saved = JSON.parse(await readFile(path, "utf8"))
+    expect(saved.providers.company.models[0]).toMatchObject({
+      reasoning: true,
+      aizenThinkingDefault: "B",
+      thinkingLevelMap: { off: "关闭", minimal: "A", low: "B", medium: "C", high: null, xhigh: null, max: null },
+    })
+    expect((await store.read()).providers[0]?.models[0]?.thinking).toEqual({
+      offLevel: "关闭",
+      levels: ["A", "B", "C"],
+      defaultLevel: "B",
+    })
+
+    snapshot = await store.read()
+    await expect(
+      store.upsertModel(snapshot.revision, provider.id, {
+        ...model,
+        input: [...model.input],
+        reasoning: true,
+        thinking: { levels: ["A", "B", "C", "D", "E", "F", "G"], defaultLevel: "A" },
+      }),
+    ).rejects.toThrow("最多支持六个档位")
+  })
+
   test("创建模式拒绝重复 ID", async () => {
     const { store } = await makeStore()
     let snapshot = await store.read()

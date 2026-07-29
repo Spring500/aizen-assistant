@@ -1,6 +1,6 @@
+import { createHash } from "node:crypto"
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { dirname } from "node:path"
-import { createHash } from "node:crypto"
 
 export const configurableApis = [
   "openai-completions",
@@ -15,11 +15,18 @@ export type SupportedModelModality = "text" | "image"
 
 export type ModelCostConfig = { input: number; output: number; cacheRead: number; cacheWrite: number }
 
+export type ModelThinkingConfig = {
+  offLevel?: string
+  levels: string[]
+  defaultLevel: string
+}
+
 export type EditableModelConfig = {
   id: string
   name: string
   api?: ConfigurableApi
   reasoning: boolean
+  thinking?: ModelThinkingConfig
   input: SupportedModelModality[]
   contextWindow: number
   maxTokens: number
@@ -155,6 +162,20 @@ function validateProvider(input: EditableProviderConfig): void {
   api(input.api, "供应商 API")
 }
 
+function validateThinking(input: EditableModelConfig): void {
+  if (!input.reasoning) {
+    if (input.thinking !== undefined) throw new Error("不支持思考的模型不能配置思考档位")
+    return
+  }
+  if (!input.thinking) throw new Error("支持思考的模型必须配置思考档位")
+  const values = [...(input.thinking.offLevel === undefined ? [] : [input.thinking.offLevel]), ...input.thinking.levels]
+  if (input.thinking.levels.length > 6) throw new Error("开启思考最多支持六个档位")
+  if (values.some((value) => !value.trim() || value !== value.trim()))
+    throw new Error("思考档位名不能为空或包含首尾空格")
+  if (new Set(values).size !== values.length) throw new Error("思考档位名不能重复")
+  if (!values.includes(input.thinking.defaultLevel)) throw new Error("默认思考档位必须存在")
+}
+
 function validateModel(input: EditableModelConfig): void {
   if (
     !input.id.trim() ||
@@ -167,6 +188,7 @@ function validateModel(input: EditableModelConfig): void {
     throw new Error("模型 ID 不能为空、包含首尾空格或控制字符")
   if (!input.name.trim()) throw new Error("模型名称不能为空")
   if (input.api !== undefined) api(input.api, "模型 API")
+  validateThinking(input)
   if (input.input.length === 0 || new Set(input.input).size !== input.input.length)
     throw new Error("输入模态不能为空或重复")
   if (input.input.some((item) => item !== "text" && item !== "image"))
@@ -175,6 +197,26 @@ function validateModel(input: EditableModelConfig): void {
   positiveInteger(input.maxTokens, "最大输出 token", 16384)
   if (input.maxTokens > input.contextWindow) throw new Error("最大输出 token 不能超过上下文窗口")
   cost(input.cost, "模型价格")
+}
+
+const thinkingSlots = ["minimal", "low", "medium", "high", "xhigh", "max"] as const
+
+function thinkingConfig(source: JsonObject, reasoning: boolean): ModelThinkingConfig | undefined {
+  if (!reasoning) return undefined
+  const map = source.thinkingLevelMap === undefined ? {} : object(source.thinkingLevelMap, "thinkingLevelMap")
+  const levels = thinkingSlots.flatMap((slot) => {
+    if (map[slot] === null) return []
+    if (typeof map[slot] === "string") return [map[slot] as string]
+    return slot === "xhigh" || slot === "max" ? [] : [slot]
+  })
+  const offLevel = typeof map.off === "string" ? map.off : map.off === null ? undefined : "off"
+  const configuredDefault = typeof source.aizenThinkingDefault === "string" ? source.aizenThinkingDefault : undefined
+  const available = [...(offLevel === undefined ? [] : [offLevel]), ...levels]
+  const defaultLevel =
+    configuredDefault && available.includes(configuredDefault)
+      ? configuredDefault
+      : (levels[2] ?? levels[0] ?? offLevel ?? "")
+  return { ...(offLevel === undefined ? {} : { offLevel }), levels, defaultLevel }
 }
 
 function modelEntry(providerId: string, value: unknown): ModelConfigEntry {
@@ -190,11 +232,13 @@ function modelEntry(providerId: string, value: unknown): ModelConfigEntry {
         ? (source.api as ConfigurableApi)
         : undefined
   const unsupportedApi = source.api !== undefined && modelApi === undefined
+  const thinking = thinkingConfig(source, source.reasoning === true)
   const entry: ModelConfigEntry = {
     id,
     name: typeof source.name === "string" ? source.name : id,
     ...(modelApi === undefined ? {} : { api: modelApi }),
     reasoning: source.reasoning === true,
+    ...(thinking === undefined ? {} : { thinking }),
     input: input.filter((item): item is SupportedModelModality => item === "text" || item === "image"),
     contextWindow: positiveInteger(source.contextWindow, `模型 ${providerId}/${id} 的上下文窗口`, 128000),
     maxTokens: positiveInteger(source.maxTokens, `模型 ${providerId}/${id} 的最大输出 token`, 16384),
@@ -308,18 +352,29 @@ export class ModelConfigStore {
       if (mode === "create" && index >= 0) throw new Error(`模型 ID 已存在：${providerId}/${model.id}`)
       if (mode === "update" && index < 0) throw new Error(`模型不存在：${providerId}/${model.id}`)
       const previous = index < 0 ? {} : object(models[index], "模型")
+      const thinkingLevelMap = model.thinking
+        ? {
+            off: model.thinking.offLevel ?? null,
+            ...Object.fromEntries(thinkingSlots.map((slot, index) => [slot, model.thinking?.levels[index] ?? null])),
+          }
+        : undefined
       const stored: JsonObject = {
         ...previous,
         id: model.id,
         name: model.name.trim(),
         ...(model.api === undefined ? { api: undefined } : { api: model.api }),
         reasoning: model.reasoning,
+        ...(thinkingLevelMap ? { thinkingLevelMap, aizenThinkingDefault: model.thinking?.defaultLevel } : {}),
         input: [...model.input],
         contextWindow: model.contextWindow,
         maxTokens: model.maxTokens,
         cost: { ...model.cost },
       }
       if (stored.api === undefined) delete stored.api
+      if (!model.reasoning) {
+        delete stored.thinkingLevelMap
+        delete stored.aizenThinkingDefault
+      }
       if (index < 0) models.push(stored)
       else models[index] = stored
       provider.models = models
