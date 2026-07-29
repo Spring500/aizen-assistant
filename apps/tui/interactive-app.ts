@@ -1178,9 +1178,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   }
 
   function userTurnOptions() {
-    return core
-      .getSnapshot()
-      .transcript.filter((entry) => entry.type === "input")
+    const transcript = core.getSnapshot().transcript
+    const completedTurns = new Set(transcript.filter((entry) => entry.type === "turn_end").map((entry) => entry.turnId))
+    return transcript
+      .filter(
+        (entry): entry is Extract<(typeof transcript)[number], { type: "input" }> =>
+          entry.type === "input" && completedTurns.has(entry.turnId),
+      )
       .map((entry, index) => {
         const text = entry.items
           .filter((item) => item.source === "user")
