@@ -73,6 +73,10 @@ describe("会话摘要索引存储", () => {
 
   test("Windows独占句柄下验证读取、替换和旧索引完整性", async () => {
     if (process.platform !== "win32") return
+    const startedAt = performance.now()
+    const trace = (stage: string) =>
+      console.log(`[会话摘要索引/独占句柄] ${stage}，累计耗时 ${Math.round(performance.now() - startedAt)}ms`)
+    trace("开始")
     const path = await makePath()
     const store = new SessionIndexStore(path)
     await store.updateProject("existing", { a: entry("a") })
@@ -89,6 +93,7 @@ describe("会话摘要索引存储", () => {
         "} finally { $stream.Dispose() }",
       ].join("\n"),
     )
+    trace("启动 PowerShell 独占句柄进程")
     const holder = Bun.spawn(["powershell.exe", "-NoProfile", "-File", scriptPath, path, ready, release], {
       stdout: "pipe",
       stderr: "pipe",
@@ -105,11 +110,17 @@ describe("会话摘要索引存储", () => {
         }
       }
       expect(held).toBe(true)
+      trace("独占句柄就绪")
       await expect(readFile(path, "utf8")).rejects.toThrow()
+      trace("确认读取被拒绝")
 
+      trace("开始尝试更新被占用索引")
       const warnings = await store.updateProject("blocked", { b: entry("b") })
+      trace("完成更新尝试")
       await writeFile(release, "release")
+      trace("已发送释放信号")
       expect(await holder.exited).toBe(0)
+      trace("PowerShell 进程已退出")
       const stderr = await new Response(holder.stderr).text()
       expect(stderr).toBe("")
 
@@ -120,12 +131,14 @@ describe("会话摘要索引存储", () => {
       expect(Object.keys(index.projects)).toEqual(["existing"])
       expect(index.projects.existing.a.summary.sessionId).toBe("a")
     } finally {
+      trace("开始清理")
       await writeFile(release, "release").catch(() => {})
       holder.kill()
       await holder.exited
       await Promise.all([ready, release, scriptPath].map((file) => rm(file, { force: true })))
+      trace("清理完成")
     }
-  }, 15_000)
+  })
 
   test("锁等待失败返回警告且旧索引保持有效", async () => {
     const path = await makePath()
