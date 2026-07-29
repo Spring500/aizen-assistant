@@ -34,6 +34,7 @@ export interface OverlayHandle<T = unknown> {
   resume(): void
   setInput(input: OverlayInput): void
   setContentHeight(height: number): void
+  setHelp(help: string): void
 }
 
 type OverlayLayer = {
@@ -176,6 +177,9 @@ export class OverlayManager {
       setContentHeight: (height) => {
         layer.contentHeight = Math.max(1, height)
         this.layout()
+      },
+      setHelp: (help) => {
+        layer.help.content = help
       },
     }
   }

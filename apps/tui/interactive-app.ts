@@ -1,5 +1,5 @@
 import { join } from "node:path"
-import type { CliRenderer } from "@opentui/core"
+import { type CliRenderer, SelectRenderable } from "@opentui/core"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import type {
@@ -675,136 +675,204 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
   async function editThinkingLevels(initial: string[]): Promise<string[] | undefined> {
     const levels = [...initial]
-    while (!exiting) {
-      const action = await selectItem<string>(
-        overlays,
-        `thinking-level-editor-${crypto.randomUUID()}`,
-        [
+    return new Promise((resolve) => {
+      let editing: { index: number; value: string; adding: boolean } | undefined
+      let settled = false
+      const finish = (value: string[] | undefined) => {
+        if (settled) return
+        settled = true
+        handle.close(value)
+        resolve(value)
+      }
+      const handle = overlays.open<string[]>({
+        id: "thinking-level-editor",
+        title: "开启思考档位",
+        help: "Enter 编辑 | Alt+↑/↓ 排序 | Ctrl+X 删除 | Esc 返回",
+        contentHeight: Math.min(18, Math.max(6, (levels.length + 2) * 3 - 2)),
+        signal: interactionController.signal,
+        onCancel: () => finish(undefined),
+      })
+      const selector = new SelectRenderable(overlays.renderer, {
+        id: "thinking-level-list",
+        options: [],
+        position: "absolute",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        showDescription: true,
+        textColor: systemColors.secondary,
+        descriptionColor: systemColors.shortcuts,
+      })
+      handle.content.add(selector)
+      const render = (selectedIndex = selector.getSelectedIndex()) => {
+        selector.options = [
           ...levels.map((level, index) => ({
-            name: `${index + 1}. ${level}`,
-            description: "Enter 编辑、删除或调整顺序",
+            name: `${index + 1}. ${editing?.index === index ? `${editing.value}█` : level}`,
+            description: editing?.index === index ? "Enter 确认 · Esc 取消" : "Enter 原地编辑",
             value: `item:${index}`,
           })),
           {
-            name: `新增档位                              ${levels.length} / 6`,
-            description: levels.length >= 6 ? "已达到六个开启档位上限" : "逐项新增开启思考档位",
+            name: editing?.adding
+              ? `新增档位  ${editing.value}█`
+              : `新增档位                              ${levels.length} / 6`,
+            description: editing?.adding
+              ? "Enter 确认 · Esc 取消"
+              : levels.length >= 6
+                ? "已达到六个开启档位上限"
+                : "Enter 原地输入",
             value: "add",
-            disabled: levels.length >= 6,
           },
           { name: "完成", description: `当前 ${levels.length} / 6`, value: "done" },
-        ],
-        { title: `开启思考档位 · ${levels.length} / 6`, signal: interactionController.signal },
-      )
-      if (!action) return undefined
-      if (action === "done") return levels
-      if (action === "add") {
-        const value = await askRequired("新增档位名")
-        if (value) levels.push(value)
-        continue
+        ]
+        selector.setSelectedIndex(Math.min(selectedIndex, levels.length + 1))
+        handle.setContentHeight(Math.min(18, Math.max(6, (levels.length + 2) * 3 - 2)))
       }
-      const index = Number(action.slice("item:".length))
-      const operation = await selectItem<"edit" | "delete" | "up" | "down">(
-        overlays,
-        `thinking-level-action-${crypto.randomUUID()}`,
-        [
-          { name: "编辑", description: levels[index] ?? "", value: "edit" },
-          { name: "上移", description: "调整展示与 pi 映射顺序", value: "up", disabled: index === 0 },
-          {
-            name: "下移",
-            description: "调整展示与 pi 映射顺序",
-            value: "down",
-            disabled: index === levels.length - 1,
-          },
-          { name: "删除", description: "从开启档位中移除", value: "delete" },
-        ],
-        { title: `管理档位 · ${levels[index] ?? ""}`, signal: interactionController.signal },
-      )
-      if (operation === "edit") {
-        const value = await askRequired("档位名", levels[index])
-        if (value) levels[index] = value
-      } else if (operation === "delete") levels.splice(index, 1)
-      else if (operation === "up" && index > 0)
-        [levels[index - 1], levels[index]] = [levels[index] ?? "", levels[index - 1] ?? ""]
-      else if (operation === "down" && index < levels.length - 1)
-        [levels[index], levels[index + 1]] = [levels[index + 1] ?? "", levels[index] ?? ""]
-    }
-    return undefined
+      const stopEditing = () => {
+        editing = undefined
+        handle.setHelp("Enter 编辑 | Alt+↑/↓ 排序 | Ctrl+X 删除 | Esc 返回")
+        render()
+      }
+      const confirmEditing = () => {
+        if (!editing) return
+        const value = editing.value.trim()
+        if (!value) return
+        if (editing.adding) levels.push(value)
+        else levels[editing.index] = value
+        stopEditing()
+      }
+      handle.setInput({
+        keypress: (key) => {
+          if (editing) {
+            if (key.name === "return") confirmEditing()
+            else if (key.name === "escape") stopEditing()
+            else if (key.name === "backspace") {
+              editing.value = Array.from(editing.value).slice(0, -1).join("")
+              render()
+            } else if (!key.ctrl && !key.meta && key.sequence.length > 0) {
+              editing.value += key.sequence
+              render()
+            }
+            return
+          }
+          const index = selector.getSelectedIndex()
+          if (key.name === "escape") finish(levels)
+          else if (key.ctrl && key.name === "x" && index < levels.length) {
+            if (levels.length <= 1) {
+              handle.setHelp("至少保留一个开启档位 | Enter 编辑 | Esc 返回")
+              return
+            }
+            levels.splice(index, 1)
+            render(Math.min(index, levels.length - 1))
+          } else if ((key.meta || key.option) && key.name === "up" && index > 0 && index < levels.length) {
+            ;[levels[index - 1], levels[index]] = [levels[index] ?? "", levels[index - 1] ?? ""]
+            render(index - 1)
+          } else if ((key.meta || key.option) && key.name === "down" && index < levels.length - 1) {
+            ;[levels[index], levels[index + 1]] = [levels[index + 1] ?? "", levels[index] ?? ""]
+            render(index + 1)
+          } else if (key.name === "return") {
+            if (index < levels.length) {
+              editing = { index, value: levels[index] ?? "", adding: false }
+              handle.setHelp("输入新档位名 | Enter 确认 | Esc 取消")
+              render(index)
+            } else if (index === levels.length && levels.length < 6) {
+              editing = { index, value: "", adding: true }
+              handle.setHelp("输入新增档位名 | Enter 确认 | Esc 取消")
+              render(index)
+            } else if (index === levels.length + 1) finish(levels)
+          } else selector.handleKeyPress?.(key)
+        },
+        paste: (event) => {
+          if (!editing) return
+          editing.value += new TextDecoder().decode(event.bytes).replace(/[\r\n]+/g, "")
+          render()
+        },
+      })
+      render()
+    })
   }
 
   async function editThinkingConfig(initial?: ModelThinkingConfig): Promise<ModelThinkingConfig | undefined | null> {
     let supported = initial !== undefined
     let allowDisable = initial?.disableThinkingLevel !== undefined
-    let disableThinkingLevel = initial?.disableThinkingLevel ?? "关闭"
-    let thinkingLevels = [...(initial?.thinkingLevels ?? ["低", "中", "高"])]
+    let disableThinkingLevel = initial?.disableThinkingLevel ?? "off"
+    let thinkingLevels = [...(initial?.thinkingLevels ?? ["low", "medium", "high"])]
     let defaultThinkingLevel = initial?.defaultThinkingLevel ?? thinkingLevels[1] ?? thinkingLevels[0] ?? ""
-    while (!exiting) {
-      const summary = [allowDisable ? disableThinkingLevel : undefined, ...thinkingLevels].filter(Boolean).join("、")
-      const action = await selectItem<"supported" | "allowDisable" | "disable" | "levels" | "default" | "save">(
-        overlays,
-        "thinking-config-editor",
-        [
+    return new Promise((resolve) => {
+      let editingDisable: { value: string } | undefined
+      let settled = false
+      const finish = (value: ModelThinkingConfig | undefined | null) => {
+        if (settled) return
+        settled = true
+        handle.close(value ?? undefined)
+        resolve(value)
+      }
+      const handle = overlays.open<ModelThinkingConfig>({
+        id: "thinking-config-editor",
+        title: "编辑思考配置",
+        help: "↑↓ 移动 | Enter 选择 | Esc 返回",
+        contentHeight: 16,
+        signal: interactionController.signal,
+        onCancel: () => finish(null),
+      })
+      const selector = new SelectRenderable(overlays.renderer, {
+        id: "thinking-config-list",
+        options: [],
+        position: "absolute",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        left: 0,
+        showDescription: true,
+        textColor: systemColors.secondary,
+        descriptionColor: systemColors.shortcuts,
+      })
+      handle.content.add(selector)
+      const render = (selectedIndex = selector.getSelectedIndex()) => {
+        const summary = [allowDisable ? disableThinkingLevel : undefined, ...thinkingLevels].filter(Boolean).join("、")
+        selector.options = [
           { name: `思考能力        ${supported ? "支持" : "不支持"}`, description: "Enter 切换", value: "supported" },
           {
             name: `允许关闭思考    ${supported && allowDisable ? "是" : "否"}`,
             description: supported ? "Enter 切换" : "请先启用思考能力",
             value: "allowDisable",
-            disabled: !supported,
           },
           {
-            name: `关闭档位名      ${supported && allowDisable ? disableThinkingLevel : "—"}`,
-            description: supported && allowDisable ? "Enter 编辑" : "未允许关闭思考",
+            name: `关闭档位名      ${editingDisable ? `${editingDisable.value}█` : supported && allowDisable ? disableThinkingLevel : "—"}`,
+            description: editingDisable
+              ? "Enter 确认 · Esc 取消"
+              : supported && allowDisable
+                ? "Enter 原地编辑"
+                : "未允许关闭思考",
             value: "disable",
-            disabled: !supported || !allowDisable,
           },
           {
             name: `开启思考档位    ${supported ? summary : "—"}       ${thinkingLevels.length} / 6`,
-            description: supported ? "逐项新增、编辑、删除和排序" : "请先启用思考能力",
+            description: supported ? "Enter 管理；原地编辑，快捷排序和删除" : "请先启用思考能力",
             value: "levels",
-            disabled: !supported,
           },
           {
             name: `默认档位        ${supported ? defaultThinkingLevel || "未设置" : "—"}`,
             description: supported ? "从合法档位中选择" : "请先启用思考能力",
             value: "default",
-            disabled: !supported,
           },
           { name: "保存", description: supported ? "校验并返回模型编辑页" : "清除全部思考配置", value: "save" },
-        ],
-        { title: "编辑思考配置", signal: interactionController.signal },
-      )
-      if (!action) return null
-      if (action === "supported") {
-        supported = !supported
-        if (!supported) {
-          allowDisable = false
-          disableThinkingLevel = "关闭"
-          thinkingLevels = []
-          defaultThinkingLevel = ""
-        } else if (thinkingLevels.length === 0) {
-          thinkingLevels = ["低", "中", "高"]
-          defaultThinkingLevel = "中"
-        }
-      } else if (action === "allowDisable") {
-        allowDisable = !allowDisable
-        if (allowDisable && !disableThinkingLevel) disableThinkingLevel = "关闭"
-        if (!allowDisable && defaultThinkingLevel === disableThinkingLevel)
-          defaultThinkingLevel = thinkingLevels[0] ?? ""
-      } else if (action === "disable") {
-        const value = await askRequired("关闭档位名", disableThinkingLevel)
-        if (value) {
+        ]
+        selector.setSelectedIndex(selectedIndex)
+      }
+      const validSelection = (index: number) =>
+        index === 0 || index === 5 || (supported && index !== 2) || (supported && allowDisable)
+      const stopEditing = (confirm: boolean) => {
+        if (confirm && editingDisable?.value.trim()) {
           const previous = disableThinkingLevel
-          disableThinkingLevel = value
-          if (defaultThinkingLevel === previous) defaultThinkingLevel = value
+          disableThinkingLevel = editingDisable.value.trim()
+          if (defaultThinkingLevel === previous) defaultThinkingLevel = disableThinkingLevel
         }
-      } else if (action === "levels") {
-        const edited = await editThinkingLevels(thinkingLevels)
-        if (edited) {
-          thinkingLevels = edited
-          const available = [...(allowDisable ? [disableThinkingLevel] : []), ...thinkingLevels]
-          if (!available.includes(defaultThinkingLevel))
-            defaultThinkingLevel = thinkingLevels[0] ?? disableThinkingLevel
-        }
-      } else if (action === "default") {
+        editingDisable = undefined
+        handle.setHelp("↑↓ 移动 | Enter 选择 | Esc 返回")
+        render(2)
+      }
+      const chooseDefault = async () => {
         const available = [...(allowDisable ? [disableThinkingLevel] : []), ...thinkingLevels]
         const selected = await selectItem<string>(
           overlays,
@@ -817,15 +885,72 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           { title: "选择默认思考档位", signal: interactionController.signal },
         )
         if (selected) defaultThinkingLevel = selected
-      } else if (!supported) return undefined
-      else
-        return {
-          ...(allowDisable ? { disableThinkingLevel } : {}),
-          thinkingLevels,
-          defaultThinkingLevel,
+        render(4)
+      }
+      const manageLevels = async () => {
+        const edited = await editThinkingLevels(thinkingLevels)
+        if (edited) {
+          thinkingLevels = edited
+          const available = [...(allowDisable ? [disableThinkingLevel] : []), ...thinkingLevels]
+          if (!available.includes(defaultThinkingLevel))
+            defaultThinkingLevel = thinkingLevels[0] ?? disableThinkingLevel
         }
-    }
-    return null
+        render(3)
+      }
+      handle.setInput({
+        keypress: (key) => {
+          if (editingDisable) {
+            if (key.name === "return") stopEditing(true)
+            else if (key.name === "escape") stopEditing(false)
+            else if (key.name === "backspace") {
+              editingDisable.value = Array.from(editingDisable.value).slice(0, -1).join("")
+              render(2)
+            } else if (!key.ctrl && !key.meta && key.sequence.length > 0) {
+              editingDisable.value += key.sequence
+              render(2)
+            }
+            return
+          }
+          if (key.name === "escape") finish(null)
+          else if (key.name === "return") {
+            const index = selector.getSelectedIndex()
+            if (!validSelection(index)) return
+            if (index === 0) {
+              supported = !supported
+              if (!supported) {
+                allowDisable = false
+                disableThinkingLevel = "off"
+                thinkingLevels = []
+                defaultThinkingLevel = ""
+              } else {
+                thinkingLevels = ["low", "medium", "high"]
+                defaultThinkingLevel = "medium"
+              }
+              render(index)
+            } else if (index === 1) {
+              allowDisable = !allowDisable
+              if (allowDisable && !disableThinkingLevel) disableThinkingLevel = "off"
+              if (!allowDisable && defaultThinkingLevel === disableThinkingLevel)
+                defaultThinkingLevel = thinkingLevels[0] ?? ""
+              render(index)
+            } else if (index === 2) {
+              editingDisable = { value: disableThinkingLevel }
+              handle.setHelp("输入关闭档位名 | Enter 确认 | Esc 取消")
+              render(index)
+            } else if (index === 3) void manageLevels()
+            else if (index === 4) void chooseDefault()
+            else if (!supported) finish(undefined)
+            else finish({ ...(allowDisable ? { disableThinkingLevel } : {}), thinkingLevels, defaultThinkingLevel })
+          } else selector.handleKeyPress?.(key)
+        },
+        paste: (event) => {
+          if (!editingDisable) return
+          editingDisable.value += new TextDecoder().decode(event.bytes).replace(/[\r\n]+/g, "")
+          render(2)
+        },
+      })
+      render()
+    })
   }
 
   async function editModel(existing?: ModelConfigEntry, copy = false): Promise<EditableModelConfig | undefined> {
