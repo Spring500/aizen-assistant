@@ -44,7 +44,7 @@ function sessionModel(model: ModelReference): ModelReference {
     providerId: model.providerId,
     modelId: model.modelId,
     api: model.api,
-    thinkingLevel: model.thinkingLevel,
+    ...(model.thinkingLevel === undefined ? {} : { thinkingLevel: model.thinkingLevel }),
   }
 }
 

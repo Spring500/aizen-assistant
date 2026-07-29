@@ -44,24 +44,64 @@ export type PiSessionRuntimeOptions = {
   modelsPath: string | null
 }
 
-function externalThinkingLevel(model: Model<Api>, level: ModelThinkingLevel): string {
-  return model.thinkingLevelMap?.[level] ?? level
+const piThinkingLevels = ["minimal", "low", "medium", "high", "xhigh", "max"] as const
+
+type RuntimeThinkingConfig = ModelThinkingConfig | null | undefined
+
+function runtimeModel(model: Model<Api>, config: RuntimeThinkingConfig): Model<Api> {
+  if (config === undefined) return model
+  if (config === null) {
+    const { thinkingLevelMap: _thinkingLevelMap, ...plainModel } = model
+    return { ...plainModel, reasoning: false }
+  }
+  return {
+    ...model,
+    reasoning: true,
+    thinkingLevelMap: {
+      off: config.disableThinkingLevel === undefined ? null : config.disableThinkingLevel,
+      ...Object.fromEntries(piThinkingLevels.map((level, index) => [level, config.thinkingLevels[index] ?? null])),
+    },
+  }
 }
 
-function internalThinkingLevel(model: Model<Api>, level: string): ThinkingLevel {
-  const supported = getSupportedThinkingLevels(model)
-  const matched = supported.find((candidate) => externalThinkingLevel(model, candidate) === level)
-  if (matched) return matched
-  if (supported.includes(level as ModelThinkingLevel)) return level as ThinkingLevel
-  throw new Error(`模型 ${model.provider}/${model.id} 不支持思考档位：${level}`)
+function internalThinkingLevel(
+  model: Model<Api>,
+  level: string | undefined,
+  config: RuntimeThinkingConfig,
+): ThinkingLevel {
+  if (config === null) {
+    if (level !== undefined) throw new Error(`模型 ${model.provider}/${model.id} 未配置思考档位`)
+    return "off"
+  }
+  if (config === undefined) {
+    if (!model.reasoning) {
+      if (level !== undefined) throw new Error(`模型 ${model.provider}/${model.id} 不支持思考`)
+      return "off"
+    }
+    if (!level || !getSupportedThinkingLevels(model).includes(level as ModelThinkingLevel))
+      throw new Error(`模型 ${model.provider}/${model.id} 不支持思考档位：${level ?? "未设置"}`)
+    return level as ThinkingLevel
+  }
+  if (level === config.disableThinkingLevel) return "off"
+  const index = config.thinkingLevels.indexOf(level ?? "")
+  if (index < 0) throw new Error(`模型 ${model.provider}/${model.id} 不支持思考档位：${level ?? "未设置"}`)
+  return piThinkingLevels[index] as ThinkingLevel
 }
 
-function modelReference(model: Model<Api>, thinkingLevel: ThinkingLevel) {
+function modelReference(model: Model<Api>, thinkingLevel: ThinkingLevel, config: RuntimeThinkingConfig) {
+  const externalLevel =
+    config === null || (!model.reasoning && config === undefined)
+      ? undefined
+      : config === undefined
+        ? thinkingLevel
+        : thinkingLevel === "off"
+          ? config.disableThinkingLevel
+          : config.thinkingLevels[piThinkingLevels.indexOf(thinkingLevel as (typeof piThinkingLevels)[number])]
   return {
     providerId: model.provider,
     modelId: model.id,
     api: model.api,
-    thinkingLevel: externalThinkingLevel(model, thinkingLevel),
+    ...(externalLevel === undefined ? {} : { thinkingLevel: externalLevel }),
     contextWindow: model.contextWindow,
   }
 }
@@ -156,7 +196,7 @@ export class PiSessionRuntime implements PiPort {
   readonly #modelRuntime: ModelRuntime
   readonly #modelsPath: string | null
   readonly #listeners = new Set<(event: PiPortEvent) => void>()
-  #thinkingConfigs = new Map<string, ModelThinkingConfig>()
+  #thinkingConfigs = new Map<string, ModelThinkingConfig | null>()
   #session: AgentSession | undefined
   #unsubscribe: (() => void) | undefined
   #unsubscribeAgent: (() => void) | undefined
@@ -198,8 +238,10 @@ export class PiSessionRuntime implements PiPort {
 
   async #start(input: PiCreateInput, records: SessionRecord[]): Promise<ModelRuntimeInfo> {
     await this.#disposeSession()
-    const model = this.#modelRuntime.getModel(input.model.providerId, input.model.modelId)
-    if (!model) throw new Error(`找不到模型：${input.model.providerId}/${input.model.modelId}`)
+    const sourceModel = this.#modelRuntime.getModel(input.model.providerId, input.model.modelId)
+    if (!sourceModel) throw new Error(`找不到模型：${input.model.providerId}/${input.model.modelId}`)
+    const thinkingConfig = this.#thinkingConfigs.get(`${sourceModel.provider}\0${sourceModel.id}`)
+    const model = runtimeModel(sourceModel, thinkingConfig)
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: false } })
     const initialLoader = createViewLoader(input.cwd, input.view, settingsManager)
     await initialLoader.reload()
@@ -214,7 +256,7 @@ export class PiSessionRuntime implements PiPort {
       cwd: input.cwd,
       modelRuntime: this.#modelRuntime,
       model,
-      thinkingLevel: internalThinkingLevel(model, input.model.thinkingLevel),
+      thinkingLevel: internalThinkingLevel(model, input.model.thinkingLevel, thinkingConfig),
       tools: ["read", "bash", "edit", "write"],
       customTools: auditedTools(input.cwd),
       resourceLoader,
@@ -295,7 +337,7 @@ export class PiSessionRuntime implements PiPort {
         })
       }
     })
-    return modelReference(model, session.thinkingLevel)
+    return modelReference(model, session.thinkingLevel, thinkingConfig)
   }
 
   create(input: PiCreateInput): Promise<ModelRuntimeInfo> {
@@ -322,7 +364,7 @@ export class PiSessionRuntime implements PiPort {
     const session = this.#requireSession()
     const model = session.model
     if (!model) throw new Error("当前会话没有模型")
-    return modelReference(model, session.thinkingLevel)
+    return modelReference(model, session.thinkingLevel, this.#thinkingConfigs.get(`${model.provider}\0${model.id}`))
   }
 
   async prompt(input: PiPromptInput): Promise<void> {
@@ -368,27 +410,35 @@ export class PiSessionRuntime implements PiPort {
       (await this.#modelRuntime.getAvailable()).map((model) => `${model.provider}\0${model.id}`),
     )
     return this.#modelRuntime.getModels().map((model) => {
-      const supported = getSupportedThinkingLevels(model)
       const configured = this.#thinkingConfigs.get(`${model.provider}\0${model.id}`)
-      const preferred = clampThinkingLevel(model, model.reasoning ? "medium" : "off")
+      const builtin = configured === undefined
+      const supported = builtin ? getSupportedThinkingLevels(model) : []
+      const preferred = builtin && model.reasoning ? clampThinkingLevel(model, "medium") : undefined
       return {
         providerId: model.provider,
         modelId: model.id,
         api: model.api,
-        thinkingLevel: configured?.defaultLevel ?? externalThinkingLevel(model, preferred),
+        ...(configured
+          ? { thinkingLevel: configured.defaultThinkingLevel }
+          : preferred
+            ? { thinkingLevel: preferred }
+            : {}),
         name: model.name,
         contextWindow: model.contextWindow,
         available: available.has(`${model.provider}\0${model.id}`),
-        thinkingLevels:
-          configured?.levels ??
-          supported.filter((level) => level !== "off").map((level) => externalThinkingLevel(model, level)),
-        ...(configured?.offLevel
-          ? { offThinkingLevel: configured.offLevel }
-          : configured
-            ? {}
-            : supported.includes("off")
-              ? { offThinkingLevel: externalThinkingLevel(model, "off") }
-              : {}),
+        ...(configured
+          ? {
+              thinkingLevels: [...configured.thinkingLevels],
+              ...(configured.disableThinkingLevel === undefined
+                ? {}
+                : { offThinkingLevel: configured.disableThinkingLevel }),
+            }
+          : builtin && model.reasoning
+            ? {
+                thinkingLevels: supported.filter((level) => level !== "off"),
+                ...(supported.includes("off") ? { offThinkingLevel: "off" } : {}),
+              }
+            : {}),
       }
     })
   }
@@ -396,11 +446,13 @@ export class PiSessionRuntime implements PiPort {
   async setModel(reference: ModelReference): Promise<ModelRuntimeInfo> {
     const session = this.#requireSession()
     if (!session.isIdle) throw new Error("生成或执行工具期间不能切换模型")
-    const model = this.#modelRuntime.getModel(reference.providerId, reference.modelId)
-    if (!model) throw new Error(`找不到模型：${reference.providerId}/${reference.modelId}`)
+    const sourceModel = this.#modelRuntime.getModel(reference.providerId, reference.modelId)
+    if (!sourceModel) throw new Error(`找不到模型：${reference.providerId}/${reference.modelId}`)
+    const thinkingConfig = this.#thinkingConfigs.get(`${sourceModel.provider}\0${sourceModel.id}`)
+    const model = runtimeModel(sourceModel, thinkingConfig)
     await session.setModel(model)
-    session.setThinkingLevel(internalThinkingLevel(model, reference.thinkingLevel))
-    return modelReference(model, session.thinkingLevel)
+    session.setThinkingLevel(internalThinkingLevel(model, reference.thinkingLevel, thinkingConfig))
+    return modelReference(model, session.thinkingLevel, thinkingConfig)
   }
 
   async listAuthProviders(): Promise<AuthProviderOption[]> {
@@ -499,15 +551,19 @@ export class PiSessionRuntime implements PiPort {
     for (const record of records) {
       if ((record.kind === "turn_started" || record.kind === "message") && !finishedTurns.has(record.turnId)) continue
       if (record.kind === "model_changed") {
-        const model = this.#modelRuntime.getModel(record.model.providerId, record.model.modelId)
-        if (!model) throw new Error(`找不到模型：${record.model.providerId}/${record.model.modelId}`)
+        const sourceModel = this.#modelRuntime.getModel(record.model.providerId, record.model.modelId)
+        if (!sourceModel) throw new Error(`找不到模型：${record.model.providerId}/${record.model.modelId}`)
+        const thinkingConfig = this.#thinkingConfigs.get(`${sourceModel.provider}\0${sourceModel.id}`)
+        const model = runtimeModel(sourceModel, thinkingConfig)
         this.#registerEntry(
           record.recordId,
           sessionManager.appendModelChange(record.model.providerId, record.model.modelId),
         )
         this.#registerEntry(
           record.recordId,
-          sessionManager.appendThinkingLevelChange(internalThinkingLevel(model, record.model.thinkingLevel)),
+          sessionManager.appendThinkingLevelChange(
+            internalThinkingLevel(model, record.model.thinkingLevel, thinkingConfig),
+          ),
         )
       } else if (record.kind === "turn_started") {
         for (const mapped of turnInputToPi(
@@ -553,7 +609,7 @@ export class PiSessionRuntime implements PiPort {
     const snapshot = await new ModelConfigStore(this.#modelsPath).read()
     for (const provider of snapshot.providers) {
       for (const model of provider.models) {
-        if (model.thinking) this.#thinkingConfigs.set(`${provider.id}\0${model.id}`, model.thinking)
+        this.#thinkingConfigs.set(`${provider.id}\0${model.id}`, model.thinking ?? null)
       }
     }
   }

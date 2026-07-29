@@ -16,16 +16,15 @@ export type SupportedModelModality = "text" | "image"
 export type ModelCostConfig = { input: number; output: number; cacheRead: number; cacheWrite: number }
 
 export type ModelThinkingConfig = {
-  offLevel?: string
-  levels: string[]
-  defaultLevel: string
+  disableThinkingLevel?: string
+  thinkingLevels: string[]
+  defaultThinkingLevel: string
 }
 
 export type EditableModelConfig = {
   id: string
   name: string
   api?: ConfigurableApi
-  reasoning: boolean
   thinking?: ModelThinkingConfig
   input: SupportedModelModality[]
   contextWindow: number
@@ -162,18 +161,36 @@ function validateProvider(input: EditableProviderConfig): void {
   api(input.api, "供应商 API")
 }
 
-function validateThinking(input: EditableModelConfig): void {
-  if (!input.reasoning) {
-    if (input.thinking !== undefined) throw new Error("不支持思考的模型不能配置思考档位")
-    return
-  }
-  if (!input.thinking) throw new Error("支持思考的模型必须配置思考档位")
-  const values = [...(input.thinking.offLevel === undefined ? [] : [input.thinking.offLevel]), ...input.thinking.levels]
-  if (input.thinking.levels.length > 6) throw new Error("开启思考最多支持六个档位")
-  if (values.some((value) => !value.trim() || value !== value.trim()))
-    throw new Error("思考档位名不能为空或包含首尾空格")
+const invalidThinkingCharacter = /[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/u
+const maxThinkingLevelLength = 50
+
+function normalizeThinkingLevel(value: string, label: string): string {
+  const normalized = value.trim()
+  if (!normalized) throw new Error(`${label}不能为空`)
+  if (invalidThinkingCharacter.test(normalized)) throw new Error(`${label}不能包含控制字符或异常不可见字符`)
+  if (Array.from(normalized).length > maxThinkingLevelLength)
+    throw new Error(`${label}不能超过 ${maxThinkingLevelLength} 个字符`)
+  return normalized
+}
+
+function normalizeThinking(input: ModelThinkingConfig | undefined): ModelThinkingConfig | undefined {
+  if (!input) return undefined
+  const disableThinkingLevel =
+    input.disableThinkingLevel === undefined
+      ? undefined
+      : normalizeThinkingLevel(input.disableThinkingLevel, "关闭思考档位名")
+  if (!Array.isArray(input.thinkingLevels) || input.thinkingLevels.length === 0) throw new Error("开启思考档位不能为空")
+  if (input.thinkingLevels.length > 6) throw new Error("开启思考最多支持六个档位")
+  const thinkingLevels = input.thinkingLevels.map((value) => normalizeThinkingLevel(value, "开启思考档位名"))
+  const values = [...(disableThinkingLevel === undefined ? [] : [disableThinkingLevel]), ...thinkingLevels]
   if (new Set(values).size !== values.length) throw new Error("思考档位名不能重复")
-  if (!values.includes(input.thinking.defaultLevel)) throw new Error("默认思考档位必须存在")
+  const defaultThinkingLevel = normalizeThinkingLevel(input.defaultThinkingLevel, "默认思考档位")
+  if (!values.includes(defaultThinkingLevel)) throw new Error("默认思考档位必须存在于合法档位集合")
+  return {
+    ...(disableThinkingLevel === undefined ? {} : { disableThinkingLevel }),
+    thinkingLevels,
+    defaultThinkingLevel,
+  }
 }
 
 function validateModel(input: EditableModelConfig): void {
@@ -188,7 +205,7 @@ function validateModel(input: EditableModelConfig): void {
     throw new Error("模型 ID 不能为空、包含首尾空格或控制字符")
   if (!input.name.trim()) throw new Error("模型名称不能为空")
   if (input.api !== undefined) api(input.api, "模型 API")
-  validateThinking(input)
+  normalizeThinking(input.thinking)
   if (input.input.length === 0 || new Set(input.input).size !== input.input.length)
     throw new Error("输入模态不能为空或重复")
   if (input.input.some((item) => item !== "text" && item !== "image"))
@@ -199,24 +216,34 @@ function validateModel(input: EditableModelConfig): void {
   cost(input.cost, "模型价格")
 }
 
-const thinkingSlots = ["minimal", "low", "medium", "high", "xhigh", "max"] as const
+function optionalThinkingString(value: unknown, label: string): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== "string") throw new Error(`${label} 必须是字符串`)
+  const normalized = normalizeThinkingLevel(value, label)
+  if (normalized !== value) throw new Error(`${label} 不能包含首尾空格`)
+  return normalized
+}
 
-function thinkingConfig(source: JsonObject, reasoning: boolean): ModelThinkingConfig | undefined {
-  if (!reasoning) return undefined
-  const map = source.thinkingLevelMap === undefined ? {} : object(source.thinkingLevelMap, "thinkingLevelMap")
-  const levels = thinkingSlots.flatMap((slot) => {
-    if (map[slot] === null) return []
-    if (typeof map[slot] === "string") return [map[slot] as string]
-    return slot === "xhigh" || slot === "max" ? [] : [slot]
-  })
-  const offLevel = typeof map.off === "string" ? map.off : map.off === null ? undefined : "off"
-  const configuredDefault = typeof source.aizenThinkingDefault === "string" ? source.aizenThinkingDefault : undefined
-  const available = [...(offLevel === undefined ? [] : [offLevel]), ...levels]
-  const defaultLevel =
-    configuredDefault && available.includes(configuredDefault)
-      ? configuredDefault
-      : (levels[2] ?? levels[0] ?? offLevel ?? "")
-  return { ...(offLevel === undefined ? {} : { offLevel }), levels, defaultLevel }
+function thinkingConfig(source: JsonObject): ModelThinkingConfig | undefined {
+  if (
+    source.thinkingLevels === undefined ||
+    (Array.isArray(source.thinkingLevels) && source.thinkingLevels.length === 0)
+  ) {
+    if (source.disableThinkingLevel !== undefined || source.defaultThinkingLevel !== undefined)
+      throw new Error("未配置开启思考档位时不能配置关闭或默认档位")
+    return undefined
+  }
+  if (!Array.isArray(source.thinkingLevels)) throw new Error("thinkingLevels 必须是数组")
+  const disableThinkingLevel = optionalThinkingString(source.disableThinkingLevel, "disableThinkingLevel")
+  const thinking: ModelThinkingConfig = {
+    ...(disableThinkingLevel === undefined ? {} : { disableThinkingLevel }),
+    thinkingLevels: source.thinkingLevels.map((value, index) => {
+      if (typeof value !== "string") throw new Error(`thinkingLevels[${index}] 必须是字符串`)
+      return optionalThinkingString(value, `thinkingLevels[${index}]`) ?? ""
+    }),
+    defaultThinkingLevel: optionalThinkingString(source.defaultThinkingLevel, "defaultThinkingLevel") ?? "",
+  }
+  return normalizeThinking(thinking)
 }
 
 function modelEntry(providerId: string, value: unknown): ModelConfigEntry {
@@ -232,12 +259,11 @@ function modelEntry(providerId: string, value: unknown): ModelConfigEntry {
         ? (source.api as ConfigurableApi)
         : undefined
   const unsupportedApi = source.api !== undefined && modelApi === undefined
-  const thinking = thinkingConfig(source, source.reasoning === true)
+  const thinking = thinkingConfig(source)
   const entry: ModelConfigEntry = {
     id,
     name: typeof source.name === "string" ? source.name : id,
     ...(modelApi === undefined ? {} : { api: modelApi }),
-    reasoning: source.reasoning === true,
     ...(thinking === undefined ? {} : { thinking }),
     input: input.filter((item): item is SupportedModelModality => item === "text" || item === "image"),
     contextWindow: positiveInteger(source.contextWindow, `模型 ${providerId}/${id} 的上下文窗口`, 128000),
@@ -352,28 +378,40 @@ export class ModelConfigStore {
       if (mode === "create" && index >= 0) throw new Error(`模型 ID 已存在：${providerId}/${model.id}`)
       if (mode === "update" && index < 0) throw new Error(`模型不存在：${providerId}/${model.id}`)
       const previous = index < 0 ? {} : object(models[index], "模型")
-      const thinkingLevelMap = model.thinking
-        ? {
-            off: model.thinking.offLevel ?? null,
-            ...Object.fromEntries(thinkingSlots.map((slot, index) => [slot, model.thinking?.levels[index] ?? null])),
-          }
-        : undefined
+      const thinking = normalizeThinking(model.thinking)
       const stored: JsonObject = {
         ...previous,
         id: model.id,
         name: model.name.trim(),
         ...(model.api === undefined ? { api: undefined } : { api: model.api }),
-        reasoning: model.reasoning,
-        ...(thinkingLevelMap ? { thinkingLevelMap, aizenThinkingDefault: model.thinking?.defaultLevel } : {}),
+        ...(thinking
+          ? {
+              ...(thinking.disableThinkingLevel === undefined
+                ? {}
+                : { disableThinkingLevel: thinking.disableThinkingLevel }),
+              thinkingLevels: [...thinking.thinkingLevels],
+              defaultThinkingLevel: thinking.defaultThinkingLevel,
+            }
+          : {}),
         input: [...model.input],
         contextWindow: model.contextWindow,
         maxTokens: model.maxTokens,
         cost: { ...model.cost },
       }
       if (stored.api === undefined) delete stored.api
-      if (!model.reasoning) {
-        delete stored.thinkingLevelMap
-        delete stored.aizenThinkingDefault
+      for (const key of [
+        "reasoning",
+        "thinkingLevelMap",
+        "aizenThinkingDefault",
+        "disableThinkingLevel",
+        "thinkingLevels",
+        "defaultThinkingLevel",
+      ])
+        delete stored[key]
+      if (thinking) {
+        if (thinking.disableThinkingLevel !== undefined) stored.disableThinkingLevel = thinking.disableThinkingLevel
+        stored.thinkingLevels = [...thinking.thinkingLevels]
+        stored.defaultThinkingLevel = thinking.defaultThinkingLevel
       }
       if (index < 0) models.push(stored)
       else models[index] = stored

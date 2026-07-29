@@ -181,7 +181,6 @@ describe("核心编排", () => {
         model: {
           id: "model-a",
           name: "模型 A",
-          reasoning: false,
           input: ["text"],
           contextWindow: 128000,
           maxTokens: 16000,

@@ -97,12 +97,9 @@ describe("认证与模型", () => {
       providerId: "example",
       modelId: "example-model",
       api: "openai-completions",
-      thinkingLevel: "off",
       name: "示例模型",
       contextWindow: 128000,
       available: false,
-      thinkingLevels: [],
-      offThinkingLevel: "off",
     })
     await runtime.dispose()
   })
@@ -122,17 +119,9 @@ describe("认证与模型", () => {
             models: [
               {
                 id: "thinking-model",
-                reasoning: true,
-                thinkingLevelMap: {
-                  off: "关闭",
-                  minimal: "A",
-                  low: "B",
-                  medium: "C",
-                  high: null,
-                  xhigh: null,
-                  max: null,
-                },
-                aizenThinkingDefault: "B",
+                disableThinkingLevel: "关闭",
+                thinkingLevels: ["A", "B", "C"],
+                defaultThinkingLevel: "B",
               },
             ],
           },

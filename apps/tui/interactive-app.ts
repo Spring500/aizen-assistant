@@ -679,13 +679,14 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       id: copy ? "" : (existing?.id ?? ""),
       name: existing?.name ?? "",
       ...(existing?.api ? { api: existing.api } : {}),
-      reasoning: existing?.reasoning ?? false,
       ...(existing?.thinking
         ? {
             thinking: {
-              ...(existing.thinking.offLevel === undefined ? {} : { offLevel: existing.thinking.offLevel }),
-              levels: [...existing.thinking.levels],
-              defaultLevel: existing.thinking.defaultLevel,
+              ...(existing.thinking.disableThinkingLevel === undefined
+                ? {}
+                : { disableThinkingLevel: existing.thinking.disableThinkingLevel }),
+              thinkingLevels: [...existing.thinking.thinkingLevels],
+              defaultThinkingLevel: existing.thinking.defaultThinkingLevel,
             },
           }
         : {}),
@@ -712,8 +713,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           { name: `输入模态         ${draft.input.join("、")}`, description: "多选", value: "input" },
           { name: "输出模态         当前 adapter 不支持配置", description: "查看扩展边界", value: "output" },
           {
-            name: `思考档位         ${draft.reasoning ? [draft.thinking?.offLevel, ...(draft.thinking?.levels ?? [])].filter(Boolean).join("、") : "不支持"}`,
-            description: draft.reasoning ? "关闭档位独立显示；最多六个开启档位" : "Enter 启用",
+            name: `思考档位         ${draft.thinking ? [draft.thinking.disableThinkingLevel, ...draft.thinking.thinkingLevels].filter(Boolean).join("、") : "不支持"}`,
+            description: draft.thinking ? "关闭档位独立显示；最多六个开启档位" : "Enter 启用",
             value: "reasoning",
           },
           { name: `上下文窗口       ${draft.contextWindow}`, description: "", value: "context" },
@@ -781,14 +782,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           { title: "思考能力", signal: interactionController.signal },
         )
         if (enabled === "disabled") {
-          draft.reasoning = false
           delete draft.thinking
         } else if (enabled === "default") {
-          const offLevel = await ask("关闭档位名（留空表示不能关闭）", draft.thinking?.offLevel ?? "off")
+          const offLevel = await ask("关闭档位名（留空表示不能关闭）", draft.thinking?.disableThinkingLevel ?? "off")
           if (offLevel === undefined) continue
           const levelsText = await ask(
             "开启思考档位（最多六个，以英文逗号分隔）",
-            draft.thinking?.levels.join(",") ?? "medium",
+            draft.thinking?.thinkingLevels.join(",") ?? "medium",
           )
           if (levelsText === undefined) continue
           const levels = levelsText
@@ -797,14 +797,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             .filter(Boolean)
           const defaultLevel = await askRequired(
             "默认思考档位",
-            draft.thinking?.defaultLevel ?? levels[0] ?? offLevel.trim(),
+            draft.thinking?.defaultThinkingLevel ?? levels[0] ?? offLevel.trim(),
           )
           if (!defaultLevel) continue
-          draft.reasoning = true
           draft.thinking = {
-            ...(offLevel.trim() ? { offLevel: offLevel.trim() } : {}),
-            levels,
-            defaultLevel,
+            ...(offLevel.trim() ? { disableThinkingLevel: offLevel.trim() } : {}),
+            thinkingLevels: levels,
+            defaultThinkingLevel: defaultLevel,
           }
         }
       } else if (action === "context")
@@ -1013,7 +1012,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               item.available,
           )
         if (available)
-          draft = { model: { ...available, thinkingLevel: preferred.model.thinkingLevel }, viewId: preferred.viewId }
+          draft = {
+            model: {
+              ...available,
+              ...(preferred.model.thinkingLevel === undefined ? {} : { thinkingLevel: preferred.model.thinkingLevel }),
+            },
+            viewId: preferred.viewId,
+          }
         else draft = { viewId: preferred.viewId }
       } else draft = { viewId: preferred.viewId }
     }
