@@ -116,7 +116,9 @@ async function checkPiSdk(): Promise<string> {
   if (!inlineExtensionLoaded) throw new Error("内联扩展工厂未执行")
   if (loader.getSystemPrompt() !== embeddedViewText) throw new Error("内置视图未进入 ResourceLoader")
 
-  const modelRuntime = await traceArchitectureStage("piSdk / 创建模型运行时", () => ModelRuntime.create())
+  const modelRuntime = await traceArchitectureStage("piSdk / 创建模型运行时", () =>
+    ModelRuntime.create({ allowModelNetwork: false }),
+  )
   const model = modelRuntime.getModels().find((m) => m.provider === "anthropic" && m.id === "claude-sonnet-4-6")
   if (!model) throw new Error("固定测试模型不存在")
   const { session, extensionsResult } = await traceArchitectureStage("piSdk / 创建 AgentSession", () =>
@@ -194,7 +196,11 @@ async function checkMockServer(): Promise<string> {
   const expectedText = "架构可行性验证：Mock 链路通过"
   const mock = await traceArchitectureStage("mockServer / 启动 Worker", () => startMockServer(expectedText))
   const modelRuntime = await traceArchitectureStage("mockServer / 创建模型运行时", () =>
-    ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null }),
+    ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+    }),
   )
   const model = modelRuntime.getModel("anthropic", "claude-sonnet-4-6")
   if (!model) throw new Error("固定测试模型不存在")
