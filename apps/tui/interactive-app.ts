@@ -556,7 +556,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               description: level === selected.offThinkingLevel ? "关闭档位" : "思考档位",
               value: level,
             })),
-            { title: `选择思考档位 · 最多六个开启档位`, signal: interactionController.signal },
+            { title: "选择思考档位", signal: interactionController.signal },
           )
           if (thinkingLevel) return { ...selected, thinkingLevel }
         }
@@ -688,9 +688,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       }
       const handle = overlays.open<string[]>({
         id: "thinking-level-editor",
-        title: "开启思考档位",
+        title: "思考档位名",
         help: "↑↓ 选择 | Enter 编辑 | Esc 返回",
-        contentHeight: Math.min(18, Math.max(6, (levels.length + 2) * 3 - 2)),
+        contentHeight: Math.min(10, Math.max(4, levels.length + 2)),
         signal: interactionController.signal,
         onCancel: () => finish(undefined),
       })
@@ -702,7 +702,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         right: 0,
         bottom: 0,
         left: 0,
-        showDescription: true,
+        showDescription: false,
+        itemSpacing: 0,
         textColor: systemColors.secondary,
         descriptionColor: systemColors.shortcuts,
       })
@@ -711,32 +712,28 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         selector.options = [
           ...levels.map((level, index) => ({
             name: `${index + 1}. ${editing?.index === index ? "" : level}`,
-            description: editing?.index === index ? "↑/↓ 排序 · Ctrl+X 删除 · Enter 确认 · Esc 取消" : "Enter 原地编辑",
+            description: "",
             value: `item:${index}`,
           })),
           {
             name: editing?.adding ? "新增档位" : `新增档位                              ${levels.length} / 6`,
-            description: editing?.adding
-              ? "Enter 确认 · Esc 取消"
-              : levels.length >= 6
-                ? "已达到六个开启档位上限"
-                : "Enter 原地输入",
+            description: "",
             value: "add",
           },
-          { name: "完成", description: `当前 ${levels.length} / 6`, value: "done" },
+          { name: "完成", description: "", value: "done" },
         ]
         selector.setSelectedIndex(Math.min(selectedIndex, levels.length + 1))
         if (editing) {
-          editing.label.top = editing.index * 3
-          editing.input.top = editing.index * 3
+          editing.label.top = editing.index
+          editing.input.top = editing.index
         }
-        handle.setContentHeight(Math.min(18, Math.max(6, (levels.length + 2) * 3 - 2)))
+        handle.setContentHeight(Math.min(10, Math.max(4, levels.length + 2)))
       }
       const startEditing = (index: number, value: string, adding: boolean) => {
         const label = new TextRenderable(overlays.renderer, {
           id: `thinking-level-label-${crypto.randomUUID()}`,
           position: "absolute",
-          top: index * 3,
+          top: index,
           left: 0,
           width: adding ? 10 : 3,
           height: 1,
@@ -747,7 +744,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         const input = new TextareaRenderable(overlays.renderer, {
           id: `thinking-level-input-${crypto.randomUUID()}`,
           position: "absolute",
-          top: index * 3,
+          top: index,
           left: adding ? 10 : 3,
           right: 0,
           height: 1,
@@ -795,7 +792,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             else if (key.name === "escape") stopEditing(true)
             else if (!editing.adding && key.ctrl && key.name === "x") {
               if (levels.length <= 1) {
-                handle.setHelp("至少保留一个开启档位 | ↑/↓ 排序 | Enter 确认 | Esc 取消")
+                handle.setHelp("至少保留一个思考档位 | ↑/↓ 排序 | Enter 确认 | Esc 取消")
                 return
               }
               const index = editing.index
@@ -891,8 +888,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             value: "disable",
           },
           {
-            name: `开启思考档位    ${supported ? summary : "—"}       ${thinkingLevels.length} / 6`,
-            description: supported ? "Enter 管理；编辑态用 ↑/↓ 排序、Ctrl+X 删除" : "请先启用思考能力",
+            name: `思考档位名      ${supported ? summary : "—"}       ${thinkingLevels.length} / 6`,
+            description: supported ? "Enter 管理" : "请先启用思考能力",
             value: "levels",
           },
           {
@@ -908,7 +905,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         const label = new TextRenderable(overlays.renderer, {
           id: `thinking-disable-label-${crypto.randomUUID()}`,
           position: "absolute",
-          top: 6,
+          top: 4,
           left: 0,
           width: 16,
           height: 1,
@@ -919,7 +916,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         const input = new TextareaRenderable(overlays.renderer, {
           id: `thinking-disable-input-${crypto.randomUUID()}`,
           position: "absolute",
-          top: 6,
+          top: 4,
           left: 16,
           right: 0,
           height: 1,
@@ -961,7 +958,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           `thinking-default-${crypto.randomUUID()}`,
           available.map((level) => ({
             name: level,
-            description: level === disableThinkingLevel ? "关闭档位" : "开启档位",
+            description: level === disableThinkingLevel ? "关闭档位" : "思考档位",
             value: level,
           })),
           { title: "选择默认思考档位", signal: interactionController.signal },
@@ -1067,7 +1064,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           { name: "输出模态         当前 adapter 不支持配置", description: "查看扩展边界", value: "output" },
           {
             name: `思考档位         ${draft.thinking ? [draft.thinking.disableThinkingLevel, ...draft.thinking.thinkingLevels].filter(Boolean).join("、") : "不支持"}`,
-            description: draft.thinking ? "关闭档位独立显示；最多六个开启档位" : "Enter 启用",
+            description: draft.thinking ? "关闭档位独立显示；最多六个思考档位" : "Enter 启用",
             value: "reasoning",
           },
           { name: `上下文窗口       ${draft.contextWindow}`, description: "", value: "context" },

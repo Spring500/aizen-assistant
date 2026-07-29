@@ -179,9 +179,9 @@ function normalizeThinking(input: ModelThinkingConfig | undefined): ModelThinkin
     input.disableThinkingLevel === undefined
       ? undefined
       : normalizeThinkingLevel(input.disableThinkingLevel, "关闭思考档位名")
-  if (!Array.isArray(input.thinkingLevels) || input.thinkingLevels.length === 0) throw new Error("开启思考档位不能为空")
+  if (!Array.isArray(input.thinkingLevels) || input.thinkingLevels.length === 0) throw new Error("思考档位名不能为空")
   if (input.thinkingLevels.length > 6) throw new Error("开启思考最多支持六个档位")
-  const thinkingLevels = input.thinkingLevels.map((value) => normalizeThinkingLevel(value, "开启思考档位名"))
+  const thinkingLevels = input.thinkingLevels.map((value) => normalizeThinkingLevel(value, "思考档位名"))
   const values = [...(disableThinkingLevel === undefined ? [] : [disableThinkingLevel]), ...thinkingLevels]
   if (new Set(values).size !== values.length) throw new Error("思考档位名不能重复")
   const defaultThinkingLevel = normalizeThinkingLevel(input.defaultThinkingLevel, "默认思考档位")
@@ -230,7 +230,7 @@ function thinkingConfig(source: JsonObject): ModelThinkingConfig | undefined {
     (Array.isArray(source.thinkingLevels) && source.thinkingLevels.length === 0)
   ) {
     if (source.disableThinkingLevel !== undefined || source.defaultThinkingLevel !== undefined)
-      throw new Error("未配置开启思考档位时不能配置关闭或默认档位")
+      throw new Error("未配置思考档位名时不能配置关闭或默认档位")
     return undefined
   }
   if (!Array.isArray(source.thinkingLevels)) throw new Error("thinkingLevels 必须是数组")
