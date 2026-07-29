@@ -129,6 +129,7 @@ export class AizenCore implements CorePort {
         }
         case "list_sessions":
           this.#snapshot.sessions = await this.#store.list()
+          this.#reportStoreWarnings()
           break
         case "list_views":
           if (!this.#views) throw new Error("未配置视图存储")
@@ -358,6 +359,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#clearError()
     this.#snapshot.sessions = await this.#store.list()
+    this.#reportStoreWarnings()
     await this.#rememberSessionDefaults(actualModel, viewId)
   }
 
@@ -415,6 +417,7 @@ export class AizenCore implements CorePort {
       this.#snapshot.currentSessionName = normalizedName
     }
     this.#snapshot.sessions = await this.#store.list()
+    this.#reportStoreWarnings()
   }
 
   async #sendPrompt(text: string): Promise<void> {
@@ -629,6 +632,11 @@ export class AizenCore implements CorePort {
       this.#markWriteFailure(actual)
       this.#notify()
     })
+  }
+
+  #reportStoreWarnings(): void {
+    const warnings = this.#store.takeWarnings()
+    if (warnings.length > 0) this.#reportError(warnings.join("；"))
   }
 
   #markWriteFailure(error: Error): void {

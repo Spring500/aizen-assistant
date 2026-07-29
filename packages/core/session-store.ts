@@ -1,5 +1,5 @@
-import { mkdir, open, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
-import { basename, dirname, join } from "node:path"
+import { mkdir, open, readdir, readFile, rm, stat } from "node:fs/promises"
+import { basename, join } from "node:path"
 import { type MnemonicIdGenerator, WordTripletIdGenerator } from "./mnemonic-id.ts"
 import {
   parseSessionValue,
@@ -8,6 +8,7 @@ import {
   type SessionRecord,
   type TurnStartedRecord,
 } from "./session-format.ts"
+import { type SessionIndexEntry, SessionIndexStore } from "./session-index-store.ts"
 
 export type SessionSummary = {
   sessionId: string
@@ -16,18 +17,6 @@ export type SessionSummary = {
   createdAt: string
   updatedAt: string
   preview: string
-}
-
-type SessionIndexEntry = {
-  size: number
-  birthtimeMs: number
-  mtimeMs: number
-  summary: SessionSummary
-}
-
-type SessionIndex = {
-  version: 1
-  projects: Record<string, Record<string, SessionIndexEntry>>
 }
 
 export type LoadedSession = {
@@ -48,13 +37,14 @@ export class SessionStore {
   readonly root: string
   readonly #queues = new Map<string, Promise<void>>()
   readonly #idGenerator: MnemonicIdGenerator
-  readonly #indexPath: string | undefined
+  readonly #index: SessionIndexStore | undefined
   readonly #projectKey: string
+  #warnings: string[] = []
 
   constructor(root: string, options: { idGenerator?: MnemonicIdGenerator; indexPath?: string } = {}) {
     this.root = root
     this.#idGenerator = options.idGenerator ?? new WordTripletIdGenerator()
-    this.#indexPath = options.indexPath
+    this.#index = options.indexPath ? new SessionIndexStore(options.indexPath) : undefined
     this.#projectKey = basename(root)
   }
 
@@ -147,8 +137,7 @@ export class SessionStore {
 
   async list(): Promise<SessionSummary[]> {
     await mkdir(this.root, { recursive: true })
-    const index = await this.#readIndex()
-    const previous = index.projects[this.#projectKey] ?? {}
+    const previous = (await this.#index?.readProject(this.#projectKey)) ?? {}
     const current: Record<string, SessionIndexEntry> = {}
     const summaries: SessionSummary[] = []
     const entries = await readdir(this.root, { withFileTypes: true })
@@ -185,58 +174,13 @@ export class SessionStore {
       }
       summaries.push(summary)
     }
-    index.projects[this.#projectKey] = current
-    await this.#writeIndex(index).catch(() => {})
+    this.#warnings = this.#index ? await this.#index.updateProject(this.#projectKey, current) : []
     return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   }
 
-  async #readIndex(): Promise<SessionIndex> {
-    if (!this.#indexPath) return { version: 1, projects: {} }
-    try {
-      const parsed = JSON.parse(await readFile(this.#indexPath, "utf8")) as Partial<SessionIndex>
-      if (
-        parsed.version !== 1 ||
-        !parsed.projects ||
-        typeof parsed.projects !== "object" ||
-        Array.isArray(parsed.projects)
-      )
-        return { version: 1, projects: {} }
-      for (const project of Object.values(parsed.projects)) {
-        if (!project || typeof project !== "object" || Array.isArray(project)) return { version: 1, projects: {} }
-        for (const entry of Object.values(project)) {
-          if (
-            !entry ||
-            typeof entry !== "object" ||
-            typeof entry.size !== "number" ||
-            typeof entry.birthtimeMs !== "number" ||
-            typeof entry.mtimeMs !== "number" ||
-            !entry.summary ||
-            typeof entry.summary.sessionId !== "string" ||
-            typeof entry.summary.name !== "string" ||
-            typeof entry.summary.cwd !== "string" ||
-            typeof entry.summary.createdAt !== "string" ||
-            typeof entry.summary.updatedAt !== "string" ||
-            typeof entry.summary.preview !== "string"
-          )
-            return { version: 1, projects: {} }
-        }
-      }
-      return { version: 1, projects: parsed.projects }
-    } catch {
-      return { version: 1, projects: {} }
-    }
-  }
-
-  async #writeIndex(index: SessionIndex): Promise<void> {
-    if (!this.#indexPath) return
-    await mkdir(dirname(this.#indexPath), { recursive: true })
-    const temporary = `${this.#indexPath}.${crypto.randomUUID()}.tmp`
-    await writeFile(temporary, `${JSON.stringify(index, null, 2)}\n`, "utf8")
-    try {
-      await rename(temporary, this.#indexPath)
-    } finally {
-      await rm(temporary, { force: true })
-    }
+  /** 取出最近一次列表操作产生的非阻断警告。 */
+  takeWarnings(): string[] {
+    return this.#warnings.splice(0)
   }
 
   async flush(): Promise<void> {
