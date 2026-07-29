@@ -8,6 +8,7 @@ import type {
   EditableProviderConfig,
   ModelConfigEntry,
   ModelCostConfig,
+  ModelThinkingConfig,
   ProviderConfigEntry,
 } from "../../packages/core/model-config-store.ts"
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
@@ -672,6 +673,161 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     return { input, output, cacheRead, cacheWrite }
   }
 
+  async function editThinkingLevels(initial: string[]): Promise<string[] | undefined> {
+    const levels = [...initial]
+    while (!exiting) {
+      const action = await selectItem<string>(
+        overlays,
+        `thinking-level-editor-${crypto.randomUUID()}`,
+        [
+          ...levels.map((level, index) => ({
+            name: `${index + 1}. ${level}`,
+            description: "Enter 编辑、删除或调整顺序",
+            value: `item:${index}`,
+          })),
+          {
+            name: `新增档位                              ${levels.length} / 6`,
+            description: levels.length >= 6 ? "已达到六个开启档位上限" : "逐项新增开启思考档位",
+            value: "add",
+            disabled: levels.length >= 6,
+          },
+          { name: "完成", description: `当前 ${levels.length} / 6`, value: "done" },
+        ],
+        { title: `开启思考档位 · ${levels.length} / 6`, signal: interactionController.signal },
+      )
+      if (!action) return undefined
+      if (action === "done") return levels
+      if (action === "add") {
+        const value = await askRequired("新增档位名")
+        if (value) levels.push(value)
+        continue
+      }
+      const index = Number(action.slice("item:".length))
+      const operation = await selectItem<"edit" | "delete" | "up" | "down">(
+        overlays,
+        `thinking-level-action-${crypto.randomUUID()}`,
+        [
+          { name: "编辑", description: levels[index] ?? "", value: "edit" },
+          { name: "上移", description: "调整展示与 pi 映射顺序", value: "up", disabled: index === 0 },
+          {
+            name: "下移",
+            description: "调整展示与 pi 映射顺序",
+            value: "down",
+            disabled: index === levels.length - 1,
+          },
+          { name: "删除", description: "从开启档位中移除", value: "delete" },
+        ],
+        { title: `管理档位 · ${levels[index] ?? ""}`, signal: interactionController.signal },
+      )
+      if (operation === "edit") {
+        const value = await askRequired("档位名", levels[index])
+        if (value) levels[index] = value
+      } else if (operation === "delete") levels.splice(index, 1)
+      else if (operation === "up" && index > 0)
+        [levels[index - 1], levels[index]] = [levels[index] ?? "", levels[index - 1] ?? ""]
+      else if (operation === "down" && index < levels.length - 1)
+        [levels[index], levels[index + 1]] = [levels[index + 1] ?? "", levels[index] ?? ""]
+    }
+    return undefined
+  }
+
+  async function editThinkingConfig(initial?: ModelThinkingConfig): Promise<ModelThinkingConfig | undefined | null> {
+    let supported = initial !== undefined
+    let allowDisable = initial?.disableThinkingLevel !== undefined
+    let disableThinkingLevel = initial?.disableThinkingLevel ?? "关闭"
+    let thinkingLevels = [...(initial?.thinkingLevels ?? ["低", "中", "高"])]
+    let defaultThinkingLevel = initial?.defaultThinkingLevel ?? thinkingLevels[1] ?? thinkingLevels[0] ?? ""
+    while (!exiting) {
+      const summary = [allowDisable ? disableThinkingLevel : undefined, ...thinkingLevels].filter(Boolean).join("、")
+      const action = await selectItem<"supported" | "allowDisable" | "disable" | "levels" | "default" | "save">(
+        overlays,
+        "thinking-config-editor",
+        [
+          { name: `思考能力        ${supported ? "支持" : "不支持"}`, description: "Enter 切换", value: "supported" },
+          {
+            name: `允许关闭思考    ${supported && allowDisable ? "是" : "否"}`,
+            description: supported ? "Enter 切换" : "请先启用思考能力",
+            value: "allowDisable",
+            disabled: !supported,
+          },
+          {
+            name: `关闭档位名      ${supported && allowDisable ? disableThinkingLevel : "—"}`,
+            description: supported && allowDisable ? "Enter 编辑" : "未允许关闭思考",
+            value: "disable",
+            disabled: !supported || !allowDisable,
+          },
+          {
+            name: `开启思考档位    ${supported ? summary : "—"}       ${thinkingLevels.length} / 6`,
+            description: supported ? "逐项新增、编辑、删除和排序" : "请先启用思考能力",
+            value: "levels",
+            disabled: !supported,
+          },
+          {
+            name: `默认档位        ${supported ? defaultThinkingLevel || "未设置" : "—"}`,
+            description: supported ? "从合法档位中选择" : "请先启用思考能力",
+            value: "default",
+            disabled: !supported,
+          },
+          { name: "保存", description: supported ? "校验并返回模型编辑页" : "清除全部思考配置", value: "save" },
+        ],
+        { title: "编辑思考配置", signal: interactionController.signal },
+      )
+      if (!action) return null
+      if (action === "supported") {
+        supported = !supported
+        if (!supported) {
+          allowDisable = false
+          disableThinkingLevel = "关闭"
+          thinkingLevels = []
+          defaultThinkingLevel = ""
+        } else if (thinkingLevels.length === 0) {
+          thinkingLevels = ["低", "中", "高"]
+          defaultThinkingLevel = "中"
+        }
+      } else if (action === "allowDisable") {
+        allowDisable = !allowDisable
+        if (allowDisable && !disableThinkingLevel) disableThinkingLevel = "关闭"
+        if (!allowDisable && defaultThinkingLevel === disableThinkingLevel)
+          defaultThinkingLevel = thinkingLevels[0] ?? ""
+      } else if (action === "disable") {
+        const value = await askRequired("关闭档位名", disableThinkingLevel)
+        if (value) {
+          const previous = disableThinkingLevel
+          disableThinkingLevel = value
+          if (defaultThinkingLevel === previous) defaultThinkingLevel = value
+        }
+      } else if (action === "levels") {
+        const edited = await editThinkingLevels(thinkingLevels)
+        if (edited) {
+          thinkingLevels = edited
+          const available = [...(allowDisable ? [disableThinkingLevel] : []), ...thinkingLevels]
+          if (!available.includes(defaultThinkingLevel))
+            defaultThinkingLevel = thinkingLevels[0] ?? disableThinkingLevel
+        }
+      } else if (action === "default") {
+        const available = [...(allowDisable ? [disableThinkingLevel] : []), ...thinkingLevels]
+        const selected = await selectItem<string>(
+          overlays,
+          `thinking-default-${crypto.randomUUID()}`,
+          available.map((level) => ({
+            name: level,
+            description: level === disableThinkingLevel ? "关闭档位" : "开启档位",
+            value: level,
+          })),
+          { title: "选择默认思考档位", signal: interactionController.signal },
+        )
+        if (selected) defaultThinkingLevel = selected
+      } else if (!supported) return undefined
+      else
+        return {
+          ...(allowDisable ? { disableThinkingLevel } : {}),
+          thinkingLevels,
+          defaultThinkingLevel,
+        }
+    }
+    return null
+  }
+
   async function editModel(existing?: ModelConfigEntry, copy = false): Promise<EditableModelConfig | undefined> {
     const config = core.getSnapshot().modelConfig
     if (!config) return undefined
@@ -768,44 +924,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           interactionController.signal,
         )
       } else if (action === "reasoning") {
-        const enabled = await selectItem<"disabled" | "default">(
-          overlays,
-          "thinking-config-mode",
-          [
-            { name: "不支持思考", description: "不配置任何思考档位", value: "disabled" },
-            {
-              name: "配置思考档位",
-              description: "关闭档位可选，开启档位最多六个；档位名用英文逗号分隔",
-              value: "default",
-            },
-          ],
-          { title: "思考能力", signal: interactionController.signal },
-        )
-        if (enabled === "disabled") {
-          delete draft.thinking
-        } else if (enabled === "default") {
-          const offLevel = await ask("关闭档位名（留空表示不能关闭）", draft.thinking?.disableThinkingLevel ?? "off")
-          if (offLevel === undefined) continue
-          const levelsText = await ask(
-            "开启思考档位（最多六个，以英文逗号分隔）",
-            draft.thinking?.thinkingLevels.join(",") ?? "medium",
-          )
-          if (levelsText === undefined) continue
-          const levels = levelsText
-            .split(",")
-            .map((level) => level.trim())
-            .filter(Boolean)
-          const defaultLevel = await askRequired(
-            "默认思考档位",
-            draft.thinking?.defaultThinkingLevel ?? levels[0] ?? offLevel.trim(),
-          )
-          if (!defaultLevel) continue
-          draft.thinking = {
-            ...(offLevel.trim() ? { disableThinkingLevel: offLevel.trim() } : {}),
-            thinkingLevels: levels,
-            defaultThinkingLevel: defaultLevel,
-          }
-        }
+        const thinking = await editThinkingConfig(draft.thinking)
+        if (thinking === undefined) delete draft.thinking
+        else if (thinking !== null) draft.thinking = thinking
       } else if (action === "context")
         draft.contextWindow = (await askNumber("上下文窗口", draft.contextWindow)) ?? draft.contextWindow
       else if (action === "max")
