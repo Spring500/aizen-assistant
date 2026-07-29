@@ -1,10 +1,11 @@
 // 分发验证：在无 Node/Bun 的 PATH 下确认独立探针能加载 pi 并完成流式 HTTP 请求。
 
 import { randomUUID } from "node:crypto"
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { startMockServer } from "../utils/mock-server.ts"
+import { removeTemporaryDirectory } from "../utils/temporary-directory.ts"
 
 const source = "dist/pi-http-probe.exe"
 if (!existsSync(source)) throw new Error(`产物不存在：${source}`)
@@ -34,5 +35,5 @@ try {
   console.log("pi HTTP 单文件运行验证通过")
 } finally {
   mock.stop()
-  rmSync(sandbox, { recursive: true, force: true })
+  await removeTemporaryDirectory(sandbox)
 }
