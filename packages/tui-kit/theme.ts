@@ -6,5 +6,6 @@ export const systemColors = {
   statusError: "#f87171",
   sessionStatus: "#22d3ee",
   shortcuts: "#9ca3af",
+  disabled: "#6b7280",
   secondary: "#9ca3af",
 } as const

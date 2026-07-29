@@ -1,9 +1,10 @@
 // 分发验证：将产物复制到空白目录，并在没有 Node/Bun 的 PATH 下确认它能独立启动。
 
 import { randomUUID } from "node:crypto"
-import { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } from "node:fs"
+import { copyFileSync, existsSync, mkdirSync, readdirSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { removeTemporaryDirectory } from "../utils/temporary-directory.ts"
 
 const exePath = "dist/aizen-tui.exe"
 if (!existsSync(exePath)) {
@@ -41,5 +42,5 @@ try {
 
   console.log("单文件无外部运行时启动验证通过")
 } finally {
-  rmSync(sandbox, { recursive: true, force: true })
+  await removeTemporaryDirectory(sandbox)
 }

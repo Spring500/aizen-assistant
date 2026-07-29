@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
+import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
-import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
 
 function key(sequence: string): KeyEvent {
@@ -29,7 +29,7 @@ test("嵌套层只接收栈顶输入并逐层恢复", async () => {
       ],
       { title: "父层" },
     )
-    const child = promptLine(overlays, "child", "名称：")
+    const child = promptAuthInput(overlays, "child", "子层", "名称：")
     expect(overlays.depth).toBe(2)
 
     setup.renderer.keyInput.emit("keypress", key("x"))
@@ -59,7 +59,7 @@ test("同一次 Enter 不会穿透到新打开的子层", async () => {
       contentHeight: 2,
       input: {
         keypress: (event) => {
-          if (event.name === "return") child = promptLine(overlays, "new-child", "输入：")
+          if (event.name === "return") child = promptAuthInput(overlays, "new-child", "子层", "输入：")
         },
       },
     })
@@ -70,6 +70,80 @@ test("同一次 Enter 不会穿透到新打开的子层", async () => {
     setup.renderer.keyInput.emit("keypress", key("a"))
     setup.renderer.keyInput.emit("keypress", key("\r"))
     expect(await child).toBe("a")
+    parent.close()
+  } finally {
+    overlays.dispose()
+    setup.renderer.destroy()
+  }
+})
+
+test("统一信息区支持动态说明、快捷键、错误和灰显反馈", async () => {
+  const setup = await createTestRenderer({
+    width: 28,
+    height: 18,
+    screenMode: "split-footer",
+    footerHeight: 8,
+  })
+  const overlays = new OverlayManager(setup.renderer)
+  let executed = 0
+  try {
+    const handle = overlays.open({
+      id: "information-regions",
+      title: "统一信息区",
+      description: "这是一段包含中文和 emoji 😀 的很长说明，用于验证最多三行的动态布局能力。",
+      contentHeight: 2,
+      actions: [
+        { id: "save", key: { name: "return" }, label: "Enter 保存", run: () => executed++ },
+        {
+          id: "delete",
+          key: { name: "x", ctrl: true },
+          label: "Ctrl+X 删除",
+          enabled: false,
+          disabledReason: "至少保留一个项目",
+          run: () => executed++,
+        },
+        { id: "hidden", key: { name: "h" }, label: "H 隐藏", applicable: false, run: () => executed++ },
+      ],
+    })
+    handle.setError("名称不能为空")
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("Enter 保存")
+    expect(frame).toContain("Ctrl+X 删除")
+    expect(frame).not.toContain("H 隐藏")
+    expect(frame).toContain("名称不能为空")
+    expect(setup.renderer.footerHeight).toBeGreaterThanOrEqual(7)
+
+    setup.renderer.keyInput.emit("keypress", key("\x18"))
+    await setup.renderOnce()
+    expect(executed).toBe(0)
+    expect(setup.captureCharFrame()).toContain("至少保留一个项目")
+
+    setup.renderer.keyInput.emit("keypress", key("\r"))
+    expect(executed).toBe(1)
+    handle.clearError()
+    handle.close()
+  } finally {
+    overlays.dispose()
+    setup.renderer.destroy()
+  }
+})
+
+test("子层关闭后恢复父层的三类信息", async () => {
+  const setup = await createTestRenderer({ width: 50, height: 16 })
+  const overlays = new OverlayManager(setup.renderer)
+  try {
+    const parent = overlays.open({ id: "info-parent", title: "父层", description: "父层说明", contentHeight: 2 })
+    parent.setError("父层错误")
+    const child = overlays.open({ id: "info-child", title: "子层", description: "子层说明", contentHeight: 2 })
+    child.setError("子层错误")
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain("子层错误")
+    child.close()
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("父层说明")
+    expect(frame).toContain("父层错误")
     parent.close()
   } finally {
     overlays.dispose()

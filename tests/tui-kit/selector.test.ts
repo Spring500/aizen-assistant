@@ -5,14 +5,49 @@ import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
 
-test("禁用的选择项不能提交", async () => {
+test("选择器把当前项说明放入统一说明区并限制为三行", async () => {
+  const setup = await createTestRenderer({ width: 24, height: 16 })
+  try {
+    const pending = selectItem(
+      setup.renderer,
+      "description-selector",
+      [
+        {
+          name: "长说明项目",
+          description: "第一段中文说明很长，第二段继续说明，第三段继续说明，第四段不应完整展示。",
+          value: "long",
+        },
+      ],
+      { title: "说明换行" },
+    )
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("长说明项目")
+    expect(frame).toContain("第一段中文说明")
+    expect(frame).not.toContain("第四段不应完整展示")
+    const escapeKey = parseKeypress("\x1b")
+    if (!escapeKey) throw new Error("无法解析 Esc")
+    setup.renderer.keyInput.emit("keypress", new KeyEvent(escapeKey))
+    await pending
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("禁用的选择项不能提交并反馈原因", async () => {
   const setup = await createTestRenderer({ width: 50, height: 10 })
   try {
     const pending = selectItem(
       setup.renderer,
       "disabled-selector",
       [
-        { name: "不可用模型", description: "尚未认证", value: "disabled", disabled: true },
+        {
+          name: "不可用模型",
+          description: "模型说明",
+          value: "disabled",
+          disabled: true,
+          disabledReason: "尚未认证，不能选择",
+        },
         { name: "可用模型", description: "", value: "enabled" },
       ],
       { title: "选择模型" },
@@ -21,7 +56,8 @@ test("禁用的选择项不能提交", async () => {
     const down = parseKeypress("\x1b[B")
     if (!enter || !down) throw new Error("无法解析按键")
     setup.renderer.keyInput.emit("keypress", new KeyEvent(enter))
-    await Bun.sleep(1)
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain("尚未认证，不能选择")
     setup.renderer.keyInput.emit("keypress", new KeyEvent(down))
     setup.renderer.keyInput.emit("keypress", new KeyEvent(enter))
     expect(await pending).toBe("enabled")
@@ -137,7 +173,7 @@ test("split-footer 中选择器临时扩大显示区域并在退出后恢复", a
       })),
       { title: "选择会话" },
     )
-    expect(setup.renderer.footerHeight).toBe(18)
+    expect(setup.renderer.footerHeight).toBe(10)
     await setup.renderOnce()
     const frame = setup.captureCharFrame()
     expect(frame).toContain("会话 1")

@@ -38,6 +38,25 @@ type ArchitectureVerificationReport = {
   mockServer: CheckResult
 }
 
+const architectureLogPrefix = "[架构验证]"
+
+/** 记录架构验证阶段的开始、完成、失败和耗时，不改变原有执行顺序。 */
+async function traceArchitectureStage<T>(name: string, operation: () => Promise<T> | T): Promise<T> {
+  const startedAt = performance.now()
+  console.log(`${architectureLogPrefix} 开始：${name}`)
+  try {
+    const result = await operation()
+    console.log(`${architectureLogPrefix} 完成：${name}，耗时 ${Math.round(performance.now() - startedAt)}ms`)
+    return result
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    console.error(
+      `${architectureLogPrefix} 失败：${name}，耗时 ${Math.round(performance.now() - startedAt)}ms，错误：${detail}`,
+    )
+    throw error
+  }
+}
+
 /**
  * 把一个"可能抛错"的检查函数统一包装成 { passed, detail } 结构：抛错时
  * 不让异常向上冒泡中断整批检查，而是记录下来，方便一次性看到四项检查里
@@ -45,7 +64,7 @@ type ArchitectureVerificationReport = {
  */
 async function check(name: string, operation: () => Promise<string> | string): Promise<CheckResult> {
   try {
-    return { passed: true, detail: await operation() }
+    return { passed: true, detail: await traceArchitectureStage(name, operation) }
   } catch (error) {
     const detail = error instanceof Error ? (error.stack ?? error.message) : String(error)
     return { passed: false, detail: `${name}: ${detail}` }
@@ -92,23 +111,27 @@ async function checkPiSdk(): Promise<string> {
     noContextFiles: true,
     systemPromptOverride: () => embeddedViewText,
   })
-  await loader.reload()
+  await traceArchitectureStage("piSdk / 重载资源", () => loader.reload())
 
   if (!inlineExtensionLoaded) throw new Error("内联扩展工厂未执行")
   if (loader.getSystemPrompt() !== embeddedViewText) throw new Error("内置视图未进入 ResourceLoader")
 
-  const modelRuntime = await ModelRuntime.create()
+  const modelRuntime = await traceArchitectureStage("piSdk / 创建模型运行时", () =>
+    ModelRuntime.create({ allowModelNetwork: false }),
+  )
   const model = modelRuntime.getModels().find((m) => m.provider === "anthropic" && m.id === "claude-sonnet-4-6")
   if (!model) throw new Error("固定测试模型不存在")
-  const { session, extensionsResult } = await createAgentSession({
-    cwd: process.cwd(),
-    model,
-    modelRuntime,
-    resourceLoader: loader,
-    settingsManager,
-    sessionManager: SessionManager.inMemory(),
-    noTools: "all",
-  })
+  const { session, extensionsResult } = await traceArchitectureStage("piSdk / 创建 AgentSession", () =>
+    createAgentSession({
+      cwd: process.cwd(),
+      model,
+      modelRuntime,
+      resourceLoader: loader,
+      settingsManager,
+      sessionManager: SessionManager.inMemory(),
+      noTools: "all",
+    }),
+  )
 
   try {
     if (extensionsResult.errors.length > 0) {
@@ -117,7 +140,7 @@ async function checkPiSdk(): Promise<string> {
     if (session.model?.id !== model.id) throw new Error("AgentSession 未使用固定模型")
     return `AgentSession=${session.sessionId}; model=${model.id}; inlineExtension=true; embeddedView=true`
   } finally {
-    session.dispose()
+    await traceArchitectureStage("piSdk / 释放 AgentSession", () => session.dispose())
   }
 }
 
@@ -128,17 +151,19 @@ async function checkPiSdk(): Promise<string> {
  * 加载失败后静默降级成什么都不画。
  */
 async function checkOpenTui(): Promise<string> {
-  const setup = await createTestRenderer({ width: 48, height: 8 })
+  const setup = await traceArchitectureStage("openTui / 创建测试渲染器", () =>
+    createTestRenderer({ width: 48, height: 8 }),
+  )
   try {
     setup.renderer.root.add(
       new TextRenderable(setup.renderer, { id: "verify-opentui", content: "AizenAssistant OpenTUI" }),
     )
-    await setup.renderOnce()
+    await traceArchitectureStage("openTui / 渲染帧", () => setup.renderOnce())
     const frame = setup.captureCharFrame()
     if (!frame.includes("AizenAssistant OpenTUI")) throw new Error("OpenTUI 帧缺少测试文本")
     return "OpenTUI native renderer=true"
   } finally {
-    setup.renderer.destroy()
+    await traceArchitectureStage("openTui / 销毁测试渲染器", () => setup.renderer.destroy())
   }
 }
 
@@ -151,38 +176,51 @@ async function checkOpenTui(): Promise<string> {
  */
 function checkPhoton(): string {
   const image = new PhotonImage(new Uint8Array([255, 0, 0, 255]), 1, 1)
+  console.log(`${architectureLogPrefix} 状态：photonWasm / PhotonImage 已创建`)
   try {
     if (image.get_width() !== 1 || image.get_height() !== 1) throw new Error("PhotonImage 尺寸不正确")
     const png = image.get_bytes()
+    console.log(`${architectureLogPrefix} 状态：photonWasm / PNG 编码完成，字节数 ${png.byteLength}`)
     if (png[0] !== 0x89 || png[1] !== 0x50 || png[2] !== 0x4e || png[3] !== 0x47) {
       throw new Error("Photon WASM 未生成 PNG")
     }
     return `Photon WASM=true; pngBytes=${png.byteLength}`
   } finally {
     image.free()
+    console.log(`${architectureLogPrefix} 状态：photonWasm / PhotonImage 已释放`)
   }
 }
 
 /** 验证 pi provider 的 HTTP 请求链路可用。 */
 async function checkMockServer(): Promise<string> {
   const expectedText = "架构可行性验证：Mock 链路通过"
-  const mock = await startMockServer(expectedText)
-  const modelRuntime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null })
+  const mock = await traceArchitectureStage("mockServer / 启动 Worker", () => startMockServer(expectedText))
+  const modelRuntime = await traceArchitectureStage("mockServer / 创建模型运行时", () =>
+    ModelRuntime.create({
+      credentials: new InMemoryCredentialStore(),
+      modelsPath: null,
+      allowModelNetwork: false,
+    }),
+  )
   const model = modelRuntime.getModel("anthropic", "claude-sonnet-4-6")
   if (!model) throw new Error("固定测试模型不存在")
-  await modelRuntime.setRuntimeApiKey("anthropic", "dummy-skip-validation")
+  await traceArchitectureStage("mockServer / 设置运行时认证", () =>
+    modelRuntime.setRuntimeApiKey("anthropic", "dummy-skip-validation"),
+  )
   model.baseUrl = mock.url
   try {
-    const result = await modelRuntime.complete(
-      model,
-      { messages: [{ role: "user", content: "test", timestamp: Date.now() }] },
-      { auth: { apiKey: "dummy-skip-validation" } },
+    const result = await traceArchitectureStage("mockServer / 完成模型请求", () =>
+      modelRuntime.complete(
+        model,
+        { messages: [{ role: "user", content: "test", timestamp: Date.now() }] },
+        { auth: { apiKey: "dummy-skip-validation" } },
+      ),
     )
     const text = result.content.find((part) => part.type === "text")?.text ?? ""
     if (!text.includes(expectedText)) throw new Error(`Mock 响应不匹配：${text}`)
     return `Mock pi provider=true; expectedText="${expectedText}"`
   } finally {
-    mock.stop()
+    await traceArchitectureStage("mockServer / 请求停止 Worker", () => mock.stop())
   }
 }
 
@@ -200,6 +238,14 @@ async function runArchitectureVerification(): Promise<ArchitectureVerificationRe
 function allChecksPassed(report: ArchitectureVerificationReport): boolean {
   return report.piSdk.passed && report.openTui.passed && report.photonWasm.passed && report.mockServer.passed
 }
+
+test("业务 TUI 不直接依赖 OpenTUI", async () => {
+  const glob = new Bun.Glob("apps/tui/**/*.ts")
+  for await (const path of glob.scan({ cwd: process.cwd() })) {
+    const source = await Bun.file(path).text()
+    expect(source).not.toContain('from "@opentui/core"')
+  }
+})
 
 test("架构可行性验证：pi SDK、内联扩展、内置视图、OpenTUI、Photon 和 HTTP 链路全部可用", async () => {
   const report = await runArchitectureVerification()
