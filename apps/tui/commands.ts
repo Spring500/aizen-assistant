@@ -1,4 +1,15 @@
-export type TuiCommandName = "/quit" | "/new" | "/sessions" | "/views" | "/view" | "/fold" | "/model" | "/models"
+export type TuiCommandName =
+  | "/quit"
+  | "/new"
+  | "/sessions"
+  | "/rewind"
+  | "/fork"
+  | "/rename"
+  | "/views"
+  | "/view"
+  | "/fold"
+  | "/model"
+  | "/models"
 
 export type TuiCommand = {
   name: TuiCommandName
@@ -8,6 +19,9 @@ export type TuiCommand = {
 export const tuiCommands: readonly TuiCommand[] = [
   { name: "/new", description: "新建会话" },
   { name: "/sessions", description: "选择或管理会话" },
+  { name: "/rewind", description: "回退到更早的用户消息" },
+  { name: "/fork", description: "从用户消息创建会话副本" },
+  { name: "/rename", description: "重命名当前会话" },
   { name: "/view", description: "切换当前视图" },
   { name: "/views", description: "管理视图" },
   { name: "/model", description: "切换当前模型" },

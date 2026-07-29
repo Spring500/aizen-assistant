@@ -30,6 +30,7 @@ export type ChatEditor = {
   shortcuts: TextRenderable
   error: TextRenderable
   setSessionTitle(session: { name: string; sessionId: string } | undefined): void
+  setInputText(content: string): void
   setStatus(content: string): void
   setShortcuts(content: string): void
   setError(content: string): void
@@ -305,6 +306,11 @@ export function createChatEditor(
     error,
     setSessionTitle(value) {
       sessionTitle = value
+      updateLayout()
+    },
+    setInputText(content) {
+      input.setText(content)
+      input.cursorOffset = input.plainText.length
       updateLayout()
     },
     setStatus(content) {
