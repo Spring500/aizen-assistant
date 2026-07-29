@@ -15,13 +15,13 @@ import { SessionStore } from "../../packages/core/session-store.ts"
 import type { CorePort } from "../../packages/core/types.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
+import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { selectEditableItem } from "../../packages/tui-kit/editable-selector.ts"
 import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
 import { selectMultiple } from "../../packages/tui-kit/multi-select.ts"
 import { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
-import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { createAizenRenderer, destroyRenderer, type TuiRenderer } from "../../packages/tui-kit/renderer.ts"
 import { selectRichItem } from "../../packages/tui-kit/rich-selector.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
@@ -202,7 +202,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         event.promptType === "secret"
           ? `${authProviderName ?? "服务商"} 密钥或令牌：`
           : `${authPromptLabels[event.message] ?? event.message}：`
-      void promptLine(overlays, `auth-${event.promptId}`, label, {
+      void promptAuthInput(overlays, `auth-${event.promptId}`, `${authProviderName ?? "服务商"}认证`, label, {
         mask: event.promptType === "secret",
         signal: interactionController.signal,
         onCancel: () => void core.dispatch({ type: "cancel_auth" }),
@@ -217,12 +217,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   })
 
-  async function createView(): Promise<void> {
-    const name = await promptLine(overlays, "view-name", "视图名称：", { signal: interactionController.signal })
-    if (!name) return
-    const result = await dispatchWithError({ type: "create_view", name }, "创建视图失败")
+  async function createViewWithName(name: string): Promise<void> {
+    if (!name.trim()) return
+    const result = await dispatchWithError({ type: "create_view", name: name.trim() }, "创建视图失败")
     if (!result.ok) return
-    const created = core.getSnapshot().views.find((item) => item.name === name)
+    const created = core.getSnapshot().views.find((item) => item.name === name.trim())
     if (!created) return
     await showError(
       "视图已创建",
@@ -236,20 +235,26 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       while (!exiting) {
         const listed = await dispatchWithError({ type: "list_views" }, "读取视图失败")
         if (!listed.ok) return undefined
-        const selected = await selectItem<string | null>(
+        const selected = await selectEditableItem<string | null>(
           overlays,
           "view-selector",
-          [
+          () => [
             ...viewSelectionItems(core.getSnapshot().views),
-            { name: "新建视图", description: "创建视图模板并立即使用", value: createViewValue },
+            {
+              name: "新建视图",
+              description: "在当前选项内输入名称并创建视图模板",
+              value: createViewValue,
+              edit: {
+                label: "新建视图  ",
+                value: "",
+                validate: (value) => (value.trim() ? undefined : "视图名称不能为空"),
+                save: createViewWithName,
+              },
+            },
             { name: "管理视图", description: "编辑、移除或删除视图", value: manageViewsValue },
           ],
           { title: "选择视图", signal: interactionController.signal },
         )
-        if (selected === createViewValue) {
-          await createView()
-          continue
-        }
         if (selected === manageViewsValue) {
           await manageViews()
           continue
@@ -268,12 +273,22 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       while (!exiting) {
         const listed = await dispatchWithError({ type: "list_views" }, "读取视图失败")
         if (!listed.ok) return
-        const selected = await selectItem(
+        const selected = await selectEditableItem(
           overlays,
           "views-manager",
-          [
+          () => [
             { name: "刷新", description: "重新读取 views.json 和目录状态", value: "__refresh__" },
-            { name: "创建视图模板", description: "创建 AGENTS.md 和 skills 目录", value: "__create__" },
+            {
+              name: "创建视图模板",
+              description: "在当前选项内输入名称并创建 AGENTS.md 和 skills 目录",
+              value: "__create__",
+              edit: {
+                label: "创建视图模板  ",
+                value: "",
+                validate: (value) => (value.trim() ? undefined : "视图名称不能为空"),
+                save: createViewWithName,
+              },
+            },
             ...core.getSnapshot().views.map((item) => ({
               name: `${item.valid ? "✓" : "!"} ${item.name}`,
               description: `${item.id} · ${item.error ?? item.directory}`,
@@ -284,10 +299,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         )
         if (!selected) return
         if (selected === "__refresh__") continue
-        if (selected === "__create__") {
-          await createView()
-          continue
-        }
+        if (selected === "__create__") continue
         await manageView(selected)
       }
     } finally {
@@ -1154,35 +1166,31 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     ],
   })
 
-  async function renameSession(sessionId: string): Promise<void> {
-    const session = core.getSnapshot().sessions.find((item) => item.sessionId === sessionId)
-    if (!session) return
-    const name = await promptLine(overlays, "session-rename", "会话名称（可留空）：", {
-      initialValue: session.name,
-      signal: interactionController.signal,
-    })
-    if (name === undefined) return
-    await dispatchWithError({ type: "rename_session", sessionId, name }, "重命名会话失败")
-  }
-
   async function manageSession(sessionId: string): Promise<void> {
     const session = core.getSnapshot().sessions.find((item) => item.sessionId === sessionId)
     if (!session) return
-    const action = await selectRichItem(
+    const action = await selectEditableItem(
       overlays,
       "session-action",
-      [
-        { segments: [{ text: "打开会话" }], value: "open" as const },
+      () => [
+        { name: "打开会话", description: "切换到该会话", value: "open" as const },
         {
-          segments: [{ text: "重命名" }],
-          details: [{ text: session.name || "当前未命名", dim: true }],
-          value: "rename" as const,
+          name: `会话名称  ${session.name || "当前未命名"}`,
+          description: "在当前选项内重命名；可留空",
+          value: "renamed" as const,
+          edit: {
+            label: "会话名称  ",
+            value: session.name,
+            save: async (name: string) => {
+              const result = await dispatchWithError({ type: "rename_session", sessionId, name }, "重命名会话失败")
+              if (result.ok) session.name = name
+            },
+          },
         },
       ],
       { title: `管理会话 · ${session.name || session.sessionId}`, signal: interactionController.signal },
     )
     if (action === "open") await dispatchWithError({ type: "open_session", sessionId }, "打开会话失败")
-    else if (action === "rename") await renameSession(sessionId)
   }
 
   async function manageSessions(): Promise<void> {

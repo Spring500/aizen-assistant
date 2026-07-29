@@ -78,7 +78,6 @@ export function selectEditableItem<T>(
     }
     const startEdit = async (item: EditableSelectorItem<T>, index: number) => {
       if (!item.edit) return
-      selector.visible = false
       const result = await editInline(overlays, handle, {
         id: `${id}-field-${item.id ?? index}`,
         label: item.edit.label,
@@ -88,7 +87,6 @@ export function selectEditableItem<T>(
         ...(item.edit.validate ? { validate: item.edit.validate } : {}),
         top: index,
       })
-      selector.visible = true
       selector.focus()
       if (result !== undefined) await item.edit.save?.(result)
       updateOptions(index)

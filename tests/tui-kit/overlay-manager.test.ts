@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
+import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
-import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
 
 function key(sequence: string): KeyEvent {
@@ -29,7 +29,7 @@ test("嵌套层只接收栈顶输入并逐层恢复", async () => {
       ],
       { title: "父层" },
     )
-    const child = promptLine(overlays, "child", "名称：")
+    const child = promptAuthInput(overlays, "child", "子层", "名称：")
     expect(overlays.depth).toBe(2)
 
     setup.renderer.keyInput.emit("keypress", key("x"))
@@ -59,7 +59,7 @@ test("同一次 Enter 不会穿透到新打开的子层", async () => {
       contentHeight: 2,
       input: {
         keypress: (event) => {
-          if (event.name === "return") child = promptLine(overlays, "new-child", "输入：")
+          if (event.name === "return") child = promptAuthInput(overlays, "new-child", "子层", "输入：")
         },
       },
     })

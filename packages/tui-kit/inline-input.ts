@@ -22,6 +22,7 @@ export function editInline(
 ): Promise<string | undefined> {
   return new Promise((resolve) => {
     let settled = false
+    let secretValue = options.initialValue ?? ""
     const top = options.top ?? 0
     const labelWidth = Math.max(1, Bun.stringWidth(options.label))
     const label = new TextRenderable(overlays.renderer, {
@@ -42,7 +43,7 @@ export function editInline(
       top,
       left: labelWidth,
       right: 0,
-      value: options.initialValue ?? "",
+      value: options.mask ? "•".repeat(Array.from(secretValue).length) : secretValue,
       placeholder: options.placeholder ?? "",
       backgroundColor: "#111827",
       focusedBackgroundColor: "#111827",
@@ -61,7 +62,7 @@ export function editInline(
       resolve(value)
     }
     const confirm = () => {
-      const value = input.value
+      const value = options.mask ? secretValue : input.value
       const error = options.validate?.(value)
       if (error) {
         handle.setError(error)
@@ -75,8 +76,35 @@ export function editInline(
       { id: "cancel", key: { name: "escape" }, label: "Esc 取消", run: () => finish(undefined) },
     ])
     handle.setInput({
-      keypress: (key) => input.handleKeyPress(key),
-      paste: (event) => input.handlePaste(event),
+      keypress: (key) => {
+        if (!options.mask) {
+          input.handleKeyPress(key)
+          return
+        }
+        const offset = input.cursorOffset
+        if (key.name === "backspace") {
+          input.handleKeyPress(key)
+          if (offset > 0) secretValue = `${secretValue.slice(0, offset - 1)}${secretValue.slice(offset)}`
+        } else if (key.name === "delete") {
+          input.handleKeyPress(key)
+          secretValue = `${secretValue.slice(0, offset)}${secretValue.slice(offset + 1)}`
+        } else if (!key.ctrl && !key.meta && key.sequence.length > 0) {
+          const characters = Array.from(key.sequence.replace(/[\r\n]/g, ""))
+          if (characters.length === 0) return
+          secretValue = `${secretValue.slice(0, offset)}${characters.join("")}${secretValue.slice(offset)}`
+          input.insertText("•".repeat(characters.length))
+        } else input.handleKeyPress(key)
+      },
+      paste: (event) => {
+        if (!options.mask) {
+          input.handlePaste(event)
+          return
+        }
+        const value = new TextDecoder().decode(event.bytes).replace(/[\r\n]/g, "")
+        const offset = input.cursorOffset
+        secretValue = `${secretValue.slice(0, offset)}${value}${secretValue.slice(offset)}`
+        input.insertText("•".repeat(Array.from(value).length))
+      },
     })
     input.cursorOffset = input.value.length
     input.focus()
