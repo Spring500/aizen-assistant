@@ -1,4 +1,5 @@
 import { type AppPreferencesStore, defaultAppPreferences, parseAppPreferences } from "./app-preferences-store.ts"
+import { CoreErrorQueue } from "./error-queue.ts"
 import type { ModelConfigStore } from "./model-config-store.ts"
 import type { PiPort, PiPortEvent } from "./pi-port.ts"
 import type {
@@ -62,6 +63,7 @@ export class AizenCore implements CorePort {
   #records: SessionRecord[] = []
   #writeQueue = Promise.resolve()
   #writeError: Error | undefined
+  readonly #errors = new CoreErrorQueue()
   #currentTurnId: string | undefined
   #responseTimer: ReturnType<typeof setInterval> | undefined
   #abortRequested = false
@@ -106,7 +108,7 @@ export class AizenCore implements CorePort {
     if (this.#disposed)
       return { ok: false, error: { code: "CORE_DISPOSED", message: "核心已经关闭", severity: "fatal" } }
     try {
-      delete this.#snapshot.lastError
+      this.#clearError()
       if (
         command.type !== "abort" &&
         command.type !== "answer_auth_prompt" &&
@@ -253,7 +255,7 @@ export class AizenCore implements CorePort {
       return { ok: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      this.#snapshot.lastError = message
+      this.#reportError(message)
       if (this.#snapshot.status !== "running" && this.#snapshot.status !== "aborting") this.#snapshot.status = "idle"
       this.#notify()
       return { ok: false, error: { code: "COMMAND_FAILED", message, severity: "error" } }
@@ -263,16 +265,30 @@ export class AizenCore implements CorePort {
   async dispose(): Promise<void> {
     if (this.#disposed) return
     this.#disposed = true
-    if (this.#snapshot.status === "running" || this.#snapshot.status === "aborting") await this.#pi.abort()
-    this.#stopResponseTimer()
+    let failure: unknown
     try {
-      await this.#writeQueue
-      await this.#store.flush()
+      if (this.#snapshot.status === "running" || this.#snapshot.status === "aborting") await this.#pi.abort()
+    } catch (error) {
+      failure = error
     } finally {
-      this.#unsubscribePi()
-      await this.#pi.dispose()
-      this.#listeners.clear()
+      this.#stopResponseTimer()
+      try {
+        await this.#writeQueue
+        await this.#store.flush()
+      } catch (error) {
+        failure ??= error
+      } finally {
+        this.#unsubscribePi()
+        try {
+          await this.#pi.dispose()
+        } catch (error) {
+          failure ??= error
+        } finally {
+          this.#listeners.clear()
+        }
+      }
     }
+    if (failure !== undefined) throw failure
   }
 
   async #readPreferences() {
@@ -340,7 +356,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
-    delete this.#snapshot.lastError
+    this.#clearError()
     this.#snapshot.sessions = await this.#store.list()
     await this.#rememberSessionDefaults(actualModel, viewId)
   }
@@ -354,7 +370,7 @@ export class AizenCore implements CorePort {
     if (viewRecord?.kind !== "view_changed") throw new Error("会话没有视图记录")
     const view = await this.#resolveView(viewRecord.viewId).catch((error) => {
       this.#runtimeReady = false
-      this.#snapshot.lastError = error instanceof Error ? error.message : String(error)
+      this.#reportError(error instanceof Error ? error.message : String(error))
       return undefined
     })
     const actualModel = view
@@ -378,8 +394,8 @@ export class AizenCore implements CorePort {
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
-    if (loaded.warnings.length > 0) this.#snapshot.lastError = loaded.warnings.join("；")
-    else if (this.#runtimeReady) delete this.#snapshot.lastError
+    if (loaded.warnings.length > 0) this.#reportError(loaded.warnings.join("；"))
+    else if (this.#runtimeReady) this.#clearError()
     await this.#rememberSessionDefaults(actualModel, viewRecord.viewId)
   }
 
@@ -469,10 +485,16 @@ export class AizenCore implements CorePort {
         outcome,
         ...(error ? { error } : {}),
       }
-      await this.#store.append(sessionId, finished)
+      try {
+        await this.#store.append(sessionId, finished)
+      } catch (caught) {
+        const actual = caught instanceof Error ? caught : new Error(String(caught))
+        this.#markWriteFailure(actual)
+        throw actual
+      }
       this.#records.push(finished)
       this.#snapshot.transcript.push({ type: "turn_end", turnId, outcome })
-      if (error) this.#snapshot.lastError = error.message
+      if (error) this.#reportError(error.message)
     } finally {
       this.#snapshot.status = "idle"
       this.#stopResponseTimer()
@@ -604,10 +626,30 @@ export class AizenCore implements CorePort {
     })
     this.#writeQueue = operation.catch((error) => {
       const actual = error instanceof Error ? error : new Error(String(error))
-      this.#writeError = actual
-      this.#snapshot.lastError = `保存会话失败：${actual.message}`
+      this.#markWriteFailure(actual)
       this.#notify()
     })
+  }
+
+  #markWriteFailure(error: Error): void {
+    this.#writeError = error
+    this.#reportError(`保存会话失败：${error.message}`)
+  }
+
+  #reportError(message: string): void {
+    this.#errors.report(message)
+    this.#syncVisibleError()
+  }
+
+  #clearError(): void {
+    this.#errors.clearVisible()
+    this.#syncVisibleError()
+  }
+
+  #syncVisibleError(): void {
+    const visible = this.#errors.visible()
+    if (visible) this.#snapshot.lastError = visible.message
+    else delete this.#snapshot.lastError
   }
 
   #contextUsageFromAssistant(message: AssistantMessage) {
