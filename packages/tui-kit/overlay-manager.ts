@@ -201,7 +201,7 @@ export class OverlayManager {
   }
 
   setBaseFooterHeight(height: number): void {
-    this.baseFooterHeight = Math.max(1, height)
+    this.baseFooterHeight = Math.max(1, Math.min(this.renderer.terminalHeight, height))
     if (this.stack.length > 0) this.layout()
     else if (this.renderer.screenMode === "split-footer") this.renderer.footerHeight = this.baseFooterHeight
   }

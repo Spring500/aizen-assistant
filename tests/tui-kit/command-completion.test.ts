@@ -88,6 +88,66 @@ test("Enter 和 Tab 只补全命令且必须再次 Enter 才执行", async () =>
   }
 })
 
+test("超过五个命令时候选窗口跟随选中项滚动", async () => {
+  const setup = await createTestRenderer({ width: 60, height: 18 })
+  try {
+    const editor = createChatEditor(
+      setup.renderer,
+      { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} },
+      undefined,
+      [
+        { name: "/one", description: "命令一" },
+        { name: "/two", description: "命令二" },
+        { name: "/three", description: "命令三" },
+        { name: "/four", description: "命令四" },
+        { name: "/five", description: "命令五" },
+        { name: "/six", description: "命令六" },
+        { name: "/seven", description: "命令七" },
+        { name: "/eight", description: "命令八" },
+      ],
+    )
+    editor.input.setText("/")
+    await Bun.sleep(1)
+    for (let index = 0; index < 6; index += 1) emitKey(setup.renderer, "\x1b[B")
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("▶ /seven")
+    expect(frame).toContain("/six")
+    expect(frame).not.toContain("/one")
+    emitKey(setup.renderer, "\t")
+    expect(editor.input.plainText).toBe("/seven")
+    editor.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("矮终端优先保留状态、快捷键和错误行", async () => {
+  const setup = await createTestRenderer({ width: 60, height: 9, screenMode: "split-footer", footerHeight: 8 })
+  try {
+    const editor = createChatEditor(
+      setup.renderer,
+      { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} },
+      undefined,
+      commands,
+    )
+    editor.setStatus("模型状态必须可见")
+    editor.setShortcuts("快捷键状态必须可见")
+    editor.setError("错误状态必须可见")
+    editor.input.setText("/")
+    await Bun.sleep(1)
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("模型状态必须可见")
+    expect(frame).toContain("快捷键状态必须可见")
+    expect(frame).toContain("错误状态必须可见")
+    expect(setup.renderer.footerHeight).toBeLessThanOrEqual(setup.renderer.terminalHeight)
+    editor.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("上下键切换候选且 Esc 关闭后保留输入", async () => {
   const setup = await createTestRenderer({ width: 60, height: 14 })
   let aborted = 0

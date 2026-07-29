@@ -113,6 +113,8 @@ export function createChatEditor(
   let sessionTitle: { name: string; sessionId: string } | undefined
   let destroyed = false
   let commandSelected = 0
+  let commandOffset = 0
+  let commandFilter = ""
   let commandDismissedFor = ""
   let commandMatches: CommandOption[] = []
 
@@ -142,18 +144,29 @@ export function createChatEditor(
     if (!trimmed.startsWith("/") || /\s/.test(trimmed) || value.trimEnd() !== value) return undefined
     return trimmed
   }
-  const updateCommands = () => {
-    const prefix = commandPrefix()
+  const updateCommands = (maximumVisibleRows: number) => {
+    const prefix = commandPrefix() ?? ""
+    if (prefix !== commandFilter) {
+      commandFilter = prefix
+      commandSelected = 0
+      commandOffset = 0
+    }
     if (!prefix || commandDismissedFor === input.plainText) commandMatches = []
     else commandMatches = commands.filter((command) => command.name.startsWith(prefix))
     commandSelected = Math.min(commandSelected, Math.max(0, commandMatches.length - 1))
-    commandList.visible = inputVisible && commandMatches.length > 0
-    commandList.height = commandList.visible ? Math.min(5, commandMatches.length) : 0
+    const visibleRows = Math.min(5, commandMatches.length, Math.max(0, maximumVisibleRows))
+    if (visibleRows > 0) {
+      if (commandSelected < commandOffset) commandOffset = commandSelected
+      else if (commandSelected >= commandOffset + visibleRows) commandOffset = commandSelected - visibleRows + 1
+      commandOffset = Math.max(0, Math.min(commandOffset, commandMatches.length - visibleRows))
+    } else commandOffset = 0
+    commandList.visible = inputVisible && visibleRows > 0
+    commandList.height = commandList.visible ? visibleRows : 0
     commandList.content = commandMatches
-      .slice(0, 5)
+      .slice(commandOffset, commandOffset + visibleRows)
       .map(
         (command, index) =>
-          `${index === commandSelected ? "▶" : " "} ${command.name.padEnd(10)} ${command.description}`,
+          `${commandOffset + index === commandSelected ? "▶" : " "} ${command.name.padEnd(10)} ${command.description}`,
       )
       .join("\n")
   }
@@ -163,7 +176,6 @@ export function createChatEditor(
     input.setText(command.name)
     input.cursorOffset = input.plainText.length
     commandDismissedFor = input.plainText
-    updateCommands()
     updateLayout()
     return true
   }
@@ -175,11 +187,12 @@ export function createChatEditor(
       Math.min(maxInputHeight, Math.max(measuredLines, input.virtualLineCount || input.lineCount || 1)),
     )
     input.height = nextHeight
-    updateCommands()
+    const fixedFooterHeight = chatViewHeight + (inputVisible ? nextHeight + 2 : 0) + 3
+    updateCommands(inputVisible ? renderer.terminalHeight - fixedFooterHeight : 0)
     topSeparator.content = titledSeparator(renderer.terminalWidth, sessionTitle)
     bottomSeparator.content = "─".repeat(Math.max(1, renderer.terminalWidth))
     manager.setBaseFooterHeight(
-      chatViewHeight + (inputVisible ? nextHeight + 2 + (commandList.visible ? commandList.height : 0) : 0) + 3,
+      Math.min(renderer.terminalHeight, fixedFooterHeight + (commandList.visible ? commandList.height : 0)),
     )
   }
   input = new TextareaRenderable(renderer, {
@@ -256,14 +269,14 @@ export function createChatEditor(
       key.preventDefault()
       key.stopPropagation()
       commandSelected = (commandSelected + 1) % commandMatches.length
-      updateCommands()
+      updateLayout()
       return
     }
     if (commandMatches.length > 0 && key.name === "up") {
       key.preventDefault()
       key.stopPropagation()
       commandSelected = (commandSelected - 1 + commandMatches.length) % commandMatches.length
-      updateCommands()
+      updateLayout()
       return
     }
     if (commandMatches.length > 0 && key.name === "tab") {
@@ -276,7 +289,6 @@ export function createChatEditor(
       key.preventDefault()
       key.stopPropagation()
       commandDismissedFor = input.plainText
-      updateCommands()
       updateLayout()
       return
     }
@@ -313,7 +325,6 @@ export function createChatEditor(
       inputVisible = value
       input.visible = value
       topSeparator.visible = value
-      updateCommands()
       bottomSeparator.visible = value
       if (value) input.focus()
       else input.blur()
