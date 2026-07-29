@@ -30,7 +30,22 @@ export const tuiCommands: readonly TuiCommand[] = [
   { name: "/quit", description: "退出应用" },
 ]
 
+export type ParsedTuiCommand = { name: TuiCommandName; argument?: string }
+
+/** 解析完整 TUI 命令；仅重命名命令接受行内参数。 */
+export function parseTuiCommand(value: string): ParsedTuiCommand | undefined {
+  const normalized = value.trim()
+  const rename = normalized.match(/^\/rename(?:\s+(.+))?$/s)
+  if (rename) {
+    const argument = rename[1]?.trim()
+    return { name: "/rename", ...(argument ? { argument } : {}) }
+  }
+  const command = tuiCommands.find((item) => item.name === normalized)
+  return command ? { name: command.name } : undefined
+}
+
 /** 判断输入是否为已注册的完整 TUI 命令。 */
 export function isTuiCommand(value: string): value is TuiCommandName {
-  return tuiCommands.some((command) => command.name === value)
+  const parsed = parseTuiCommand(value)
+  return parsed !== undefined && parsed.argument === undefined
 }

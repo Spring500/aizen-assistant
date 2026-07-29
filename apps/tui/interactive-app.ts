@@ -36,7 +36,7 @@ import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-edito
 import { systemColors } from "../../packages/tui-kit/theme.ts"
 
 import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
-import { isTuiCommand, tuiCommands } from "./commands.ts"
+import { parseTuiCommand, tuiCommands } from "./commands.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
 import { type SessionSettingsDraft, sessionSettingsItems } from "./session-settings.ts"
 import { viewSelectionItems } from "./view-flow.ts"
@@ -131,18 +131,18 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     renderer,
     {
       onSubmit: (value) => {
-        if (!isTuiCommand(value))
-          runAction(() => dispatchWithError({ type: "send_prompt", text: value }, "发送消息失败"))
-        else if (value === "/quit") quit()
-        else if (value === "/new") runAction(createSession)
-        else if (value === "/sessions") runAction(chooseSession)
-        else if (value === "/rewind") runAction(() => changeConversation("rewind"))
-        else if (value === "/fork") runAction(() => changeConversation("fork"))
-        else if (value === "/rename") runAction(renameCurrentSession)
-        else if (value === "/views") runAction(manageViews)
-        else if (value === "/view" || value === "/model") runAction(() => openSessionSettings("existing"))
-        else if (value === "/fold") runAction(chooseFold)
-        else if (value === "/models") runAction(manageModels)
+        const command = parseTuiCommand(value)
+        if (!command) runAction(() => dispatchWithError({ type: "send_prompt", text: value }, "发送消息失败"))
+        else if (command.name === "/quit") quit()
+        else if (command.name === "/new") runAction(createSession)
+        else if (command.name === "/sessions") runAction(chooseSession)
+        else if (command.name === "/rewind") runAction(() => changeConversation("rewind"))
+        else if (command.name === "/fork") runAction(() => changeConversation("fork"))
+        else if (command.name === "/rename") runAction(() => renameCurrentSession(command.argument))
+        else if (command.name === "/views") runAction(manageViews)
+        else if (command.name === "/view" || command.name === "/model") runAction(() => openSessionSettings("existing"))
+        else if (command.name === "/fold") runAction(chooseFold)
+        else if (command.name === "/models") runAction(manageModels)
       },
       onAbort: () => void core.dispatch({ type: "abort" }),
       onQuit: quit,
@@ -1222,9 +1222,16 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     if (result.ok) editor.setInputText(selected.text)
   }
 
-  async function renameCurrentSession(): Promise<void> {
+  async function renameCurrentSession(argument?: string): Promise<void> {
     const snapshot = core.getSnapshot()
     if (!snapshot.currentSessionId) return
+    if (argument !== undefined) {
+      await dispatchWithError(
+        { type: "rename_session", sessionId: snapshot.currentSessionId, name: argument },
+        "重命名会话失败",
+      )
+      return
+    }
     const handle = overlays.open<string>({
       id: "rename-current-session",
       title: "重命名当前会话",
@@ -1232,6 +1239,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       actions: [],
       contentHeight: 1,
       signal: interactionController.signal,
+      onCancel: () => handle.close(undefined),
     })
     const name = await editInline(overlays, handle, {
       id: "rename-current-session-input",
