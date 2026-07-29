@@ -26,7 +26,8 @@ export function selectMultiple<T extends string>(
     const handle = overlays.open<T[]>({
       id,
       title: titleText,
-      help: "Space 切换 | Enter 保存 | Esc 取消",
+      description: items[0]?.disabledReason ?? "",
+      actions: [],
       contentHeight: visibleRows,
       ...(signal ? { signal } : {}),
       onCancel: () => finish(undefined, true),
@@ -44,6 +45,37 @@ export function selectMultiple<T extends string>(
       content: "",
     })
     handle.content.add(view)
+    const updateState = () => {
+      const item = items[index]
+      handle.setDescription(item?.disabledReason ?? "")
+      handle.setActions([
+        {
+          id: "move",
+          key: { name: "up" },
+          alternateKeys: [{ name: "down" }],
+          label: "↑↓ 移动",
+          run: (key) => {
+            index = key.name === "up" ? (index - 1 + items.length) % items.length : (index + 1) % items.length
+            render()
+          },
+        },
+        {
+          id: "toggle",
+          key: { name: "space" },
+          label: "Space 切换",
+          enabled: !item?.disabled,
+          disabledReason: item?.disabledReason ?? "当前选项不可用",
+          run: () => {
+            if (!item) return
+            if (selected.has(item.value)) selected.delete(item.value)
+            else selected.add(item.value)
+            render()
+          },
+        },
+        { id: "save", key: { name: "return" }, label: "Enter 保存", run: () => finish([...selected]) },
+        { id: "cancel", key: { name: "escape" }, label: "Esc 取消", run: () => finish(undefined) },
+      ])
+    }
     const render = () => {
       const maxOffset = Math.max(0, items.length - visibleRows)
       const offset = Math.min(maxOffset, Math.max(0, index - visibleRows + 1))
@@ -56,6 +88,7 @@ export function selectMultiple<T extends string>(
           return `${cursor} [${mark}] ${item.label}${reason}`
         })
         .join("\n")
+      updateState()
     }
     const finish = (value: T[] | undefined, cancelled = false) => {
       if (settled) return
@@ -65,23 +98,7 @@ export function selectMultiple<T extends string>(
     }
     handle.setInput({
       keypress: (key) => {
-        const space = key.name === "space" || key.sequence === " "
         if (key.name === "escape") finish(undefined)
-        else if (key.name === "return") finish([...selected])
-        else if (key.name === "up") {
-          index = (index - 1 + items.length) % items.length
-          render()
-        } else if (key.name === "down") {
-          index = (index + 1) % items.length
-          render()
-        } else if (space) {
-          const item = items[index]
-          if (item && !item.disabled) {
-            if (selected.has(item.value)) selected.delete(item.value)
-            else selected.add(item.value)
-            render()
-          }
-        }
       },
     })
     render()

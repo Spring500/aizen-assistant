@@ -18,9 +18,16 @@ export type RichSegment = {
 }
 
 export type RichSelectorItem<T> = {
+  id?: string
   segments: RichSegment[]
   details?: RichSegment[]
   value: T
+  disabled?: boolean
+  disabledReason?: string
+}
+
+function itemDescription(item: RichSelectorItem<unknown> | undefined): string {
+  return item?.details?.map((segment) => segment.text).join("") ?? ""
 }
 
 function content(item: RichSelectorItem<unknown>, selected: boolean, details = false): StyledText {
@@ -61,7 +68,8 @@ export function selectRichItem<T>(
     const handle = overlays.open<T>({
       id,
       title: options.title,
-      help: "↑↓ 移动 | Enter 选择 | Esc 返回",
+      description: itemDescription(items[0]),
+      actions: [],
       contentHeight: visibleItems * rowHeight,
       ...(options.signal ? { signal: options.signal } : {}),
       onCancel: () => finish(undefined, true),
@@ -83,6 +91,31 @@ export function selectRichItem<T>(
     )
     for (const row of rows) handle.content.add(row)
 
+    const updateState = () => {
+      const item = items[selected]
+      handle.setDescription(itemDescription(item))
+      handle.setActions([
+        {
+          id: "move",
+          key: { name: "up" },
+          alternateKeys: [{ name: "down" }],
+          label: "↑↓ 移动",
+          run: (key) => {
+            selected = key.name === "up" ? Math.max(0, selected - 1) : Math.min(items.length - 1, selected + 1)
+            render()
+          },
+        },
+        {
+          id: "select",
+          key: { name: "return" },
+          label: "Enter 选择",
+          enabled: !item?.disabled,
+          disabledReason: item?.disabledReason ?? itemDescription(item) ?? "当前选项不可用",
+          run: () => finish(item?.value),
+        },
+        { id: "cancel", key: { name: "escape" }, label: "Esc 返回", run: () => finish(undefined) },
+      ])
+    }
     const render = () => {
       const maxOffset = Math.max(0, items.length - visibleItems)
       const offset = Math.min(maxOffset, Math.max(0, selected - visibleItems + 1))
@@ -93,6 +126,7 @@ export function selectRichItem<T>(
         row.visible = item !== undefined
         if (item) row.content = content(item, itemIndex === selected, detailRow)
       }
+      updateState()
     }
     const finish = (value: T | undefined, cancelled = false) => {
       if (settled) return
@@ -102,14 +136,7 @@ export function selectRichItem<T>(
     }
     handle.setInput({
       keypress: (key) => {
-        if (key.name === "up") {
-          selected = Math.max(0, selected - 1)
-          render()
-        } else if (key.name === "down") {
-          selected = Math.min(items.length - 1, selected + 1)
-          render()
-        } else if (key.name === "return") finish(items[selected]?.value)
-        else if (key.name === "escape") finish(undefined)
+        if (key.name === "escape") finish(undefined)
       },
     })
     render()

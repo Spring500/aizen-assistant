@@ -28,12 +28,13 @@ export type OverlayActionKey = {
 export type OverlayAction = {
   id: string
   key: OverlayActionKey
+  alternateKeys?: OverlayActionKey[]
   label: string
   applicable?: boolean
   enabled?: boolean
   disabledReason?: string
   priority?: number
-  run(): void
+  run(key: KeyEvent): void
 }
 
 export type OverlayOptions = {
@@ -343,7 +344,11 @@ export class OverlayManager {
       this.closeAll()
       return
     }
-    const action = layer.actions.find((candidate) => candidate.applicable !== false && keyMatches(key, candidate.key))
+    const action = layer.actions.find(
+      (candidate) =>
+        candidate.applicable !== false &&
+        (keyMatches(key, candidate.key) || candidate.alternateKeys?.some((expected) => keyMatches(key, expected))),
+    )
     if (action) {
       if (action.enabled === false) {
         layer.currentDescription = action.disabledReason ?? "当前操作不可用"
@@ -351,7 +356,7 @@ export class OverlayManager {
       } else {
         layer.currentDescription = layer.defaultDescription
         this.layout()
-        action.run()
+        action.run(key)
       }
       return
     }
