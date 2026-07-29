@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import type { AgentMessage, ThinkingLevel } from "@earendil-works/pi-agent-core"
+import type { ThinkingLevel } from "@earendil-works/pi-agent-core"
 import {
   type Api,
   type AuthPrompt,
@@ -451,18 +451,6 @@ export class PiSessionRuntime implements PiPort {
   subscribe(listener: (event: PiPortEvent) => void): () => void {
     this.#listeners.add(listener)
     return () => this.#listeners.delete(listener)
-  }
-
-  inspectMessages(): AgentMessage[] {
-    return this.#requireSession().agent.state.messages
-  }
-
-  inspectSystemPrompt(): string {
-    return this.#requireSession().systemPrompt
-  }
-
-  inspectSessionFile(): string | undefined {
-    return this.#requireSession().sessionFile
   }
 
   async dispose(): Promise<void> {

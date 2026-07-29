@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionRecord } from "../../packages/core/session-format.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
+import { startMockServer } from "../utils/mock-server.ts"
 
 const directories: string[] = []
 
@@ -19,6 +20,25 @@ async function makeRuntime(): Promise<{ directory: string; runtime: PiSessionRun
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
+
+async function captureRequest(
+  runtime: PiSessionRuntime,
+  model: { providerId: string; modelId: string },
+): Promise<string> {
+  const mock = await startMockServer("完成")
+  try {
+    runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+    await runtime.prompt({
+      recordId: crypto.randomUUID(),
+      turnId: crypto.randomUUID(),
+      viewId: null,
+      items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "检查请求" }] }],
+    })
+    return JSON.stringify((await mock.requests())[0])
+  } finally {
+    mock.stop()
+  }
+}
 
 describe("pi 内存会话", () => {
   test("恢复时排除仅当轮输入并保留助手和工具结果", async () => {
@@ -64,11 +84,11 @@ describe("pi 内存会话", () => {
     ]
 
     await runtime.restore({ cwd: directory, model, view: { viewId: "test", directory }, records })
-    const messages = runtime.inspectMessages()
-    expect(JSON.stringify(messages)).not.toContain("不要恢复")
-    expect(JSON.stringify(messages)).toContain("需要恢复")
-    expect(JSON.stringify(messages)).toContain("回复")
-    expect(runtime.inspectSessionFile()).toBeUndefined()
+    const request = await captureRequest(runtime, model)
+    expect(request).not.toContain("不要恢复")
+    expect(request).toContain("需要恢复")
+    expect(request).toContain("回复")
+    expect((await readdir(directory)).some((name) => name.endsWith(".jsonl"))).toBe(false)
     await runtime.dispose()
   })
 
@@ -118,10 +138,10 @@ describe("pi 内存会话", () => {
     ]
 
     await runtime.restore({ cwd: directory, model, view: { viewId: "test", directory }, records })
-    const messages = JSON.stringify(runtime.inspectMessages())
-    expect(messages).toContain("已完成输入")
-    expect(messages).not.toContain("意外中断输入")
-    expect(messages).not.toContain("意外中断输出")
+    const request = await captureRequest(runtime, model)
+    expect(request).toContain("已完成输入")
+    expect(request).not.toContain("意外中断输入")
+    expect(request).not.toContain("意外中断输出")
     await runtime.dispose()
   })
 
@@ -139,16 +159,18 @@ describe("pi 内存会话", () => {
     await writeFile(join(skillDirectory, "SKILL.md"), "---\nname: review\ndescription: 审查代码\n---\n")
 
     await runtime.create({ cwd: directory, model, view: { viewId: "review", directory: viewDirectory } })
-    expect(runtime.inspectSystemPrompt()).toContain("视图系统甲")
-    expect(runtime.inspectSystemPrompt()).toContain("项目规则甲")
-    expect(runtime.inspectSystemPrompt()).toContain("review")
+    const firstRequest = await captureRequest(runtime, model)
+    expect(firstRequest).toContain("视图系统甲")
+    expect(firstRequest).toContain("项目规则甲")
+    expect(firstRequest).toContain("review")
 
     await writeFile(join(viewDirectory, "SYSTEM.md"), "视图系统乙")
     await writeFile(join(viewDirectory, "AGENTS.md"), "项目规则乙")
     await runtime.refreshView({ viewId: "review", directory: viewDirectory })
-    expect(runtime.inspectSystemPrompt()).toContain("视图系统乙")
-    expect(runtime.inspectSystemPrompt()).toContain("项目规则乙")
-    expect(runtime.inspectSystemPrompt()).not.toContain("视图系统甲")
+    const secondRequest = await captureRequest(runtime, model)
+    expect(secondRequest).toContain("视图系统乙")
+    expect(secondRequest).toContain("项目规则乙")
+    expect(secondRequest).not.toContain("视图系统甲")
     await runtime.dispose()
   })
 
@@ -164,9 +186,10 @@ describe("pi 内存会话", () => {
     await writeFile(join(directory, "skills", "hidden", "SKILL.md"), "---\nname: hidden\ndescription: 不应加载\n---\n")
 
     await runtime.create({ cwd: directory, model, view: { viewId: null } })
-    expect(runtime.inspectSystemPrompt()).toContain("You are an expert coding assistant")
-    expect(runtime.inspectSystemPrompt()).not.toContain("不应加载")
-    expect(runtime.inspectSystemPrompt()).not.toContain("hidden")
+    const request = await captureRequest(runtime, model)
+    expect(request).toContain("You are an expert coding assistant")
+    expect(request).not.toContain("不应加载")
+    expect(request).not.toContain("hidden")
     await runtime.dispose()
   })
 
@@ -177,7 +200,7 @@ describe("pi 内存会话", () => {
     if (!model) return
     await runtime.setRuntimeApiKey(model.providerId, "test-key")
     await runtime.create({ cwd: directory, model, view: { viewId: "default", directory } })
-    expect(runtime.inspectSystemPrompt()).toContain("You are an expert coding assistant")
+    expect(await captureRequest(runtime, model)).toContain("You are an expert coding assistant")
     await runtime.dispose()
   })
 
