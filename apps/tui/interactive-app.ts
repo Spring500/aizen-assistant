@@ -1,5 +1,5 @@
 import { join } from "node:path"
-import { type CliRenderer, SelectRenderable } from "@opentui/core"
+import { type CliRenderer, SelectRenderable, TextareaRenderable, TextRenderable } from "@opentui/core"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import type {
@@ -676,7 +676,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   async function editThinkingLevels(initial: string[]): Promise<string[] | undefined> {
     const levels = [...initial]
     return new Promise((resolve) => {
-      let editing: { index: number; value: string; adding: boolean; originalLevels: string[] } | undefined
+      let editing:
+        | { index: number; input: TextareaRenderable; label: TextRenderable; adding: boolean; originalLevels: string[] }
+        | undefined
       let settled = false
       const finish = (value: string[] | undefined) => {
         if (settled) return
@@ -708,14 +710,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       const render = (selectedIndex = selector.getSelectedIndex()) => {
         selector.options = [
           ...levels.map((level, index) => ({
-            name: `${index + 1}. ${editing?.index === index ? `${editing.value}█` : level}`,
+            name: `${index + 1}. ${editing?.index === index ? "" : level}`,
             description: editing?.index === index ? "↑/↓ 排序 · Ctrl+X 删除 · Enter 确认 · Esc 取消" : "Enter 原地编辑",
             value: `item:${index}`,
           })),
           {
-            name: editing?.adding
-              ? `新增档位  ${editing.value}█`
-              : `新增档位                              ${levels.length} / 6`,
+            name: editing?.adding ? "新增档位" : `新增档位                              ${levels.length} / 6`,
             description: editing?.adding
               ? "Enter 确认 · Esc 取消"
               : levels.length >= 6
@@ -726,18 +726,63 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           { name: "完成", description: `当前 ${levels.length} / 6`, value: "done" },
         ]
         selector.setSelectedIndex(Math.min(selectedIndex, levels.length + 1))
+        if (editing) {
+          editing.label.top = editing.index * 3
+          editing.input.top = editing.index * 3
+        }
         handle.setContentHeight(Math.min(18, Math.max(6, (levels.length + 2) * 3 - 2)))
+      }
+      const startEditing = (index: number, value: string, adding: boolean) => {
+        const label = new TextRenderable(overlays.renderer, {
+          id: `thinking-level-label-${crypto.randomUUID()}`,
+          position: "absolute",
+          top: index * 3,
+          left: 0,
+          width: adding ? 10 : 3,
+          height: 1,
+          wrapMode: "none",
+          content: adding ? "新增档位  " : `${index + 1}. `,
+          fg: systemColors.secondary,
+        })
+        const input = new TextareaRenderable(overlays.renderer, {
+          id: `thinking-level-input-${crypto.randomUUID()}`,
+          position: "absolute",
+          top: index * 3,
+          left: adding ? 10 : 3,
+          right: 0,
+          height: 1,
+          wrapMode: "none",
+          initialValue: value,
+          backgroundColor: "#111827",
+          focusedBackgroundColor: "#111827",
+          textColor: systemColors.secondary,
+          focusedTextColor: systemColors.secondary,
+          keyBindings: [],
+        })
+        input.cursorOffset = input.plainText.length
+        handle.content.add(label)
+        handle.content.add(input)
+        editing = { index, input, label, adding, originalLevels: [...levels] }
+        input.focus()
+        handle.setHelp(
+          adding
+            ? "输入新增档位名 | Enter 确认 | Esc 取消"
+            : "输入修改名称 | ↑/↓ 排序 | Ctrl+X 删除 | Enter 确认 | Esc 取消",
+        )
+        render(index)
       }
       const stopEditing = (cancelled: boolean) => {
         if (cancelled && editing) levels.splice(0, levels.length, ...editing.originalLevels)
         const selectedIndex = editing?.adding ? levels.length : (editing?.index ?? selector.getSelectedIndex())
+        editing?.input.destroy()
+        editing?.label.destroy()
         editing = undefined
         handle.setHelp("↑↓ 选择 | Enter 编辑 | Esc 返回")
         render(selectedIndex)
       }
       const confirmEditing = () => {
         if (!editing) return
-        const value = editing.value.trim()
+        const value = editing.input.plainText.trim()
         if (!value) return
         if (editing.adding) levels.push(value)
         else levels[editing.index] = value
@@ -755,6 +800,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               }
               const index = editing.index
               levels.splice(index, 1)
+              editing.input.destroy()
+              editing.label.destroy()
               editing = undefined
               handle.setHelp("↑↓ 选择 | Enter 编辑 | Esc 返回")
               render(Math.min(index, levels.length - 1))
@@ -768,33 +815,21 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               ;[levels[index], levels[index + 1]] = [levels[index + 1] ?? "", levels[index] ?? ""]
               editing.index++
               render(editing.index)
-            } else if (key.name === "backspace") {
-              editing.value = Array.from(editing.value).slice(0, -1).join("")
-              render()
-            } else if (!key.ctrl && !key.meta && key.sequence.length > 0) {
-              editing.value += key.sequence
-              render()
-            }
+            } else editing.input.handleKeyPress(key)
             return
           }
           const index = selector.getSelectedIndex()
           if (key.name === "escape") finish(levels)
           else if (key.name === "return") {
             if (index < levels.length) {
-              editing = { index, value: levels[index] ?? "", adding: false, originalLevels: [...levels] }
-              handle.setHelp("输入修改名称 | ↑/↓ 排序 | Ctrl+X 删除 | Enter 确认 | Esc 取消")
-              render(index)
+              startEditing(index, levels[index] ?? "", false)
             } else if (index === levels.length && levels.length < 6) {
-              editing = { index, value: "", adding: true, originalLevels: [...levels] }
-              handle.setHelp("输入新增档位名 | Enter 确认 | Esc 取消")
-              render(index)
+              startEditing(index, "", true)
             } else if (index === levels.length + 1) finish(levels)
           } else selector.handleKeyPress?.(key)
         },
         paste: (event) => {
-          if (!editing) return
-          editing.value += new TextDecoder().decode(event.bytes).replace(/[\r\n]+/g, "")
-          render()
+          editing?.input.handlePaste(event)
         },
       })
       render()
@@ -808,7 +843,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     let thinkingLevels = [...(initial?.thinkingLevels ?? ["low", "medium", "high"])]
     let defaultThinkingLevel = initial?.defaultThinkingLevel ?? thinkingLevels[1] ?? thinkingLevels[0] ?? ""
     return new Promise((resolve) => {
-      let editingDisable: { value: string } | undefined
+      let editingDisable: { input: TextareaRenderable; label: TextRenderable } | undefined
       let settled = false
       const finish = (value: ModelThinkingConfig | undefined | null) => {
         if (settled) return
@@ -847,7 +882,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             value: "allowDisable",
           },
           {
-            name: `关闭档位名      ${editingDisable ? `${editingDisable.value}█` : supported && allowDisable ? disableThinkingLevel : "—"}`,
+            name: `关闭档位名      ${editingDisable ? "" : supported && allowDisable ? disableThinkingLevel : "—"}`,
             description: editingDisable
               ? "Enter 确认 · Esc 取消"
               : supported && allowDisable
@@ -869,14 +904,52 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         ]
         selector.setSelectedIndex(selectedIndex)
       }
+      const startDisableEditing = () => {
+        const label = new TextRenderable(overlays.renderer, {
+          id: `thinking-disable-label-${crypto.randomUUID()}`,
+          position: "absolute",
+          top: 6,
+          left: 0,
+          width: 16,
+          height: 1,
+          wrapMode: "none",
+          content: "关闭档位名      ",
+          fg: systemColors.secondary,
+        })
+        const input = new TextareaRenderable(overlays.renderer, {
+          id: `thinking-disable-input-${crypto.randomUUID()}`,
+          position: "absolute",
+          top: 6,
+          left: 16,
+          right: 0,
+          height: 1,
+          wrapMode: "none",
+          initialValue: disableThinkingLevel,
+          backgroundColor: "#111827",
+          focusedBackgroundColor: "#111827",
+          textColor: systemColors.secondary,
+          focusedTextColor: systemColors.secondary,
+          keyBindings: [],
+        })
+        input.cursorOffset = input.plainText.length
+        handle.content.add(label)
+        handle.content.add(input)
+        editingDisable = { input, label }
+        input.focus()
+        handle.setHelp("输入关闭档位名 | Enter 确认 | Esc 取消")
+        render(2)
+      }
       const validSelection = (index: number) =>
         index === 0 || index === 5 || (supported && index !== 2) || (supported && allowDisable)
       const stopEditing = (confirm: boolean) => {
-        if (confirm && editingDisable?.value.trim()) {
+        const value = editingDisable?.input.plainText.trim()
+        if (confirm && value) {
           const previous = disableThinkingLevel
-          disableThinkingLevel = editingDisable.value.trim()
+          disableThinkingLevel = value
           if (defaultThinkingLevel === previous) defaultThinkingLevel = disableThinkingLevel
         }
+        editingDisable?.input.destroy()
+        editingDisable?.label.destroy()
         editingDisable = undefined
         handle.setHelp("↑↓ 移动 | Enter 选择 | Esc 返回")
         render(2)
@@ -911,13 +984,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           if (editingDisable) {
             if (key.name === "return") stopEditing(true)
             else if (key.name === "escape") stopEditing(false)
-            else if (key.name === "backspace") {
-              editingDisable.value = Array.from(editingDisable.value).slice(0, -1).join("")
-              render(2)
-            } else if (!key.ctrl && !key.meta && key.sequence.length > 0) {
-              editingDisable.value += key.sequence
-              render(2)
-            }
+            else editingDisable.input.handleKeyPress(key)
             return
           }
           if (key.name === "escape") finish(null)
@@ -943,9 +1010,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
                 defaultThinkingLevel = thinkingLevels[0] ?? ""
               render(index)
             } else if (index === 2) {
-              editingDisable = { value: disableThinkingLevel }
-              handle.setHelp("输入关闭档位名 | Enter 确认 | Esc 取消")
-              render(index)
+              startDisableEditing()
             } else if (index === 3) void manageLevels()
             else if (index === 4) void chooseDefault()
             else if (!supported) finish(undefined)
@@ -953,9 +1018,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           } else selector.handleKeyPress?.(key)
         },
         paste: (event) => {
-          if (!editingDisable) return
-          editingDisable.value += new TextDecoder().decode(event.bytes).replace(/[\r\n]+/g, "")
-          render(2)
+          editingDisable?.input.handlePaste(event)
         },
       })
       render()
