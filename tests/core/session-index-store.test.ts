@@ -71,6 +71,62 @@ describe("会话摘要索引存储", () => {
     await expect(readFile(temporary)).rejects.toThrow()
   })
 
+  test("Windows独占句柄下验证读取、替换和旧索引完整性", async () => {
+    if (process.platform !== "win32") return
+    const path = await makePath()
+    const store = new SessionIndexStore(path)
+    await store.updateProject("existing", { a: entry("a") })
+    const ready = `${path}.ready`
+    const release = `${path}.release`
+    const scriptPath = `${path}.hold.ps1`
+    await writeFile(
+      scriptPath,
+      [
+        "$stream=[IO.File]::Open($args[0],[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)",
+        "try {",
+        "  [IO.File]::WriteAllText($args[1],'ready')",
+        "  while (-not (Test-Path $args[2])) { Start-Sleep -Milliseconds 10 }",
+        "} finally { $stream.Dispose() }",
+      ].join("\n"),
+    )
+    const holder = Bun.spawn(["powershell.exe", "-NoProfile", "-File", scriptPath, path, ready, release], {
+      stdout: "pipe",
+      stderr: "pipe",
+    })
+    try {
+      let held = false
+      for (let attempt = 0; attempt < 200; attempt++) {
+        try {
+          await readFile(ready)
+          held = true
+          break
+        } catch {
+          await Bun.sleep(10)
+        }
+      }
+      expect(held).toBe(true)
+      await expect(readFile(path, "utf8")).rejects.toThrow()
+
+      const warnings = await store.updateProject("blocked", { b: entry("b") })
+      await writeFile(release, "release")
+      expect(await holder.exited).toBe(0)
+      const stderr = await new Response(holder.stderr).text()
+      expect(stderr).toBe("")
+
+      const index = JSON.parse(await readFile(path, "utf8"))
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain("会话摘要缓存更新失败")
+      expect(warnings[0]).toContain("会话文件未受影响")
+      expect(Object.keys(index.projects)).toEqual(["existing"])
+      expect(index.projects.existing.a.summary.sessionId).toBe("a")
+    } finally {
+      await writeFile(release, "release").catch(() => {})
+      holder.kill()
+      await holder.exited
+      await Promise.all([ready, release, scriptPath].map((file) => rm(file, { force: true })))
+    }
+  })
+
   test("锁等待失败返回警告且旧索引保持有效", async () => {
     const path = await makePath()
     const store = new SessionIndexStore(path)
