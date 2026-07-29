@@ -234,8 +234,10 @@ describe("pi 内存会话", () => {
         recordId: string
         record: { role: string; parts?: Array<{ kind: string; timing?: { startedAt: number; finishedAt: number } }> }
       }> = []
+      const usageEvents: Array<{ outputTokens: number; contextTokens?: number }> = []
       runtime.subscribe((event) => {
         if (event.type === "message") messageEvents.push(event)
+        if (event.type === "usage_updated") usageEvents.push(event)
       })
       await runtime.prompt({
         recordId: "turn-record",
@@ -250,6 +252,8 @@ describe("pi 内存会话", () => {
         startedAt: expect.any(Number),
         finishedAt: expect.any(Number),
       })
+      expect(usageEvents.length).toBeGreaterThan(0)
+      expect(usageEvents.every((event) => event.contextTokens === undefined)).toBe(true)
     } finally {
       server.stop(true)
       await runtime.dispose()

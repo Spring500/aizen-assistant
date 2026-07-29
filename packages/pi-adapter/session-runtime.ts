@@ -303,11 +303,9 @@ export class PiSessionRuntime implements PiPort {
             : "message" in event.assistantMessageEvent
               ? event.assistantMessageEvent.message
               : event.assistantMessageEvent.error
-        const usage = message.usage
         this.#emit({
           type: "usage_updated",
-          outputTokens: usage.output,
-          contextTokens: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+          outputTokens: message.usage.output,
         })
       } else if (event.type === "tool_execution_start") {
         this.#toolStarts.set(event.toolCallId, Date.now())

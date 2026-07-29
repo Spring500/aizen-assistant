@@ -120,6 +120,44 @@ class CompactingFakePi extends FakePi {
   }
 }
 
+class UsageFakePi extends FakePi {
+  async prompt() {
+    for (const listener of this.listeners) {
+      listener({ type: "usage_updated", outputTokens: 0, contextTokens: 0 })
+      listener({
+        type: "message",
+        recordId: crypto.randomUUID(),
+        record: {
+          role: "assistant",
+          parts: [{ kind: "text", text: "完成" }],
+          source: { providerId: "test", modelId: "model", api: "anthropic-messages" },
+          stopReason: "stop",
+          usage: { input: 10, output: 2, cacheRead: 3, cacheWrite: 0 },
+        },
+      })
+    }
+  }
+}
+
+class ZeroUsageFakePi extends FakePi {
+  async prompt() {
+    for (const listener of this.listeners) {
+      listener({ type: "usage_updated", outputTokens: 0 })
+      listener({
+        type: "message",
+        recordId: crypto.randomUUID(),
+        record: {
+          role: "assistant",
+          parts: [],
+          source: { providerId: "test", modelId: "model", api: "anthropic-messages" },
+          stopReason: "aborted",
+          usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        },
+      })
+    }
+  }
+}
+
 class FailingFakePi extends FakePi {
   async prompt() {
     for (const listener of this.listeners) {
@@ -389,6 +427,29 @@ describe("核心编排", () => {
     ])
     expect(pi.prompts[0]).toMatchObject({ items: started?.kind === "turn_started" ? started.items : [] })
     await core.dispose()
+  })
+
+  test("首次回复前显示零，未确认和最终零用量不覆盖有效上下文", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(join(root, "sessions"))
+    const pi = new UsageFakePi()
+    const core = new AizenCore({ cwd: "E:\\project", store, pi })
+
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    expect(core.getSnapshot().contextUsage?.used).toBe(0)
+    await core.dispatch({ type: "send_prompt", text: "第一轮" })
+    expect(core.getSnapshot().contextUsage?.used).toBe(15)
+
+    const zeroPi = new ZeroUsageFakePi()
+    const restored = new AizenCore({ cwd: "E:\\project", store, pi: zeroPi })
+    const sessionId = core.getSnapshot().currentSessionId
+    if (!sessionId) throw new Error("缺少会话 ID")
+    await restored.dispatch({ type: "open_session", sessionId })
+    await restored.dispatch({ type: "send_prompt", text: "第二轮" })
+    expect(restored.getSnapshot().contextUsage?.used).toBe(15)
+    await core.dispose()
+    await restored.dispose()
   })
 
   test("上下文压缩只保存核心记录 ID", async () => {

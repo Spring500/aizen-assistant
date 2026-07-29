@@ -573,7 +573,11 @@ export class AizenCore implements CorePort {
     if (event.type === "thinking_delta") this.#snapshot.streamingThinking += event.delta
     if (event.type === "usage_updated") {
       if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.outputTokens = event.outputTokens
-      const used = event.contextTokens ?? this.#snapshot.contextUsage?.used ?? 0
+      const previousUsed = this.#snapshot.contextUsage?.used ?? 0
+      const used =
+        event.contextTokens === undefined || (event.contextTokens === 0 && previousUsed > 0)
+          ? previousUsed
+          : event.contextTokens
       const total = this.#snapshot.currentModel?.contextWindow
       this.#snapshot.contextUsage = total === undefined ? { used } : { used, total }
     }
@@ -602,7 +606,8 @@ export class AizenCore implements CorePort {
       this.#enqueueRecord(sessionId, record)
       this.#snapshot.transcript.push({ type: "message", turnId: this.#currentTurnId, message: event.record })
       if (event.record.role === "assistant") {
-        this.#snapshot.contextUsage = this.#contextUsageFromAssistant(event.record)
+        if (this.#hasContextUsage(event.record))
+          this.#snapshot.contextUsage = this.#contextUsageFromAssistant(event.record)
         if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.outputTokens = event.record.usage.output
       }
     }
@@ -660,6 +665,10 @@ export class AizenCore implements CorePort {
     else delete this.#snapshot.lastError
   }
 
+  #hasContextUsage(message: AssistantMessage): boolean {
+    return message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite > 0
+  }
+
   #contextUsageFromAssistant(message: AssistantMessage) {
     const total = this.#snapshot.currentModel?.contextWindow
     const used = message.usage.input + message.usage.output + message.usage.cacheRead + message.usage.cacheWrite
@@ -671,7 +680,7 @@ export class AizenCore implements CorePort {
       .reverse()
       .find(
         (record): record is SessionRecord & { message: AssistantMessage } =>
-          record.kind === "message" && record.message.role === "assistant",
+          record.kind === "message" && record.message.role === "assistant" && this.#hasContextUsage(record.message),
       )
     const total = this.#snapshot.currentModel?.contextWindow
     const used = assistant ? this.#contextUsageFromAssistant(assistant.message).used : 0
