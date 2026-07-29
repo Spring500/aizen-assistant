@@ -2,11 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
+import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
+import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import type { PiPort, PiPortEvent } from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
-import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
 
@@ -39,7 +39,7 @@ class FakePi implements PiPort {
       listener({ type: "text_delta", delta: "完成" })
       listener({
         type: "message",
-        runtimeRef: crypto.randomUUID(),
+        recordId: crypto.randomUUID(),
         record: {
           role: "assistant",
           parts: [{ kind: "text", text: "完成" }],
@@ -50,6 +50,18 @@ class FakePi implements PiPort {
       })
       listener({ type: "settled" })
     }
+  }
+}
+
+class MessageFailingStore extends SessionStore {
+  messageAttempts = 0
+
+  override append(sessionId: string, record: Parameters<SessionStore["append"]>[1]): Promise<void> {
+    if (record.kind === "message") {
+      this.messageAttempts++
+      return Promise.reject(new Error("磁盘不可写"))
+    }
+    return super.append(sessionId, record)
   }
 }
 
@@ -64,7 +76,7 @@ class CompactingFakePi extends FakePi {
     for (const listener of this.listeners) {
       listener({
         type: "message",
-        runtimeRef: "pi-message-id",
+        recordId: "assistant-record",
         record: {
           role: "assistant",
           parts: [{ kind: "text", text: "完成" }],
@@ -76,7 +88,7 @@ class CompactingFakePi extends FakePi {
       listener({
         type: "compaction",
         summary: "摘要",
-        firstKeptRuntimeRef: "pi-message-id",
+        firstKeptRecordId: "assistant-record",
         tokensBefore: 100,
       })
       listener({ type: "settled" })
@@ -90,7 +102,7 @@ class FailingFakePi extends FakePi {
     for (const listener of this.listeners) {
       listener({
         type: "message",
-        runtimeRef: "failed-message",
+        recordId: "failed-message",
         record: {
           role: "assistant",
           parts: [],
@@ -377,6 +389,25 @@ describe("核心编排", () => {
       expect(compaction.firstKeptRecordId).toBe(message.recordId)
       expect(JSON.stringify(compaction)).not.toContain("pi-message-id")
     }
+  })
+
+  test("消息落盘失败会上报错误、阻止后续轮次且不影响释放", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new MessageFailingStore(root)
+    const pi = new FakePi()
+    const core = new AizenCore({ cwd: "E:\\project", store, pi })
+
+    expect(await core.dispatch({ type: "create_session", model, viewId: null })).toEqual({ ok: true })
+    expect(await core.dispatch({ type: "send_prompt", text: "触发失败" })).toEqual({
+      ok: false,
+      error: { code: "COMMAND_FAILED", message: "磁盘不可写", severity: "error" },
+    })
+    expect(store.messageAttempts).toBe(1)
+    expect(core.getSnapshot().lastError).toBe("磁盘不可写")
+    expect((await core.dispatch({ type: "send_prompt", text: "不应继续" })).ok).toBe(false)
+    expect(store.messageAttempts).toBe(1)
+    await expect(core.dispose()).resolves.toBeUndefined()
   })
 
   test("模型错误写入失败轮次并恢复空闲", async () => {

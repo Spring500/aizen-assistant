@@ -68,9 +68,6 @@ describe("pi 内存会话", () => {
     expect(JSON.stringify(messages)).not.toContain("不要恢复")
     expect(JSON.stringify(messages)).toContain("需要恢复")
     expect(JSON.stringify(messages)).toContain("回复")
-    const mappings = runtime.inspectEntryMappings()
-    expect(mappings.some((item) => item.runtimeRef === "r1")).toBe(true)
-    expect(mappings.some((item) => item.runtimeRef === "r2")).toBe(true)
     expect(runtime.inspectSessionFile()).toBeUndefined()
     await runtime.dispose()
   })
@@ -211,7 +208,7 @@ describe("pi 内存会话", () => {
       runtime.setModelBaseUrl(model.providerId, model.modelId, `http://localhost:${server.port}`)
       await runtime.create({ cwd: directory, model, view: { viewId: "test", directory } })
       const messageEvents: Array<{
-        runtimeRef: string
+        recordId: string
         record: { role: string; parts?: Array<{ kind: string; timing?: { startedAt: number; finishedAt: number } }> }
       }> = []
       runtime.subscribe((event) => {
@@ -224,14 +221,12 @@ describe("pi 内存会话", () => {
         items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "问题" }] }],
       })
 
-      const mappings = runtime.inspectEntryMappings()
-      expect(mappings.some((item) => item.runtimeRef === "turn-record")).toBe(true)
       expect(messageEvents).toHaveLength(1)
+      expect(messageEvents[0]?.recordId).toEqual(expect.any(String))
       expect(messageEvents[0]?.record.parts?.[0]?.timing).toEqual({
         startedAt: expect.any(Number),
         finishedAt: expect.any(Number),
       })
-      expect(mappings.some((item) => item.runtimeRef === messageEvents[0]?.runtimeRef)).toBe(true)
     } finally {
       server.stop(true)
       await runtime.dispose()

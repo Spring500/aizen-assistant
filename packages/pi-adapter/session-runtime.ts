@@ -154,7 +154,7 @@ export class PiSessionRuntime implements PiPort {
   #unsubscribeAgent: (() => void) | undefined
   #authAbortController: AbortController | undefined
   #authAnswers = new Map<string, { resolve: (value: string) => void; reject: (error: Error) => void }>()
-  #entryRuntimeRefs = new Map<string, string>()
+  #entryRecordIds = new Map<string, string>()
   #recordEntries = new Map<string, string>()
   #viewLoader: MutableViewLoader | undefined
   #settingsManager: SettingsManager | undefined
@@ -226,11 +226,11 @@ export class PiSessionRuntime implements PiPort {
       const entries = session.sessionManager.getEntries()
       const entry = entries[entries.length - 1]
       if (entry?.type !== "message" || entry.message !== event.message) throw new Error("pi 没有保存已完成消息")
-      const runtimeRef = this.#entryRuntimeRefs.get(entry.id) ?? entry.id
-      this.#entryRuntimeRefs.set(entry.id, runtimeRef)
+      const recordId = this.#entryRecordIds.get(entry.id) ?? crypto.randomUUID()
+      this.#registerEntry(recordId, entry.id)
       this.#emit({
         type: "message",
-        runtimeRef,
+        recordId,
         record: piMessageToCore(event.message, { content: this.#contentTimings, tools: this.#toolTimings }),
       })
     })
@@ -272,14 +272,11 @@ export class PiSessionRuntime implements PiPort {
       } else if (event.type === "agent_settled") {
         this.#emit({ type: "settled" })
       } else if (event.type === "compaction_end" && event.result) {
-        const firstKeptRuntimeRef = this.#resolveBoundaryRuntimeRef(
-          session.sessionManager,
-          event.result.firstKeptEntryId,
-        )
+        const firstKeptRecordId = this.#resolveBoundaryRecordId(session.sessionManager, event.result.firstKeptEntryId)
         this.#emit({
           type: "compaction",
           summary: event.result.summary,
-          firstKeptRuntimeRef,
+          firstKeptRecordId,
           tokensBefore: event.result.tokensBefore,
         })
       }
@@ -438,10 +435,6 @@ export class PiSessionRuntime implements PiPort {
     return this.#requireSession().sessionFile
   }
 
-  inspectEntryMappings(): Array<{ entryId: string; runtimeRef: string }> {
-    return Array.from(this.#entryRuntimeRefs, ([entryId, runtimeRef]) => ({ entryId, runtimeRef }))
-  }
-
   async dispose(): Promise<void> {
     await this.#disposeSession()
   }
@@ -465,7 +458,7 @@ export class PiSessionRuntime implements PiPort {
       this.#session.dispose()
     }
     this.#session = undefined
-    this.#entryRuntimeRefs.clear()
+    this.#entryRecordIds.clear()
     this.#recordEntries.clear()
     this.#viewLoader = undefined
     this.#settingsManager = undefined
@@ -477,7 +470,7 @@ export class PiSessionRuntime implements PiPort {
   }
 
   #registerEntry(recordId: string, entryId: string): void {
-    this.#entryRuntimeRefs.set(entryId, recordId)
+    this.#entryRecordIds.set(entryId, recordId)
     if (!this.#recordEntries.has(recordId)) this.#recordEntries.set(recordId, entryId)
   }
 
@@ -516,17 +509,17 @@ export class PiSessionRuntime implements PiPort {
     }
   }
 
-  #resolveBoundaryRuntimeRef(sessionManager: SessionManager, firstKeptEntryId: string): string {
+  #resolveBoundaryRecordId(sessionManager: SessionManager, firstKeptEntryId: string): string {
     const entries = sessionManager.getEntries()
     const boundaryIndex = entries.findIndex((entry) => entry.id === firstKeptEntryId)
     if (boundaryIndex < 0) throw new Error("pi 返回了不存在的上下文压缩位置")
     for (let index = boundaryIndex; index < entries.length; index++) {
-      const runtimeRef = this.#entryRuntimeRefs.get(entries[index]?.id ?? "")
-      if (runtimeRef) return runtimeRef
+      const recordId = this.#entryRecordIds.get(entries[index]?.id ?? "")
+      if (recordId) return recordId
     }
     for (let index = boundaryIndex - 1; index >= 0; index--) {
-      const runtimeRef = this.#entryRuntimeRefs.get(entries[index]?.id ?? "")
-      if (runtimeRef) return runtimeRef
+      const recordId = this.#entryRecordIds.get(entries[index]?.id ?? "")
+      if (recordId) return recordId
     }
     throw new Error("上下文压缩位置无法对应到会话记录")
   }
