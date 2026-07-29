@@ -54,6 +54,30 @@ describe("会话存储", () => {
     expect(loaded.records.map((record) => record.recordId)).toEqual(["r1", "r2"])
   })
 
+  test("重写使用原子替换并拒绝覆盖外部追加", async () => {
+    const { root, store } = await makeStore()
+    const createdAt = "2026-07-23T10:00:00.000Z"
+    await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt })
+    const first = {
+      kind: "session_renamed" as const,
+      recordId: "r1",
+      at: "2026-07-23T10:00:01.000Z",
+      name: "第一版",
+    }
+    await store.append("s1", first)
+    await store.rewrite("s1", [first], [{ ...first, recordId: "r2", name: "第二版" }])
+    expect((await store.read("s1")).records).toEqual([{ ...first, recordId: "r2", name: "第二版" }])
+
+    const expected = (await store.read("s1")).records
+    const file = join(root, sessionFileName(createdAt, "s1"))
+    await appendFile(
+      file,
+      `${JSON.stringify({ kind: "session_renamed", recordId: "external", at: new Date().toISOString(), name: "外部" })}\n`,
+    )
+    await expect(store.rewrite("s1", expected, [])).rejects.toThrow("已被其他程序修改")
+    expect((await store.read("s1")).records.at(-1)).toMatchObject({ recordId: "external" })
+  })
+
   test("新会话使用助记词 ID 并避开已有会话", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-session-"))
     temporaryDirectories.push(root)

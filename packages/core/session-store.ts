@@ -1,5 +1,6 @@
-import { mkdir, open, readdir, readFile, rm, stat } from "node:fs/promises"
+import { mkdir, open, readdir, readFile, stat } from "node:fs/promises"
 import { basename, join } from "node:path"
+import { atomicWriteFile, withFileLock } from "./file-transaction.ts"
 import { type MnemonicIdGenerator, WordTripletIdGenerator } from "./mnemonic-id.ts"
 import { sessionFileName } from "./session-file-name.ts"
 import {
@@ -34,6 +35,15 @@ function firstText(record: TurnStartedRecord): string | undefined {
   return undefined
 }
 
+function serializeSession(header: SessionHeader, records: SessionRecord[]): string {
+  const validated = records.map((record) => {
+    const line = parseSessionValue(record)
+    if (line.kind === "session") throw new Error("会话记录中不能包含文件头")
+    return line
+  })
+  return `${[header, ...validated].map((line) => JSON.stringify(line)).join("\n")}\n`
+}
+
 export class SessionStore {
   readonly root: string
   readonly #queues = new Map<string, Promise<void>>()
@@ -56,49 +66,55 @@ export class SessionStore {
     return this.#idGenerator.generate((candidate) => existing.has(candidate.toLowerCase()))
   }
 
-  async create(input: Omit<SessionHeader, "kind" | "version">): Promise<SessionHeader> {
+  /** 原子创建包含完整初始记录的新会话。 */
+  async createWithRecords(
+    input: Omit<SessionHeader, "kind" | "version">,
+    records: SessionRecord[],
+  ): Promise<SessionHeader> {
     await mkdir(this.root, { recursive: true })
-    await this.list()
-    if (this.#paths.has(input.sessionId)) throw new Error("会话 ID 已存在")
-    const path = join(this.root, sessionFileName(input.createdAt, input.sessionId))
-    const header: SessionHeader = { kind: "session", version: 1, ...input }
-    const file = await open(path, "wx")
-    let written = false
-    try {
-      await file.writeFile(`${JSON.stringify(header)}\n`)
-      await file.sync()
-      written = true
+    return withFileLock(join(this.root, ".sessions"), async () => {
+      await this.#refreshPaths()
+      if (this.#paths.has(input.sessionId)) throw new Error("会话 ID 已存在")
+      const path = join(this.root, sessionFileName(input.createdAt, input.sessionId))
+      const header: SessionHeader = { kind: "session", version: 1, ...input }
+      await atomicWriteFile(path, serializeSession(header, records))
       this.#paths.set(input.sessionId, path)
       return header
-    } finally {
-      await file.close()
-      if (!written) await rm(path, { force: true })
-    }
+    })
+  }
+
+  async create(input: Omit<SessionHeader, "kind" | "version">): Promise<SessionHeader> {
+    return this.createWithRecords(input, [])
   }
 
   append(sessionId: string, record: SessionRecord): Promise<void> {
     const validated = parseSessionValue(record)
     if (validated.kind === "session") throw new Error("不能追加第二个会话文件头")
-    const previous = this.#queues.get(sessionId) ?? Promise.resolve()
-    const next = previous.then(async () => {
-      const file = await open(await this.#sessionPath(sessionId), "a")
-      try {
-        await file.writeFile(`${JSON.stringify(validated)}\n`)
-        await file.sync()
-      } finally {
-        await file.close()
-      }
+    return this.#enqueue(sessionId, async () => {
+      const path = await this.#sessionPath(sessionId)
+      await withFileLock(path, async () => {
+        const file = await open(path, "a")
+        try {
+          await file.writeFile(`${JSON.stringify(validated)}\n`)
+          await file.sync()
+        } finally {
+          await file.close()
+        }
+      })
     })
-    this.#queues.set(sessionId, next)
-    void next.then(
-      () => {
-        if (this.#queues.get(sessionId) === next) this.#queues.delete(sessionId)
-      },
-      () => {
-        if (this.#queues.get(sessionId) === next) this.#queues.delete(sessionId)
-      },
-    )
-    return next
+  }
+
+  /** 在确认源记录未变化后，以原子替换方式重写会话。 */
+  rewrite(sessionId: string, expectedRecords: SessionRecord[], records: SessionRecord[]): Promise<void> {
+    return this.#enqueue(sessionId, async () => {
+      const path = await this.#sessionPath(sessionId)
+      await withFileLock(path, async () => {
+        const loaded = await this.#readPath(path)
+        if (JSON.stringify(loaded.records) !== JSON.stringify(expectedRecords))
+          throw new Error("会话已被其他程序修改，请重新打开后再试")
+        await atomicWriteFile(path, serializeSession(loaded.header, records))
+      })
+    })
   }
 
   async read(sessionId: string): Promise<LoadedSession> {
@@ -178,14 +194,43 @@ export class SessionStore {
     return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   }
 
+  async #refreshPaths(): Promise<void> {
+    const paths = new Map<string, string>()
+    const entries = await readdir(this.root, { withFileTypes: true })
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue
+      const path = join(this.root, entry.name)
+      const loaded = await this.#readPath(path)
+      if (paths.has(loaded.header.sessionId)) throw new Error(`存在重复的会话 ID：${loaded.header.sessionId}`)
+      paths.set(loaded.header.sessionId, path)
+    }
+    this.#paths.clear()
+    for (const [sessionId, path] of paths) this.#paths.set(sessionId, path)
+  }
+
   async #sessionPath(sessionId: string): Promise<string> {
     if (!sessionId) throw new Error("无效的会话 ID")
     const known = this.#paths.get(sessionId)
     if (known) return known
-    await this.list()
+    await this.#refreshPaths()
     const path = this.#paths.get(sessionId)
     if (!path) throw new Error(`会话不存在：${sessionId}`)
     return path
+  }
+
+  #enqueue(sessionId: string, operation: () => Promise<void>): Promise<void> {
+    const previous = this.#queues.get(sessionId) ?? Promise.resolve()
+    const next = previous.catch(() => {}).then(operation)
+    this.#queues.set(sessionId, next)
+    void next.then(
+      () => {
+        if (this.#queues.get(sessionId) === next) this.#queues.delete(sessionId)
+      },
+      () => {
+        if (this.#queues.get(sessionId) === next) this.#queues.delete(sessionId)
+      },
+    )
+    return next
   }
 
   /** 取出最近一次列表操作产生的非阻断警告。 */
