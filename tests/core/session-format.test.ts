@@ -10,9 +10,15 @@ const header = {
 }
 
 describe("会话格式", () => {
-  test("接受文件头和六类记录", () => {
+  test("接受文件头和七类记录", () => {
     const records: unknown[] = [
       header,
+      {
+        kind: "session_renamed",
+        recordId: "r0",
+        at: "2026-07-23T10:00:00.500Z",
+        name: "需求讨论",
+      },
       {
         kind: "model_changed",
         recordId: "r1",

@@ -44,6 +44,13 @@ export type SessionHeader = {
   createdAt: string
 }
 
+export type SessionRenamedRecord = {
+  kind: "session_renamed"
+  recordId: string
+  at: string
+  name: string
+}
+
 export type ModelChangedRecord = {
   kind: "model_changed"
   recordId: string
@@ -127,6 +134,7 @@ export type CompactionRecord = {
 }
 
 export type SessionRecord =
+  | SessionRenamedRecord
   | ModelChangedRecord
   | ViewChangedRecord
   | TurnStartedRecord
@@ -355,6 +363,13 @@ export function parseSessionValue(value: unknown): SessionLine {
       sessionId: string(source.sessionId, "sessionId"),
       cwd: string(source.cwd, "cwd"),
       createdAt: string(source.createdAt, "createdAt"),
+    }
+  }
+  if (kind === "session_renamed") {
+    return {
+      kind,
+      ...baseRecord(source, ["kind", "recordId", "at", "name"]),
+      name: string(source.name, "name"),
     }
   }
   if (kind === "model_changed") {

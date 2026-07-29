@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { appendFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { MnemonicIdGenerator } from "../../packages/core/mnemonic-id.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 
 const temporaryDirectories: string[] = []
@@ -45,13 +46,39 @@ describe("会话存储", () => {
     expect(loaded.records.map((record) => record.recordId)).toEqual(["r1", "r2"])
   })
 
-  test("列表读取第一条用户输入并按更新时间倒序", async () => {
+  test("新会话使用助记词 ID 并避开已有会话", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-session-"))
+    temporaryDirectories.push(root)
+    const candidates = ["existing-session-id", "otter-builds-bridge"]
+    const idGenerator: MnemonicIdGenerator = {
+      generate(exists) {
+        return candidates.find((candidate) => !exists(candidate)) ?? "fallback-id"
+      },
+    }
+    const store = new SessionStore(root, { idGenerator })
+    await store.create({
+      sessionId: "existing-session-id",
+      cwd: "E:\\project",
+      createdAt: "2026-07-23T10:00:00.000Z",
+    })
+
+    expect(await store.suggestId()).toBe("otter-builds-bridge")
+  })
+
+  test("列表读取名称和第一条用户输入并按更新时间倒序", async () => {
     const { store } = await makeStore()
     for (const [sessionId, text] of [
       ["s1", "第一项"],
       ["s2", "第二项"],
     ] as const) {
       await store.create({ sessionId, cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" })
+      if (sessionId === "s2")
+        await store.append(sessionId, {
+          kind: "session_renamed",
+          recordId: `${sessionId}-name`,
+          at: "2026-07-23T10:00:00.500Z",
+          name: "第二个会话",
+        })
       await store.append(sessionId, {
         kind: "turn_started",
         recordId: `${sessionId}-r1`,
@@ -65,7 +92,8 @@ describe("会话存储", () => {
 
     const listed = await store.list()
     expect(listed.map((item) => item.sessionId)).toEqual(["s2", "s1"])
-    expect(listed[0]?.preview).toBe("第二项")
+    expect(listed[0]).toMatchObject({ name: "第二个会话", preview: "第二项" })
+    expect(listed[1]?.name).toBe("")
   })
 
   test("忽略损坏尾行并拒绝损坏中间行", async () => {

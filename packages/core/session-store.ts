@@ -1,5 +1,6 @@
 import { mkdir, open, readdir, readFile, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
+import { WordTripletIdGenerator, type MnemonicIdGenerator } from "./mnemonic-id.ts"
 import {
   parseSessionValue,
   type SessionHeader,
@@ -10,6 +11,7 @@ import {
 
 export type SessionSummary = {
   sessionId: string
+  name: string
   cwd: string
   createdAt: string
   updatedAt: string
@@ -33,15 +35,29 @@ function firstText(record: TurnStartedRecord): string | undefined {
 export class SessionStore {
   readonly root: string
   readonly #queues = new Map<string, Promise<void>>()
+  readonly #idGenerator: MnemonicIdGenerator
 
-  constructor(root: string) {
+  constructor(root: string, options: { idGenerator?: MnemonicIdGenerator } = {}) {
     this.root = root
+    this.#idGenerator = options.idGenerator ?? new WordTripletIdGenerator()
   }
 
   sessionFile(sessionId: string): string {
     if (!sessionId || sessionId === "." || sessionId === ".." || /[\\/]/.test(sessionId))
       throw new Error("无效的会话 ID")
     return join(this.root, `${sessionId}.jsonl`)
+  }
+
+  /** 生成一个不与现有会话冲突的助记词 ID。 */
+  async suggestId(): Promise<string> {
+    await mkdir(this.root, { recursive: true })
+    const entries = await readdir(this.root, { withFileTypes: true })
+    const existing = new Set(
+      entries
+        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+        .map((entry) => entry.name.slice(0, -".jsonl".length).toLowerCase()),
+    )
+    return this.#idGenerator.generate((candidate) => existing.has(candidate.toLowerCase()))
   }
 
   async create(input: Omit<SessionHeader, "kind" | "version">): Promise<SessionHeader> {
@@ -123,8 +139,10 @@ export class SessionStore {
       const loaded = await this.read(sessionId)
       const fileStatus = await stat(this.sessionFile(sessionId))
       const firstTurn = loaded.records.find((record): record is TurnStartedRecord => record.kind === "turn_started")
+      const renamed = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
       summaries.push({
         sessionId: loaded.header.sessionId,
+        name: renamed?.kind === "session_renamed" ? renamed.name : "",
         cwd: loaded.header.cwd,
         createdAt: loaded.header.createdAt,
         updatedAt: fileStatus.mtime.toISOString(),

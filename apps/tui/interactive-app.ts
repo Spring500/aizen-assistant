@@ -27,6 +27,7 @@ import { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
 import { promptLine } from "../../packages/tui-kit/prompt.ts"
 import { createAizenRenderer, destroyRenderer } from "../../packages/tui-kit/renderer.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
+import { systemColors } from "../../packages/tui-kit/theme.ts"
 
 import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
@@ -126,9 +127,15 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   editor.setInputVisible(false)
 
   const updateStatusBar = () => {
-    const statusBar = statusBarView(core.getSnapshot())
+    const snapshot = core.getSnapshot()
+    const statusBar = statusBarView(snapshot)
     editor.setStatus(statusBar.session)
     editor.setShortcuts(statusBar.shortcuts)
+    editor.setSessionTitle(
+      snapshot.currentSessionId
+        ? { name: snapshot.currentSessionName ?? "", sessionId: snapshot.currentSessionId }
+        : undefined,
+    )
   }
   updateStatusBar()
 
@@ -150,6 +157,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       const statusBar = statusBarView(event.snapshot)
       editor.setStatus(statusBar.session)
       editor.setShortcuts(statusBar.shortcuts)
+      editor.setSessionTitle(
+        event.snapshot.currentSessionId
+          ? { name: event.snapshot.currentSessionName ?? "", sessionId: event.snapshot.currentSessionId }
+          : undefined,
+      )
       editor.setBusy(event.snapshot.status !== "idle")
 
       editor.setInputVisible(
@@ -368,7 +380,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           initialValue: String(draft[selected]),
           signal: interactionController.signal,
         })
-        if (!/^\d+$/.test(value)) continue
+        if (value === undefined || !/^\d+$/.test(value)) continue
         const parsed = Number(value)
         if (!Number.isSafeInteger(parsed)) continue
         draft = { ...draft, [selected]: parsed }
@@ -546,7 +558,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
   async function askRequired(label: string, initialValue = ""): Promise<string | undefined> {
     const value = await ask(label, initialValue)
-    return value.trim() ? value.trim() : undefined
+    return value?.trim() ? value.trim() : undefined
   }
 
   async function askNumber(label: string, initialValue: number): Promise<number | undefined> {
@@ -1000,6 +1012,63 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     await openSessionSettings("new")
   }
 
+  const sessionSegments = (session: ReturnType<typeof core.getSnapshot>["sessions"][number]) => ({
+    segments: [
+      ...(session.name ? [{ text: session.name, color: systemColors.header, bold: true }, { text: "  " }] : []),
+      { text: session.sessionId, color: systemColors.shortcuts, italic: true, dim: true },
+    ],
+    details: [
+      { text: session.sessionId === core.getSnapshot().currentSessionId ? "● 当前会话 · " : "" },
+      { text: `${session.updatedAt} · ${session.preview}`, color: systemColors.shortcuts, dim: true },
+    ],
+  })
+
+  async function renameSession(sessionId: string): Promise<void> {
+    const session = core.getSnapshot().sessions.find((item) => item.sessionId === sessionId)
+    if (!session) return
+    const name = await promptLine(overlays, "session-rename", "会话名称（可留空）：", {
+      initialValue: session.name,
+      signal: interactionController.signal,
+    })
+    if (name === undefined) return
+    await dispatchWithError({ type: "rename_session", sessionId, name }, "重命名会话失败")
+  }
+
+  async function manageSession(sessionId: string): Promise<void> {
+    const session = core.getSnapshot().sessions.find((item) => item.sessionId === sessionId)
+    if (!session) return
+    const action = await selectRichItem(
+      overlays,
+      "session-action",
+      [
+        { segments: [{ text: "打开会话" }], value: "open" as const },
+        {
+          segments: [{ text: "重命名" }],
+          details: [{ text: session.name || "当前未命名", dim: true }],
+          value: "rename" as const,
+        },
+      ],
+      { title: `管理会话 · ${session.name || session.sessionId}`, signal: interactionController.signal },
+    )
+    if (action === "open") await dispatchWithError({ type: "open_session", sessionId }, "打开会话失败")
+    else if (action === "rename") await renameSession(sessionId)
+  }
+
+  async function manageSessions(): Promise<void> {
+    while (!exiting) {
+      if (!(await dispatchWithError({ type: "list_sessions" }, "读取会话失败")).ok) return
+      const sessions = core.getSnapshot().sessions
+      const selected = await selectRichItem(
+        overlays,
+        "sessions-manager",
+        sessions.map((session) => ({ ...sessionSegments(session), value: session.sessionId })),
+        { title: "管理会话（选择后进入操作菜单）", signal: interactionController.signal },
+      )
+      if (!selected) return
+      await manageSession(selected)
+    }
+  }
+
   async function chooseSession() {
     beginInteraction()
     try {
@@ -1007,24 +1076,26 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       if (!listed.ok) return
       const sessions = core.getSnapshot().sessions
       if (sessions.length === 0) return createSession()
-      const selected = await selectItem(
+      const selected = await selectRichItem(
         overlays,
         "session-selector",
         [
           {
-            name: "新建会话",
-            description: "使用所选模型开始空白会话",
+            segments: [{ text: "新建会话", color: systemColors.header, bold: true }],
+            details: [{ text: "使用所选模型开始空白会话", dim: true }],
             value: "__new__",
           },
-          ...sessions.map((session) => ({
-            name: session.preview,
-            description: session.updatedAt,
-            value: session.sessionId,
-          })),
+          {
+            segments: [{ text: "管理会话" }],
+            details: [{ text: "打开或重命名已有会话", dim: true }],
+            value: "__manage__",
+          },
+          ...sessions.map((session) => ({ ...sessionSegments(session), value: session.sessionId })),
         ],
         { title: "选择会话", signal: interactionController.signal },
       )
       if (selected === "__new__") await createSession()
+      else if (selected === "__manage__") await manageSessions()
       else if (selected) await dispatchWithError({ type: "open_session", sessionId: selected }, "打开会话失败")
     } finally {
       endInteraction()

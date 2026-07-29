@@ -14,7 +14,7 @@ export function promptLine(
   id: string,
   label: string,
   options: PromptOptions = {},
-): Promise<string> {
+): Promise<string | undefined> {
   const overlays = overlayManager(manager)
   return new Promise((resolve) => {
     let value = options.initialValue ?? ""
@@ -48,7 +48,7 @@ export function promptLine(
       settled = true
       handle.close(cancelled ? undefined : value)
       if (cancelled) options.onCancel?.()
-      resolve(cancelled ? "" : value)
+      resolve(cancelled ? undefined : value)
     }
     handle.setInput({
       keypress: (key) => {

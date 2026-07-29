@@ -19,18 +19,19 @@ export type RichSegment = {
 
 export type RichSelectorItem<T> = {
   segments: RichSegment[]
+  details?: RichSegment[]
   value: T
 }
 
-function content(item: RichSelectorItem<unknown>, selected: boolean): StyledText {
+function content(item: RichSelectorItem<unknown>, selected: boolean, details = false): StyledText {
   const chunks: TextChunk[] = [
     {
       __isChunk: true,
-      text: selected ? "▶ " : "  ",
+      text: details ? "  " : selected ? "▶ " : "  ",
       fg: parseColor(selected ? systemColors.header : systemColors.secondary),
     },
   ]
-  for (const segment of item.segments) {
+  for (const segment of details ? (item.details ?? []) : item.segments) {
     chunks.push({
       __isChunk: true,
       text: segment.text,
@@ -55,17 +56,18 @@ export function selectRichItem<T>(
   return new Promise((resolve) => {
     let settled = false
     let selected = 0
-    const visibleRows = Math.max(1, Math.min(items.length, 10))
+    const rowHeight = items.some((item) => item.details) ? 2 : 1
+    const visibleItems = Math.max(1, Math.min(items.length, rowHeight === 2 ? 5 : 10))
     const handle = overlays.open<T>({
       id,
       title: options.title,
       help: "↑↓ 移动 | Enter 选择 | Esc 返回",
-      contentHeight: visibleRows,
+      contentHeight: visibleItems * rowHeight,
       ...(options.signal ? { signal: options.signal } : {}),
       onCancel: () => finish(undefined, true),
     })
     const rows = Array.from(
-      { length: visibleRows },
+      { length: visibleItems * rowHeight },
       (_, index) =>
         new TextRenderable(overlays.renderer, {
           id: `${id}-${index}`,
@@ -82,13 +84,14 @@ export function selectRichItem<T>(
     for (const row of rows) handle.content.add(row)
 
     const render = () => {
-      const maxOffset = Math.max(0, items.length - visibleRows)
-      const offset = Math.min(maxOffset, Math.max(0, selected - visibleRows + 1))
+      const maxOffset = Math.max(0, items.length - visibleItems)
+      const offset = Math.min(maxOffset, Math.max(0, selected - visibleItems + 1))
       for (const [rowIndex, row] of rows.entries()) {
-        const itemIndex = offset + rowIndex
+        const itemIndex = offset + Math.floor(rowIndex / rowHeight)
         const item = items[itemIndex]
+        const detailRow = rowHeight === 2 && rowIndex % rowHeight === 1
         row.visible = item !== undefined
-        if (item) row.content = content(item, itemIndex === selected)
+        if (item) row.content = content(item, itemIndex === selected, detailRow)
       }
     }
     const finish = (value: T | undefined, cancelled = false) => {

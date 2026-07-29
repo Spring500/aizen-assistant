@@ -37,6 +37,7 @@ export type CoreSnapshot = {
   status: CoreStatus
   sessions: SessionSummary[]
   currentSessionId?: string
+  currentSessionName?: string
   currentModel?: ModelRuntimeInfo
   currentViewId?: ViewId
   models: ModelOption[]
@@ -60,6 +61,7 @@ export type CoreCommand =
   | { type: "list_views" }
   | { type: "create_session"; model: ModelReference; viewId: ViewId }
   | { type: "open_session"; sessionId: string }
+  | { type: "rename_session"; sessionId: string; name: string }
   | { type: "send_prompt"; text: string }
   | { type: "abort" }
   | { type: "list_models" }

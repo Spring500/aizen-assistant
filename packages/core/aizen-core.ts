@@ -188,6 +188,9 @@ export class AizenCore implements CorePort {
         case "open_session":
           await this.#openSession(command.sessionId)
           break
+        case "rename_session":
+          await this.#renameSession(command.sessionId, command.name)
+          break
         case "send_prompt":
           await this.#sendPrompt(command.text)
           break
@@ -311,7 +314,7 @@ export class AizenCore implements CorePort {
   }
 
   async #createSession(model: ModelReference, viewId: ViewId): Promise<void> {
-    const sessionId = crypto.randomUUID()
+    const sessionId = await this.#store.suggestId()
     const at = new Date().toISOString()
     const view = await this.#resolveView(viewId)
     const actualModel = await this.#pi.create({ cwd: this.#cwd, model, view })
@@ -324,6 +327,7 @@ export class AizenCore implements CorePort {
     this.#records = records
     this.#runtimeRecords.clear()
     this.#snapshot.currentSessionId = sessionId
+    this.#snapshot.currentSessionName = ""
     this.#runtimeReady = true
     this.#snapshot.currentModel = actualModel
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
@@ -362,6 +366,8 @@ export class AizenCore implements CorePort {
     this.#records = loaded.records
     this.#runtimeRecords = new Map(loaded.records.map((record) => [record.recordId, record.recordId]))
     this.#snapshot.currentSessionId = sessionId
+    const renamedRecord = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
+    this.#snapshot.currentSessionName = renamedRecord?.kind === "session_renamed" ? renamedRecord.name : ""
     this.#snapshot.currentModel = actualModel
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.currentViewId = viewRecord.viewId
@@ -372,6 +378,24 @@ export class AizenCore implements CorePort {
     if (loaded.warnings.length > 0) this.#snapshot.lastError = loaded.warnings.join("；")
     else if (this.#runtimeReady) delete this.#snapshot.lastError
     await this.#rememberSessionDefaults(actualModel, viewRecord.viewId)
+  }
+
+  async #renameSession(sessionId: string, name: string): Promise<void> {
+    const normalizedName = name.trim()
+    const loaded = await this.#store.read(sessionId)
+    if (loaded.header.cwd !== this.#cwd) throw new Error("该会话不属于当前工作目录")
+    const record: SessionRecord = {
+      kind: "session_renamed",
+      recordId: crypto.randomUUID(),
+      at: new Date().toISOString(),
+      name: normalizedName,
+    }
+    await this.#store.append(sessionId, record)
+    if (this.#snapshot.currentSessionId === sessionId) {
+      this.#records.push(record)
+      this.#snapshot.currentSessionName = normalizedName
+    }
+    this.#snapshot.sessions = await this.#store.list()
   }
 
   async #sendPrompt(text: string): Promise<void> {

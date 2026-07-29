@@ -38,7 +38,7 @@ test("认证输入可用 Esc 取消", async () => {
       },
     })
     emitKey(setup.renderer, "\x1b")
-    expect(await pending).toBe("")
+    expect(await pending).toBeUndefined()
     expect(cancelled).toBe(true)
   } finally {
     setup.renderer.destroy()
@@ -83,7 +83,7 @@ test("退出信号会取消正在等待的认证输入", async () => {
       },
     })
     controller.abort()
-    expect(await pending).toBe("")
+    expect(await pending).toBeUndefined()
     expect(cancelled).toBe(true)
   } finally {
     setup.renderer.destroy()
