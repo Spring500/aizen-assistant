@@ -54,6 +54,39 @@ describe("模型配置存储", () => {
     })
   })
 
+  test("保存并清除模型 Base URL 覆写", async () => {
+    const { path, store } = await makeStore()
+    let snapshot = await store.read()
+    await store.upsertProvider(snapshot.revision, provider)
+    snapshot = await store.read()
+    await store.upsertModel(snapshot.revision, provider.id, {
+      ...model,
+      baseUrl: "https://example.com",
+      input: [...model.input],
+    })
+
+    snapshot = await store.read()
+    expect(snapshot.providers[0]?.models[0]?.baseUrl).toBe("https://example.com")
+    expect(JSON.parse(await readFile(path, "utf8")).providers.company.models[0].baseUrl).toBe("https://example.com")
+
+    await store.upsertModel(snapshot.revision, provider.id, { ...model, input: [...model.input] })
+    expect(JSON.parse(await readFile(path, "utf8")).providers.company.models[0].baseUrl).toBeUndefined()
+  })
+
+  test("拒绝非法模型 Base URL", async () => {
+    const { store } = await makeStore()
+    let snapshot = await store.read()
+    await store.upsertProvider(snapshot.revision, provider)
+    snapshot = await store.read()
+    await expect(
+      store.upsertModel(snapshot.revision, provider.id, {
+        ...model,
+        baseUrl: "https://user:secret@example.com",
+        input: [...model.input],
+      }),
+    ).rejects.toThrow("模型 Base URL 只能使用 HTTP/HTTPS")
+  })
+
   test("保存模型自身思考档位并限制六个开启档位", async () => {
     const { path, store } = await makeStore()
     let snapshot = await store.read()

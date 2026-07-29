@@ -741,6 +741,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       id: copy ? "" : (existing?.id ?? ""),
       name: existing?.name ?? "",
       ...(existing?.api ? { api: existing.api } : {}),
+      ...(existing?.baseUrl ? { baseUrl: existing.baseUrl } : {}),
       ...(existing?.thinking
         ? {
             thinking: {
@@ -791,6 +792,20 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             },
           },
           { name: `API              ${draft.api ?? "继承供应商"}`, description: "选择接口协议", value: "api" },
+          {
+            name: `Base URL         ${draft.baseUrl ?? "继承供应商"}`,
+            description: "留空时继承供应商接口地址",
+            value: "save",
+            edit: {
+              label: "Base URL         ",
+              value: draft.baseUrl ?? "",
+              save: (value) => {
+                const baseUrl = value.trim()
+                if (baseUrl) draft.baseUrl = baseUrl
+                else delete draft.baseUrl
+              },
+            },
+          },
           { name: `输入模态         ${draft.input.join("、")}`, description: "多选", value: "input" },
           { name: "输出模态         当前 adapter 不支持配置", description: "查看扩展边界", value: "output" },
           {

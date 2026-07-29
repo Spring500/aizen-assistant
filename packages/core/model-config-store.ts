@@ -25,6 +25,7 @@ export type EditableModelConfig = {
   id: string
   name: string
   api?: ConfigurableApi
+  baseUrl?: string
   thinking?: ModelThinkingConfig
   input: SupportedModelModality[]
   contextWindow: number
@@ -140,15 +141,12 @@ function cost(value: unknown, label: string): ModelCostConfig {
   return result as ModelCostConfig
 }
 
-function validateProvider(input: EditableProviderConfig): void {
-  if (!providerIdPattern.test(input.id))
-    throw new Error("供应商 ID 只能包含小写字母、数字、点、下划线和短横线，长度不超过 64")
-  if (!input.name.trim()) throw new Error("供应商名称不能为空")
+function validateBaseUrl(value: string, label: string): void {
   let parsed: URL
   try {
-    parsed = new URL(input.baseUrl)
+    parsed = new URL(value)
   } catch {
-    throw new Error("Base URL 必须是合法的绝对 URL")
+    throw new Error(`${label} 必须是合法的绝对 URL`)
   }
   if (
     !["http:", "https:"].includes(parsed.protocol) ||
@@ -157,7 +155,14 @@ function validateProvider(input: EditableProviderConfig): void {
     parsed.search ||
     parsed.hash
   )
-    throw new Error("Base URL 只能使用 HTTP/HTTPS，且不能包含认证信息、查询参数或片段")
+    throw new Error(`${label} 只能使用 HTTP/HTTPS，且不能包含认证信息、查询参数或片段`)
+}
+
+function validateProvider(input: EditableProviderConfig): void {
+  if (!providerIdPattern.test(input.id))
+    throw new Error("供应商 ID 只能包含小写字母、数字、点、下划线和短横线，长度不超过 64")
+  if (!input.name.trim()) throw new Error("供应商名称不能为空")
+  validateBaseUrl(input.baseUrl, "Base URL")
   api(input.api, "供应商 API")
 }
 
@@ -205,6 +210,7 @@ function validateModel(input: EditableModelConfig): void {
     throw new Error("模型 ID 不能为空、包含首尾空格或控制字符")
   if (!input.name.trim()) throw new Error("模型名称不能为空")
   if (input.api !== undefined) api(input.api, "模型 API")
+  if (input.baseUrl !== undefined) validateBaseUrl(input.baseUrl, "模型 Base URL")
   normalizeThinking(input.thinking)
   if (input.input.length === 0 || new Set(input.input).size !== input.input.length)
     throw new Error("输入模态不能为空或重复")
@@ -259,11 +265,16 @@ function modelEntry(providerId: string, value: unknown): ModelConfigEntry {
         ? (source.api as ConfigurableApi)
         : undefined
   const unsupportedApi = source.api !== undefined && modelApi === undefined
+  if (source.baseUrl !== undefined) {
+    if (typeof source.baseUrl !== "string") throw new Error(`模型 ${providerId}/${id} 的 Base URL 必须是字符串`)
+    validateBaseUrl(source.baseUrl, `模型 ${providerId}/${id} 的 Base URL`)
+  }
   const thinking = thinkingConfig(source)
   const entry: ModelConfigEntry = {
     id,
     name: typeof source.name === "string" ? source.name : id,
     ...(modelApi === undefined ? {} : { api: modelApi }),
+    ...(typeof source.baseUrl === "string" ? { baseUrl: source.baseUrl } : {}),
     ...(thinking === undefined ? {} : { thinking }),
     input: input.filter((item): item is SupportedModelModality => item === "text" || item === "image"),
     contextWindow: positiveInteger(source.contextWindow, `模型 ${providerId}/${id} 的上下文窗口`, 128000),
@@ -384,6 +395,7 @@ export class ModelConfigStore {
         id: model.id,
         name: model.name.trim(),
         ...(model.api === undefined ? { api: undefined } : { api: model.api }),
+        ...(model.baseUrl === undefined ? { baseUrl: undefined } : { baseUrl: model.baseUrl }),
         ...(thinking
           ? {
               ...(thinking.disableThinkingLevel === undefined
@@ -399,6 +411,7 @@ export class ModelConfigStore {
         cost: { ...model.cost },
       }
       if (stored.api === undefined) delete stored.api
+      if (stored.baseUrl === undefined) delete stored.baseUrl
       for (const key of [
         "reasoning",
         "thinkingLevelMap",
