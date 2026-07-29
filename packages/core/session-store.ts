@@ -1,6 +1,7 @@
 import { mkdir, open, readdir, readFile, rm, stat } from "node:fs/promises"
 import { basename, join } from "node:path"
 import { type MnemonicIdGenerator, WordTripletIdGenerator } from "./mnemonic-id.ts"
+import { sessionFileName } from "./session-file-name.ts"
 import {
   parseSessionValue,
   type SessionHeader,
@@ -36,6 +37,7 @@ function firstText(record: TurnStartedRecord): string | undefined {
 export class SessionStore {
   readonly root: string
   readonly #queues = new Map<string, Promise<void>>()
+  readonly #paths = new Map<string, string>()
   readonly #idGenerator: MnemonicIdGenerator
   readonly #index: SessionIndexStore | undefined
   readonly #projectKey: string
@@ -48,27 +50,17 @@ export class SessionStore {
     this.#projectKey = basename(root)
   }
 
-  sessionFile(sessionId: string): string {
-    if (!sessionId || sessionId === "." || sessionId === ".." || /[\\/]/.test(sessionId))
-      throw new Error("无效的会话 ID")
-    return join(this.root, `${sessionId}.jsonl`)
-  }
-
   /** 生成一个不与现有会话冲突的助记词 ID。 */
   async suggestId(): Promise<string> {
-    await mkdir(this.root, { recursive: true })
-    const entries = await readdir(this.root, { withFileTypes: true })
-    const existing = new Set(
-      entries
-        .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-        .map((entry) => entry.name.slice(0, -".jsonl".length).toLowerCase()),
-    )
+    const existing = new Set((await this.list()).map((session) => session.sessionId.toLowerCase()))
     return this.#idGenerator.generate((candidate) => existing.has(candidate.toLowerCase()))
   }
 
   async create(input: Omit<SessionHeader, "kind" | "version">): Promise<SessionHeader> {
     await mkdir(this.root, { recursive: true })
-    const path = this.sessionFile(input.sessionId)
+    await this.list()
+    if (this.#paths.has(input.sessionId)) throw new Error("会话 ID 已存在")
+    const path = join(this.root, sessionFileName(input.createdAt, input.sessionId))
     const header: SessionHeader = { kind: "session", version: 1, ...input }
     const file = await open(path, "wx")
     let written = false
@@ -76,6 +68,7 @@ export class SessionStore {
       await file.writeFile(`${JSON.stringify(header)}\n`)
       await file.sync()
       written = true
+      this.#paths.set(input.sessionId, path)
       return header
     } finally {
       await file.close()
@@ -88,7 +81,7 @@ export class SessionStore {
     if (validated.kind === "session") throw new Error("不能追加第二个会话文件头")
     const previous = this.#queues.get(sessionId) ?? Promise.resolve()
     const next = previous.then(async () => {
-      const file = await open(this.sessionFile(sessionId), "a")
+      const file = await open(await this.#sessionPath(sessionId), "a")
       try {
         await file.writeFile(`${JSON.stringify(validated)}\n`)
         await file.sync()
@@ -110,7 +103,11 @@ export class SessionStore {
 
   async read(sessionId: string): Promise<LoadedSession> {
     await this.#queues.get(sessionId)
-    const contents = await readFile(this.sessionFile(sessionId), "utf8")
+    return this.#readPath(await this.#sessionPath(sessionId))
+  }
+
+  async #readPath(path: string): Promise<LoadedSession> {
+    const contents = await readFile(path, "utf8")
     const rawLines = contents.split("\n")
     if (rawLines.at(-1) === "") rawLines.pop()
     const lines: SessionLine[] = []
@@ -120,8 +117,7 @@ export class SessionStore {
         lines.push(parseSessionValue(JSON.parse(rawLine)))
       } catch (error) {
         const isLast = index === rawLines.length - 1
-        const isSyntaxError = error instanceof SyntaxError
-        if (isLast && isSyntaxError) {
+        if (isLast && error instanceof SyntaxError) {
           warnings.push(`忽略不完整的最后一行（第 ${index + 1} 行）`)
           continue
         }
@@ -130,7 +126,6 @@ export class SessionStore {
     }
     const [header, ...records] = lines
     if (header?.kind !== "session") throw new Error("会话文件第一行不是文件头")
-    if (header.sessionId !== sessionId) throw new Error("会话文件名与文件头 ID 不一致")
     if (records.some((record) => record.kind === "session")) throw new Error("会话文件只能有一个文件头")
     return { header, records: records as SessionRecord[], warnings }
   }
@@ -140,33 +135,36 @@ export class SessionStore {
     const previous = (await this.#index?.readProject(this.#projectKey)) ?? {}
     const current: Record<string, SessionIndexEntry> = {}
     const summaries: SessionSummary[] = []
+    const paths = new Map<string, string>()
     const entries = await readdir(this.root, { withFileTypes: true })
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue
-      const sessionId = entry.name.slice(0, -".jsonl".length)
-      const fileStatus = await stat(this.sessionFile(sessionId))
-      const cached = previous[sessionId]
+      const path = join(this.root, entry.name)
+      const fileStatus = await stat(path)
+      const cached = previous[entry.name]
       const unchanged =
         cached?.size === fileStatus.size &&
         cached.birthtimeMs === fileStatus.birthtimeMs &&
         cached.mtimeMs === fileStatus.mtimeMs
+      let summary: SessionSummary
       if (unchanged && cached) {
-        current[sessionId] = cached
-        summaries.push(cached.summary)
-        continue
+        summary = cached.summary
+      } else {
+        const loaded = await this.#readPath(path)
+        const firstTurn = loaded.records.find((record): record is TurnStartedRecord => record.kind === "turn_started")
+        const renamed = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
+        summary = {
+          sessionId: loaded.header.sessionId,
+          name: renamed?.kind === "session_renamed" ? renamed.name : "",
+          cwd: loaded.header.cwd,
+          createdAt: loaded.header.createdAt,
+          updatedAt: fileStatus.mtime.toISOString(),
+          preview: firstTurn ? (firstText(firstTurn) ?? "新会话") : "新会话",
+        }
       }
-      const loaded = await this.read(sessionId)
-      const firstTurn = loaded.records.find((record): record is TurnStartedRecord => record.kind === "turn_started")
-      const renamed = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
-      const summary: SessionSummary = {
-        sessionId: loaded.header.sessionId,
-        name: renamed?.kind === "session_renamed" ? renamed.name : "",
-        cwd: loaded.header.cwd,
-        createdAt: loaded.header.createdAt,
-        updatedAt: fileStatus.mtime.toISOString(),
-        preview: firstTurn ? (firstText(firstTurn) ?? "新会话") : "新会话",
-      }
-      current[sessionId] = {
+      if (paths.has(summary.sessionId)) throw new Error(`存在重复的会话 ID：${summary.sessionId}`)
+      paths.set(summary.sessionId, path)
+      current[entry.name] = {
         size: fileStatus.size,
         birthtimeMs: fileStatus.birthtimeMs,
         mtimeMs: fileStatus.mtimeMs,
@@ -174,8 +172,20 @@ export class SessionStore {
       }
       summaries.push(summary)
     }
+    this.#paths.clear()
+    for (const [sessionId, path] of paths) this.#paths.set(sessionId, path)
     this.#warnings = this.#index ? await this.#index.updateProject(this.#projectKey, current) : []
     return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  }
+
+  async #sessionPath(sessionId: string): Promise<string> {
+    if (!sessionId) throw new Error("无效的会话 ID")
+    const known = this.#paths.get(sessionId)
+    if (known) return known
+    await this.list()
+    const path = this.#paths.get(sessionId)
+    if (!path) throw new Error(`会话不存在：${sessionId}`)
+    return path
   }
 
   /** 取出最近一次列表操作产生的非阻断警告。 */
