@@ -201,6 +201,14 @@ function allChecksPassed(report: ArchitectureVerificationReport): boolean {
   return report.piSdk.passed && report.openTui.passed && report.photonWasm.passed && report.mockServer.passed
 }
 
+test("业务 TUI 不直接依赖 OpenTUI", async () => {
+  const glob = new Bun.Glob("apps/tui/**/*.ts")
+  for await (const path of glob.scan({ cwd: process.cwd() })) {
+    const source = await Bun.file(path).text()
+    expect(source).not.toContain('from "@opentui/core"')
+  }
+})
+
 test("架构可行性验证：pi SDK、内联扩展、内置视图、OpenTUI、Photon 和 HTTP 链路全部可用", async () => {
   const report = await runArchitectureVerification()
 
