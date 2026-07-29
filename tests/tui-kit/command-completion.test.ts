@@ -122,6 +122,47 @@ test("超过五个命令时候选窗口跟随选中项滚动", async () => {
   }
 })
 
+test("命令候选尽可能让选中项居中并在首尾收敛", async () => {
+  const setup = await createTestRenderer({ width: 60, height: 18 })
+  try {
+    const editor = createChatEditor(
+      setup.renderer,
+      { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} },
+      undefined,
+      [
+        { name: "/one", description: "命令一" },
+        { name: "/two", description: "命令二" },
+        { name: "/three", description: "命令三" },
+        { name: "/four", description: "命令四" },
+        { name: "/five", description: "命令五" },
+        { name: "/six", description: "命令六" },
+        { name: "/seven", description: "命令七" },
+        { name: "/eight", description: "命令八" },
+      ],
+    )
+    editor.input.setText("/")
+    await Bun.sleep(1)
+    for (let index = 0; index < 4; index += 1) emitKey(setup.renderer, "\x1b[B")
+    await setup.renderOnce()
+    const centered = setup.captureCharFrame()
+    expect(centered).toContain("/three")
+    expect(centered).toContain("▶ /five")
+    expect(centered).toContain("/seven")
+    expect(centered).not.toContain("/two")
+    expect(centered).not.toContain("/eight")
+
+    for (let index = 0; index < 3; index += 1) emitKey(setup.renderer, "\x1b[B")
+    await setup.renderOnce()
+    const atEnd = setup.captureCharFrame()
+    expect(atEnd).toContain("/four")
+    expect(atEnd).toContain("▶ /eight")
+    expect(atEnd).not.toContain("/three")
+    editor.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("矮终端优先保留状态、快捷键和错误行", async () => {
   const setup = await createTestRenderer({ width: 60, height: 9, screenMode: "split-footer", footerHeight: 8 })
   try {

@@ -156,9 +156,8 @@ export function createChatEditor(
     commandSelected = Math.min(commandSelected, Math.max(0, commandMatches.length - 1))
     const visibleRows = Math.min(5, commandMatches.length, Math.max(0, maximumVisibleRows))
     if (visibleRows > 0) {
-      if (commandSelected < commandOffset) commandOffset = commandSelected
-      else if (commandSelected >= commandOffset + visibleRows) commandOffset = commandSelected - visibleRows + 1
-      commandOffset = Math.max(0, Math.min(commandOffset, commandMatches.length - visibleRows))
+      const centeredOffset = commandSelected - Math.floor(visibleRows / 2)
+      commandOffset = Math.max(0, Math.min(centeredOffset, commandMatches.length - visibleRows))
     } else commandOffset = 0
     commandList.visible = inputVisible && visibleRows > 0
     commandList.height = commandList.visible ? visibleRows : 0
