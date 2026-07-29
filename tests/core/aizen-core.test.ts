@@ -411,7 +411,9 @@ describe("核心编排", () => {
     await core.dispatch({ type: "send_prompt", text: "第二轮" })
     const secondTurn = core
       .getSnapshot()
-      .transcript.find((entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第二轮")))
+      .transcript.find(
+        (entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第二轮")),
+      )
     if (!secondTurn) throw new Error("缺少第二轮")
 
     expect(await core.dispatch({ type: "rewind", turnId: secondTurn.turnId })).toEqual({ ok: true })
@@ -443,7 +445,9 @@ describe("核心编排", () => {
     await core.dispatch({ type: "send_prompt", text: "第二轮" })
     const secondTurn = core
       .getSnapshot()
-      .transcript.find((entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第二轮")))
+      .transcript.find(
+        (entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第二轮")),
+      )
     if (!secondTurn) throw new Error("缺少第二轮")
 
     expect(await core.dispatch({ type: "fork_session", turnId: secondTurn.turnId })).toEqual({ ok: true })

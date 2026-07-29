@@ -1240,10 +1240,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     })
     handle.close(name)
     if (name === undefined) return
-    await dispatchWithError(
-      { type: "rename_session", sessionId: snapshot.currentSessionId, name },
-      "重命名会话失败",
-    )
+    await dispatchWithError({ type: "rename_session", sessionId: snapshot.currentSessionId, name }, "重命名会话失败")
   }
 
   const sessionSegments = (session: ReturnType<typeof core.getSnapshot>["sessions"][number]) => ({

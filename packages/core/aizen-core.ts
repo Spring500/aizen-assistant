@@ -407,11 +407,7 @@ export class AizenCore implements CorePort {
     await this.#rememberSessionDefaults(actualModel, viewRecord.viewId)
   }
 
-  async #activateRecords(
-    sessionId: string,
-    records: SessionRecord[],
-    name: string,
-  ): Promise<void> {
+  async #activateRecords(sessionId: string, records: SessionRecord[], name: string): Promise<void> {
     const modelRecord = [...records].reverse().find((record) => record.kind === "model_changed")
     const viewRecord = [...records].reverse().find((record) => record.kind === "view_changed")
     if (modelRecord?.kind !== "model_changed") throw new Error("会话没有模型记录")
@@ -437,9 +433,7 @@ export class AizenCore implements CorePort {
   #turnStartIndex(turnId: string): number {
     const index = this.#records.findIndex((record) => record.kind === "turn_started" && record.turnId === turnId)
     if (index < 0) throw new Error("找不到所选对话轮次")
-    const finished = this.#records.some(
-      (record) => record.kind === "turn_finished" && record.turnId === turnId,
-    )
+    const finished = this.#records.some((record) => record.kind === "turn_finished" && record.turnId === turnId)
     if (!finished) throw new Error("只能选择已完成的对话轮次")
     return index
   }

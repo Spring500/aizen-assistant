@@ -14,7 +14,10 @@ export async function createAizenRenderer(): Promise<CliRenderer> {
 }
 
 function safeTerminalTitle(title: string): string {
-  return Array.from(title.replace(/[\u0000-\u001f\u007f-\u009f]/g, " ")).slice(0, 120).join("").trim()
+  return Array.from(title.replace(/[\u0000-\u001f\u007f-\u009f]/g, " "))
+    .slice(0, 120)
+    .join("")
+    .trim()
 }
 
 /** 设置经过控制字符过滤和长度限制的终端标题。 */
