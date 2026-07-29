@@ -676,7 +676,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   async function editThinkingLevels(initial: string[]): Promise<string[] | undefined> {
     const levels = [...initial]
     return new Promise((resolve) => {
-      let editing: { index: number; value: string; adding: boolean } | undefined
+      let editing: { index: number; value: string; adding: boolean; originalLevels: string[] } | undefined
       let settled = false
       const finish = (value: string[] | undefined) => {
         if (settled) return
@@ -687,7 +687,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       const handle = overlays.open<string[]>({
         id: "thinking-level-editor",
         title: "开启思考档位",
-        help: "Enter 编辑 | Alt+↑/↓ 排序 | Ctrl+X 删除 | Esc 返回",
+        help: "↑↓ 选择 | Enter 编辑 | Esc 返回",
         contentHeight: Math.min(18, Math.max(6, (levels.length + 2) * 3 - 2)),
         signal: interactionController.signal,
         onCancel: () => finish(undefined),
@@ -709,7 +709,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         selector.options = [
           ...levels.map((level, index) => ({
             name: `${index + 1}. ${editing?.index === index ? `${editing.value}█` : level}`,
-            description: editing?.index === index ? "Enter 确认 · Esc 取消" : "Enter 原地编辑",
+            description: editing?.index === index ? "↑/↓ 排序 · Ctrl+X 删除 · Enter 确认 · Esc 取消" : "Enter 原地编辑",
             value: `item:${index}`,
           })),
           {
@@ -728,10 +728,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         selector.setSelectedIndex(Math.min(selectedIndex, levels.length + 1))
         handle.setContentHeight(Math.min(18, Math.max(6, (levels.length + 2) * 3 - 2)))
       }
-      const stopEditing = () => {
+      const stopEditing = (cancelled: boolean) => {
+        if (cancelled && editing) levels.splice(0, levels.length, ...editing.originalLevels)
+        const selectedIndex = editing?.adding ? levels.length : (editing?.index ?? selector.getSelectedIndex())
         editing = undefined
-        handle.setHelp("Enter 编辑 | Alt+↑/↓ 排序 | Ctrl+X 删除 | Esc 返回")
-        render()
+        handle.setHelp("↑↓ 选择 | Enter 编辑 | Esc 返回")
+        render(selectedIndex)
       }
       const confirmEditing = () => {
         if (!editing) return
@@ -739,14 +741,34 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         if (!value) return
         if (editing.adding) levels.push(value)
         else levels[editing.index] = value
-        stopEditing()
+        stopEditing(false)
       }
       handle.setInput({
         keypress: (key) => {
           if (editing) {
             if (key.name === "return") confirmEditing()
-            else if (key.name === "escape") stopEditing()
-            else if (key.name === "backspace") {
+            else if (key.name === "escape") stopEditing(true)
+            else if (!editing.adding && key.ctrl && key.name === "x") {
+              if (levels.length <= 1) {
+                handle.setHelp("至少保留一个开启档位 | ↑/↓ 排序 | Enter 确认 | Esc 取消")
+                return
+              }
+              const index = editing.index
+              levels.splice(index, 1)
+              editing = undefined
+              handle.setHelp("↑↓ 选择 | Enter 编辑 | Esc 返回")
+              render(Math.min(index, levels.length - 1))
+            } else if (!editing.adding && key.name === "up" && editing.index > 0) {
+              const index = editing.index
+              ;[levels[index - 1], levels[index]] = [levels[index] ?? "", levels[index - 1] ?? ""]
+              editing.index--
+              render(editing.index)
+            } else if (!editing.adding && key.name === "down" && editing.index < levels.length - 1) {
+              const index = editing.index
+              ;[levels[index], levels[index + 1]] = [levels[index + 1] ?? "", levels[index] ?? ""]
+              editing.index++
+              render(editing.index)
+            } else if (key.name === "backspace") {
               editing.value = Array.from(editing.value).slice(0, -1).join("")
               render()
             } else if (!key.ctrl && !key.meta && key.sequence.length > 0) {
@@ -757,26 +779,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           }
           const index = selector.getSelectedIndex()
           if (key.name === "escape") finish(levels)
-          else if (key.ctrl && key.name === "x" && index < levels.length) {
-            if (levels.length <= 1) {
-              handle.setHelp("至少保留一个开启档位 | Enter 编辑 | Esc 返回")
-              return
-            }
-            levels.splice(index, 1)
-            render(Math.min(index, levels.length - 1))
-          } else if ((key.meta || key.option) && key.name === "up" && index > 0 && index < levels.length) {
-            ;[levels[index - 1], levels[index]] = [levels[index] ?? "", levels[index - 1] ?? ""]
-            render(index - 1)
-          } else if ((key.meta || key.option) && key.name === "down" && index < levels.length - 1) {
-            ;[levels[index], levels[index + 1]] = [levels[index + 1] ?? "", levels[index] ?? ""]
-            render(index + 1)
-          } else if (key.name === "return") {
+          else if (key.name === "return") {
             if (index < levels.length) {
-              editing = { index, value: levels[index] ?? "", adding: false }
-              handle.setHelp("输入新档位名 | Enter 确认 | Esc 取消")
+              editing = { index, value: levels[index] ?? "", adding: false, originalLevels: [...levels] }
+              handle.setHelp("输入修改名称 | ↑/↓ 排序 | Ctrl+X 删除 | Enter 确认 | Esc 取消")
               render(index)
             } else if (index === levels.length && levels.length < 6) {
-              editing = { index, value: "", adding: true }
+              editing = { index, value: "", adding: true, originalLevels: [...levels] }
               handle.setHelp("输入新增档位名 | Enter 确认 | Esc 取消")
               render(index)
             } else if (index === levels.length + 1) finish(levels)
@@ -848,7 +857,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           },
           {
             name: `开启思考档位    ${supported ? summary : "—"}       ${thinkingLevels.length} / 6`,
-            description: supported ? "Enter 管理；原地编辑，快捷排序和删除" : "请先启用思考能力",
+            description: supported ? "Enter 管理；编辑态用 ↑/↓ 排序、Ctrl+X 删除" : "请先启用思考能力",
             value: "levels",
           },
           {
