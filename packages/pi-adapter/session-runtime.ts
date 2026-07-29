@@ -197,6 +197,7 @@ export class PiSessionRuntime implements PiPort {
   readonly #modelsPath: string | null
   readonly #listeners = new Set<(event: PiPortEvent) => void>()
   #thinkingConfigs = new Map<string, ModelThinkingConfig | null>()
+  #thinkingConfigError: Error | undefined
   #session: AgentSession | undefined
   #unsubscribe: (() => void) | undefined
   #unsubscribeAgent: (() => void) | undefined
@@ -222,7 +223,7 @@ export class PiSessionRuntime implements PiPort {
       await ModelRuntime.create({ ...options, allowModelNetwork: false }),
       options.modelsPath,
     )
-    await runtime.#reloadThinkingConfigs().catch(() => {})
+    await runtime.#reloadThinkingConfigs()
     return runtime
   }
 
@@ -401,7 +402,8 @@ export class PiSessionRuntime implements PiPort {
     await this.#modelRuntime.reloadConfig()
     const configError = this.#modelRuntime.getError()
     if (configError) throw new Error(`models.json 配置错误：${configError}`)
-    await this.#reloadThinkingConfigs().catch(() => {})
+    await this.#reloadThinkingConfigs()
+    if (this.#thinkingConfigError) throw this.#thinkingConfigError
   }
 
   async listModels(): Promise<ModelOption[]> {
@@ -605,12 +607,17 @@ export class PiSessionRuntime implements PiPort {
 
   async #reloadThinkingConfigs(): Promise<void> {
     this.#thinkingConfigs.clear()
+    this.#thinkingConfigError = undefined
     if (!this.#modelsPath) return
-    const snapshot = await new ModelConfigStore(this.#modelsPath).read()
-    for (const provider of snapshot.providers) {
-      for (const model of provider.models) {
-        this.#thinkingConfigs.set(`${provider.id}\0${model.id}`, model.thinking ?? null)
+    try {
+      const snapshot = await new ModelConfigStore(this.#modelsPath).read()
+      for (const provider of snapshot.providers) {
+        for (const model of provider.models) {
+          this.#thinkingConfigs.set(`${provider.id}\0${model.id}`, model.thinking ?? null)
+        }
       }
+    } catch (error) {
+      this.#thinkingConfigError = error instanceof Error ? error : new Error(String(error))
     }
   }
 
