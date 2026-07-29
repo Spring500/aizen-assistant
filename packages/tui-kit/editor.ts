@@ -13,6 +13,11 @@ import { overlayManager, type OverlayManager } from "./overlay-manager.ts"
 import { shortcutText } from "./status-bar.ts"
 import { systemColors } from "./theme.ts"
 
+export type CommandOption = {
+  name: `/${string}`
+  description: string
+}
+
 export type EditorHandlers = {
   onSubmit(value: string): void
   onAbort(): void
@@ -101,12 +106,26 @@ export function createChatEditor(
   renderer: CliRenderer,
   handlers: EditorHandlers,
   manager: OverlayManager = overlayManager(renderer),
+  commands: readonly CommandOption[] = [],
 ): ChatEditor {
   let busy = false
   let inputVisible = true
   let sessionTitle: { name: string; sessionId: string } | undefined
   let destroyed = false
+  let commandSelected = 0
+  let commandDismissedFor = ""
+  let commandMatches: CommandOption[] = []
 
+  const commandList = new TextRenderable(renderer, {
+    id: "editor-command-list",
+    width: "100%",
+    height: 0,
+    wrapMode: "none",
+    truncate: true,
+    fg: systemColors.secondary,
+    content: "",
+    visible: false,
+  })
   const topSeparator = new TextRenderable(renderer, {
     id: "editor-top-separator",
     width: "100%",
@@ -117,6 +136,37 @@ export function createChatEditor(
     content: "",
   })
   let input!: TextareaRenderable
+  const commandPrefix = () => {
+    const value = input.plainText
+    const trimmed = value.trimStart()
+    if (!trimmed.startsWith("/") || /\s/.test(trimmed) || value.trimEnd() !== value) return undefined
+    return trimmed
+  }
+  const updateCommands = () => {
+    const prefix = commandPrefix()
+    if (!prefix || commandDismissedFor === input.plainText) commandMatches = []
+    else commandMatches = commands.filter((command) => command.name.startsWith(prefix))
+    commandSelected = Math.min(commandSelected, Math.max(0, commandMatches.length - 1))
+    commandList.visible = inputVisible && commandMatches.length > 0
+    commandList.height = commandList.visible ? Math.min(5, commandMatches.length) : 0
+    commandList.content = commandMatches
+      .slice(0, 5)
+      .map(
+        (command, index) =>
+          `${index === commandSelected ? "▶" : " "} ${command.name.padEnd(10)} ${command.description}`,
+      )
+      .join("\n")
+  }
+  const completeCommand = () => {
+    const command = commandMatches[commandSelected]
+    if (!command) return false
+    input.setText(command.name)
+    input.cursorOffset = input.plainText.length
+    commandDismissedFor = input.plainText
+    updateCommands()
+    updateLayout()
+    return true
+  }
   const updateLayout = () => {
     if (destroyed || input.isDestroyed) return
     const measuredLines = inputVisualLines(input.plainText, renderer.terminalWidth)
@@ -125,9 +175,12 @@ export function createChatEditor(
       Math.min(maxInputHeight, Math.max(measuredLines, input.virtualLineCount || input.lineCount || 1)),
     )
     input.height = nextHeight
+    updateCommands()
     topSeparator.content = titledSeparator(renderer.terminalWidth, sessionTitle)
     bottomSeparator.content = "─".repeat(Math.max(1, renderer.terminalWidth))
-    manager.setBaseFooterHeight(chatViewHeight + (inputVisible ? nextHeight + 2 : 0) + 3)
+    manager.setBaseFooterHeight(
+      chatViewHeight + (inputVisible ? nextHeight + 2 + (commandList.visible ? commandList.height : 0) : 0) + 3,
+    )
   }
   input = new TextareaRenderable(renderer, {
     id: "editor",
@@ -138,9 +191,13 @@ export function createChatEditor(
       { name: "return", action: "submit" },
       { name: "return", shift: true, action: "newline" },
     ],
-    onContentChange: () => queueMicrotask(updateLayout),
+    onContentChange: () => {
+      if (commandDismissedFor !== input.plainText) commandDismissedFor = ""
+      queueMicrotask(updateLayout)
+    },
     onSubmit: () => {
       if (busy) return
+      if (commandMatches.length > 0 && completeCommand()) return
       const value = input.plainText
       if (escapedNewline(input)) return
       if (!value.trim()) return
@@ -175,6 +232,7 @@ export function createChatEditor(
     fg: systemColors.shortcuts,
     content: shortcutText({ status: "idle", hasSession: false }),
   })
+  renderer.root.add(commandList)
   renderer.root.add(topSeparator)
   renderer.root.add(input)
   renderer.root.add(bottomSeparator)
@@ -194,6 +252,34 @@ export function createChatEditor(
   updateLayout()
 
   const onKeyPress = (key: KeyEvent) => {
+    if (commandMatches.length > 0 && key.name === "down") {
+      key.preventDefault()
+      key.stopPropagation()
+      commandSelected = (commandSelected + 1) % commandMatches.length
+      updateCommands()
+      return
+    }
+    if (commandMatches.length > 0 && key.name === "up") {
+      key.preventDefault()
+      key.stopPropagation()
+      commandSelected = (commandSelected - 1 + commandMatches.length) % commandMatches.length
+      updateCommands()
+      return
+    }
+    if (commandMatches.length > 0 && key.name === "tab") {
+      key.preventDefault()
+      key.stopPropagation()
+      completeCommand()
+      return
+    }
+    if (commandMatches.length > 0 && key.name === "escape") {
+      key.preventDefault()
+      key.stopPropagation()
+      commandDismissedFor = input.plainText
+      updateCommands()
+      updateLayout()
+      return
+    }
     if (key.name === "escape") handlers.onAbort()
     if (key.name === "c" && key.ctrl) handlers.onQuit()
   }
@@ -227,6 +313,7 @@ export function createChatEditor(
       inputVisible = value
       input.visible = value
       topSeparator.visible = value
+      updateCommands()
       bottomSeparator.visible = value
       if (value) input.focus()
       else input.blur()
@@ -236,6 +323,7 @@ export function createChatEditor(
       destroyed = true
       renderer.keyInput.off("keypress", onKeyPress)
       renderer.off(CliRenderEvents.RESIZE, onResize)
+      commandList.destroy()
       topSeparator.destroy()
       input.destroy()
       bottomSeparator.destroy()

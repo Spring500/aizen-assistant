@@ -30,6 +30,7 @@ import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-edito
 import { systemColors } from "../../packages/tui-kit/theme.ts"
 
 import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
+import { isTuiCommand, tuiCommands } from "./commands.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
 import { type SessionSettingsDraft, sessionSettingsItems } from "./session-settings.ts"
 import { viewSelectionItems } from "./view-flow.ts"
@@ -113,19 +114,21 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     renderer,
     {
       onSubmit: (value) => {
-        if (value === "/quit") quit()
+        if (!isTuiCommand(value))
+          runAction(() => dispatchWithError({ type: "send_prompt", text: value }, "发送消息失败"))
+        else if (value === "/quit") quit()
         else if (value === "/new") runAction(createSession)
         else if (value === "/sessions") runAction(chooseSession)
         else if (value === "/views") runAction(manageViews)
         else if (value === "/view" || value === "/model") runAction(() => openSessionSettings("existing"))
         else if (value === "/fold") runAction(chooseFold)
         else if (value === "/models") runAction(manageModels)
-        else runAction(() => dispatchWithError({ type: "send_prompt", text: value }, "发送消息失败"))
       },
       onAbort: () => void core.dispatch({ type: "abort" }),
       onQuit: quit,
     },
     overlays,
+    tuiCommands,
   )
   editor.setInputVisible(false)
 

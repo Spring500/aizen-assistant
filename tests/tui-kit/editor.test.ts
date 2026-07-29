@@ -147,5 +147,6 @@ test("没有会话名时标题只显示会话 ID", async () => {
 test("快捷键提示随状态变化", () => {
   expect(shortcutText({ status: "running", hasSession: true })).toContain("Esc 中止")
   expect(shortcutText({ status: "idle", hasSession: true })).toContain("光标前 \\ 后 Enter 换行")
+  expect(shortcutText({ status: "idle", hasSession: true })).not.toContain("/model")
   expect(shortcutText({ status: "idle", hasSession: false })).toContain("↑/↓ 选择")
 })
