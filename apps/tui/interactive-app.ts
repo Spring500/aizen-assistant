@@ -1,5 +1,11 @@
 import { join } from "node:path"
-import { type CliRenderer, SelectRenderable, TextareaRenderable, TextRenderable } from "@opentui/core"
+import {
+  type CliRenderer,
+  SelectRenderable,
+  SelectRenderableEvents,
+  TextareaRenderable,
+  TextRenderable,
+} from "@opentui/core"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import type {
@@ -708,6 +714,17 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         descriptionColor: systemColors.shortcuts,
       })
       handle.content.add(selector)
+      const updateHelp = () => {
+        if (editing) return
+        const index = selector.getSelectedIndex()
+        if (index < levels.length) handle.setHelp("↑↓ 选择 | Enter 编辑 | Esc 返回")
+        else if (index === levels.length)
+          handle.setHelp(
+            levels.length >= 6 ? "已达到 6 / 6，不能继续新增 | Esc 返回" : "↑↓ 选择 | Enter 新增 | Esc 返回",
+          )
+        else handle.setHelp("↑↓ 选择 | Enter 完成 | Esc 返回")
+      }
+      selector.on(SelectRenderableEvents.SELECTION_CHANGED, updateHelp)
       const render = (selectedIndex = selector.getSelectedIndex()) => {
         selector.options = [
           ...levels.map((level, index) => ({
@@ -723,6 +740,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           { name: "完成", description: "", value: "done" },
         ]
         selector.setSelectedIndex(Math.min(selectedIndex, levels.length + 1))
+        updateHelp()
         if (editing) {
           editing.label.top = editing.index
           editing.input.top = editing.index
