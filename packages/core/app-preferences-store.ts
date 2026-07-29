@@ -50,10 +50,17 @@ function turns(value: unknown, label: string): number {
 function modelReference(value: unknown): ModelReference {
   const source = object(value, "newSession.model")
   exact(source, ["providerId", "modelId", "api", "thinkingLevel"], "newSession.model")
-  for (const key of ["providerId", "modelId", "api", "thinkingLevel"] as const) {
+  for (const key of ["providerId", "modelId", "api"] as const) {
     if (typeof source[key] !== "string" || !source[key]) throw new Error(`newSession.model.${key} 必须是非空字符串`)
   }
-  return source as ModelReference
+  if (source.thinkingLevel !== undefined && (typeof source.thinkingLevel !== "string" || !source.thinkingLevel))
+    throw new Error("newSession.model.thinkingLevel 必须是非空字符串")
+  return {
+    providerId: source.providerId as string,
+    modelId: source.modelId as string,
+    api: source.api as string,
+    ...(source.thinkingLevel === undefined ? {} : { thinkingLevel: source.thinkingLevel as string }),
+  }
 }
 
 /** 校验并规范化应用偏好，防止无效配置进入核心和界面。 */

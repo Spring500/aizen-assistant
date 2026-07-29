@@ -8,7 +8,7 @@ export type ModelReference = {
   providerId: string
   modelId: string
   api: string
-  thinkingLevel: string
+  thinkingLevel?: string
 }
 
 export type Timing = {
@@ -200,11 +200,13 @@ function viewId(value: unknown): ViewId {
 function modelReference(value: unknown): ModelReference {
   const source = object(value, "model")
   exact(source, ["providerId", "modelId", "api", "thinkingLevel"], "model")
+  const thinkingLevel = optionalString(source.thinkingLevel, "model.thinkingLevel")
+  if (thinkingLevel === "") throw new Error("model.thinkingLevel 必须是非空字符串")
   return {
     providerId: string(source.providerId, "model.providerId"),
     modelId: string(source.modelId, "model.modelId"),
     api: string(source.api, "model.api"),
-    thinkingLevel: string(source.thinkingLevel, "model.thinkingLevel"),
+    ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
   }
 }
 

@@ -14,6 +14,8 @@ export type ModelRuntimeInfo = ModelReference & {
 export type ModelOption = ModelRuntimeInfo & {
   name: string
   available: boolean
+  thinkingLevels?: string[]
+  offThinkingLevel?: string
 }
 
 export type AuthProviderOption = {
@@ -31,7 +33,7 @@ export type PiPortEvent =
   | { type: "usage_updated"; outputTokens: number; contextTokens?: number }
   | {
       type: "message"
-      runtimeRef: string
+      recordId: string
       record: Omit<MessageRecord, "recordId" | "turnId" | "at">["message"]
     }
   | { type: "tool_started"; callId: string; name: string; arguments: unknown }
@@ -40,7 +42,7 @@ export type PiPortEvent =
   | {
       type: "compaction"
       summary: string
-      firstKeptRuntimeRef: string
+      firstKeptRecordId: string
       tokensBefore: number
     }
   | { type: "settled" }

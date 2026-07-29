@@ -97,11 +97,107 @@ describe("认证与模型", () => {
       providerId: "example",
       modelId: "example-model",
       api: "openai-completions",
-      thinkingLevel: "off",
       name: "示例模型",
       contextWindow: 128000,
       available: false,
     })
     await runtime.dispose()
+  })
+
+  test("第三方模型向用户暴露自身档位名和默认档位", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
+    directories.push(directory)
+    const modelsPath = join(directory, "models.json")
+    await writeFile(
+      modelsPath,
+      JSON.stringify({
+        providers: {
+          example: {
+            name: "示例服务商",
+            baseUrl: "https://api.example.com/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "thinking-model",
+                disableThinkingLevel: "关闭",
+                thinkingLevels: ["A", "B", "C"],
+                defaultThinkingLevel: "B",
+              },
+            ],
+          },
+        },
+      }),
+    )
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath })
+
+    expect((await runtime.listModels()).find((item) => item.modelId === "thinking-model")).toMatchObject({
+      thinkingLevel: "B",
+      thinkingLevels: ["A", "B", "C"],
+      offThinkingLevel: "关闭",
+    })
+    await runtime.dispose()
+  })
+
+  test("发送请求时将Aizen档位转换为模型自身档位参数", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
+    directories.push(directory)
+    const modelsPath = join(directory, "models.json")
+    const requests: Array<Record<string, unknown>> = []
+    const server = Bun.serve({
+      port: 0,
+      async fetch(request) {
+        requests.push((await request.json()) as Record<string, unknown>)
+        const body = [
+          `data: ${JSON.stringify({ id: "chatcmpl-test", object: "chat.completion.chunk", created: 1, model: "thinking-model", choices: [{ index: 0, delta: { role: "assistant", content: "完成" }, finish_reason: null }] })}`,
+          `data: ${JSON.stringify({ id: "chatcmpl-test", object: "chat.completion.chunk", created: 1, model: "thinking-model", choices: [{ index: 0, delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 } })}`,
+          "data: [DONE]",
+          "",
+        ].join("\n\n")
+        return new Response(body, { headers: { "content-type": "text/event-stream" } })
+      },
+    })
+    await writeFile(
+      modelsPath,
+      JSON.stringify({
+        providers: {
+          example: {
+            baseUrl: `http://127.0.0.1:${server.port}/v1`,
+            api: "openai-completions",
+            models: [
+              {
+                id: "thinking-model",
+                thinkingLevels: ["快速", "标准", "深入"],
+                defaultThinkingLevel: "标准",
+              },
+            ],
+          },
+        },
+      }),
+    )
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath })
+    try {
+      await runtime.setRuntimeApiKey("example", "test-key")
+      await runtime.create({
+        cwd: directory,
+        model: {
+          providerId: "example",
+          modelId: "thinking-model",
+          api: "openai-completions",
+          thinkingLevel: "标准",
+        },
+        view: { viewId: null },
+      })
+      await runtime.prompt({
+        recordId: crypto.randomUUID(),
+        turnId: crypto.randomUUID(),
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "测试" }] }],
+      })
+      expect(requests).toHaveLength(1)
+      expect(requests[0]?.reasoning_effort).toBe("标准")
+    } finally {
+      await runtime.dispose()
+      server.stop(true)
+    }
   })
 })

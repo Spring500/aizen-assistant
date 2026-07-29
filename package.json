@@ -17,7 +17,8 @@
     "test": "bun test",
     "dev:tui": "bun run scripts/dev/run-tui.ts",
     "build:tui": "bun build --compile --target=bun-windows-x64 --outfile dist/aizen-tui.exe apps/tui/main.ts",
-    "verify": "bun run check:config && bun run format:check && bun run lint && bun run typecheck && bun run build:tui && bun test && bun run tests/distribution/verify-tui.ts",
+    "build:pi-http-probe": "bun build --compile --target=bun-windows-x64 --outfile dist/pi-http-probe.exe tests/distribution/pi-http-probe.ts",
+    "verify": "bun run check:config && bun run format:check && bun run lint && bun run typecheck && bun run build:tui && bun run build:pi-http-probe && bun test && bun run tests/distribution/verify-tui.ts && bun run tests/distribution/verify-pi-http.ts",
     "postinstall": "git config core.hooksPath .githooks",
     "hooks:test": "bun run scripts/repo/test-pre-push.ts"
   },
@@ -25,7 +26,8 @@
     "@earendil-works/pi-ai": "0.80.10",
     "@earendil-works/pi-coding-agent": "0.80.10",
     "@opentui/core": "0.4.5",
-    "@silvia-odwyer/photon-node": "0.3.4"
+    "@silvia-odwyer/photon-node": "0.3.4",
+    "proper-lockfile": "4.1.2"
   },
   "overrides": {
     "@earendil-works/pi-agent-core": "0.80.10",
@@ -35,6 +37,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.4",
     "@types/bun": "1.3.14",
+    "@types/proper-lockfile": "4.1.4",
     "typescript": "5.9.3",
     "yaml": "2.9.0"
   }

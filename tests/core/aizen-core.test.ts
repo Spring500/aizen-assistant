@@ -2,11 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
+import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
+import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import type { PiPort, PiPortEvent } from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
-import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
 
@@ -39,7 +39,7 @@ class FakePi implements PiPort {
       listener({ type: "text_delta", delta: "完成" })
       listener({
         type: "message",
-        runtimeRef: crypto.randomUUID(),
+        recordId: crypto.randomUUID(),
         record: {
           role: "assistant",
           parts: [{ kind: "text", text: "完成" }],
@@ -53,9 +53,44 @@ class FakePi implements PiPort {
   }
 }
 
+class MessageFailingStore extends SessionStore {
+  messageAttempts = 0
+
+  override append(sessionId: string, record: Parameters<SessionStore["append"]>[1]): Promise<void> {
+    if (record.kind === "message") {
+      this.messageAttempts++
+      return Promise.reject(new Error("磁盘不可写"))
+    }
+    return super.append(sessionId, record)
+  }
+}
+
 class CreateFailingFakePi extends FakePi {
   create = async () => {
     throw new Error("无法创建运行时")
+  }
+}
+
+class DisposeFailingFakePi extends FakePi {
+  abortCalls = 0
+  disposeCalls = 0
+  abort = async () => {
+    this.abortCalls++
+    throw new Error("中止失败")
+  }
+  dispose = async () => {
+    this.disposeCalls++
+    throw new Error("释放失败")
+  }
+  async prompt() {
+    await new Promise(() => {})
+  }
+}
+
+class TurnFinishedFailingStore extends SessionStore {
+  override append(sessionId: string, record: Parameters<SessionStore["append"]>[1]): Promise<void> {
+    if (record.kind === "turn_finished") return Promise.reject(new Error("轮次结尾不可写"))
+    return super.append(sessionId, record)
   }
 }
 
@@ -64,7 +99,7 @@ class CompactingFakePi extends FakePi {
     for (const listener of this.listeners) {
       listener({
         type: "message",
-        runtimeRef: "pi-message-id",
+        recordId: "assistant-record",
         record: {
           role: "assistant",
           parts: [{ kind: "text", text: "完成" }],
@@ -76,7 +111,7 @@ class CompactingFakePi extends FakePi {
       listener({
         type: "compaction",
         summary: "摘要",
-        firstKeptRuntimeRef: "pi-message-id",
+        firstKeptRecordId: "assistant-record",
         tokensBefore: 100,
       })
       listener({ type: "settled" })
@@ -90,7 +125,7 @@ class FailingFakePi extends FakePi {
     for (const listener of this.listeners) {
       listener({
         type: "message",
-        runtimeRef: "failed-message",
+        recordId: "failed-message",
         record: {
           role: "assistant",
           parts: [],
@@ -169,7 +204,6 @@ describe("核心编排", () => {
         model: {
           id: "model-a",
           name: "模型 A",
-          reasoning: false,
           input: ["text"],
           contextWindow: 128000,
           maxTokens: 16000,
@@ -377,6 +411,53 @@ describe("核心编排", () => {
       expect(compaction.firstKeptRecordId).toBe(message.recordId)
       expect(JSON.stringify(compaction)).not.toContain("pi-message-id")
     }
+  })
+
+  test("消息落盘失败会上报错误、阻止后续轮次且不影响释放", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new MessageFailingStore(root)
+    const pi = new FakePi()
+    const core = new AizenCore({ cwd: "E:\\project", store, pi })
+
+    expect(await core.dispatch({ type: "create_session", model, viewId: null })).toEqual({ ok: true })
+    expect(await core.dispatch({ type: "send_prompt", text: "触发失败" })).toEqual({
+      ok: false,
+      error: { code: "COMMAND_FAILED", message: "磁盘不可写", severity: "error" },
+    })
+    expect(store.messageAttempts).toBe(1)
+    expect(core.getSnapshot().lastError).toBe("磁盘不可写")
+    expect((await core.dispatch({ type: "send_prompt", text: "不应继续" })).ok).toBe(false)
+    expect(store.messageAttempts).toBe(1)
+    await expect(core.dispose()).resolves.toBeUndefined()
+  })
+
+  test("轮次结尾写入失败后阻止继续发送", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const core = new AizenCore({ cwd: "E:\\project", store: new TurnFinishedFailingStore(root), pi: new FakePi() })
+
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    expect((await core.dispatch({ type: "send_prompt", text: "触发失败" })).ok).toBe(false)
+    expect(core.getSnapshot().lastError).toBe("轮次结尾不可写")
+    expect((await core.dispatch({ type: "send_prompt", text: "不应继续" })).ok).toBe(false)
+    await core.dispose()
+  })
+
+  test("中止失败后仍释放订阅和运行时", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new DisposeFailingFakePi()
+    const core = new AizenCore({ cwd: "E:\\project", store: new SessionStore(root), pi })
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    void core.dispatch({ type: "send_prompt", text: "持续运行" })
+    for (let attempt = 0; attempt < 20 && core.getSnapshot().status !== "running"; attempt++) await Bun.sleep(5)
+    expect(core.getSnapshot().status).toBe("running")
+
+    await expect(core.dispose()).rejects.toThrow("中止失败")
+    expect(pi.abortCalls).toBe(1)
+    expect(pi.disposeCalls).toBe(1)
+    expect(pi.listeners.size).toBe(0)
   })
 
   test("模型错误写入失败轮次并恢复空闲", async () => {

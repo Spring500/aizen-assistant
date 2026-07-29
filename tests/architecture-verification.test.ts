@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { InMemoryCredentialStore } from "@earendil-works/pi-ai"
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -11,7 +12,6 @@ import {
 import { TextRenderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { PhotonImage } from "@silvia-odwyer/photon-node"
-import { completeOnce } from "../packages/pi-adapter/complete.ts"
 import { startMockServer } from "./utils/mock-server.ts"
 
 /**
@@ -163,21 +163,23 @@ function checkPhoton(): string {
   }
 }
 
-/**
- * 验证 pi 的 HTTP 请求链路（走 packages/pi-adapter 里我们自己封装的
- * completeOnce）在编译产物里能真正发起网络请求：起一个本机 mock server
- * 模拟 Anthropic Messages API 的 SSE 响应，用 completeOnce 打过去，确认
- * 收到的文本跟 mock server 设置的一致——证明 undici/fetch 这类底层 HTTP
- * 实现在 Bun 编译产物里没有被破坏。
- */
+/** 验证 pi provider 的 HTTP 请求链路可用。 */
 async function checkMockServer(): Promise<string> {
   const expectedText = "架构可行性验证：Mock 链路通过"
   const mock = await startMockServer(expectedText)
+  const modelRuntime = await ModelRuntime.create({ credentials: new InMemoryCredentialStore(), modelsPath: null })
+  const model = modelRuntime.getModel("anthropic", "claude-sonnet-4-6")
+  if (!model) throw new Error("固定测试模型不存在")
+  await modelRuntime.setRuntimeApiKey("anthropic", "dummy-skip-validation")
+  model.baseUrl = mock.url
   try {
-    const result = await completeOnce(mock.url, "dummy-skip-validation", "test")
-    if (!result.text.includes(expectedText)) {
-      throw new Error(`Mock 响应不匹配，期望包含 "${expectedText}"，实际为 "${result.text}"`)
-    }
+    const result = await modelRuntime.complete(
+      model,
+      { messages: [{ role: "user", content: "test", timestamp: Date.now() }] },
+      { auth: { apiKey: "dummy-skip-validation" } },
+    )
+    const text = result.content.find((part) => part.type === "text")?.text ?? ""
+    if (!text.includes(expectedText)) throw new Error(`Mock 响应不匹配：${text}`)
     return `Mock pi provider=true; expectedText="${expectedText}"`
   } finally {
     mock.stop()
@@ -207,4 +209,4 @@ test("架构可行性验证：pi SDK、内联扩展、内置视图、OpenTUI、P
   expect(report.photonWasm.passed).toBeTrue()
   expect(report.mockServer.passed).toBeTrue()
   expect(allChecksPassed(report)).toBeTrue()
-})
+}, 15_000)

@@ -1,6 +1,6 @@
 import { mkdir, open, readdir, readFile, rm, stat } from "node:fs/promises"
-import { join } from "node:path"
-import { WordTripletIdGenerator, type MnemonicIdGenerator } from "./mnemonic-id.ts"
+import { basename, join } from "node:path"
+import { type MnemonicIdGenerator, WordTripletIdGenerator } from "./mnemonic-id.ts"
 import {
   parseSessionValue,
   type SessionHeader,
@@ -8,6 +8,7 @@ import {
   type SessionRecord,
   type TurnStartedRecord,
 } from "./session-format.ts"
+import { type SessionIndexEntry, SessionIndexStore } from "./session-index-store.ts"
 
 export type SessionSummary = {
   sessionId: string
@@ -36,10 +37,15 @@ export class SessionStore {
   readonly root: string
   readonly #queues = new Map<string, Promise<void>>()
   readonly #idGenerator: MnemonicIdGenerator
+  readonly #index: SessionIndexStore | undefined
+  readonly #projectKey: string
+  #warnings: string[] = []
 
-  constructor(root: string, options: { idGenerator?: MnemonicIdGenerator } = {}) {
+  constructor(root: string, options: { idGenerator?: MnemonicIdGenerator; indexPath?: string } = {}) {
     this.root = root
     this.#idGenerator = options.idGenerator ?? new WordTripletIdGenerator()
+    this.#index = options.indexPath ? new SessionIndexStore(options.indexPath) : undefined
+    this.#projectKey = basename(root)
   }
 
   sessionFile(sessionId: string): string {
@@ -131,25 +137,50 @@ export class SessionStore {
 
   async list(): Promise<SessionSummary[]> {
     await mkdir(this.root, { recursive: true })
-    const entries = await readdir(this.root, { withFileTypes: true })
+    const previous = (await this.#index?.readProject(this.#projectKey)) ?? {}
+    const current: Record<string, SessionIndexEntry> = {}
     const summaries: SessionSummary[] = []
+    const entries = await readdir(this.root, { withFileTypes: true })
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue
       const sessionId = entry.name.slice(0, -".jsonl".length)
-      const loaded = await this.read(sessionId)
       const fileStatus = await stat(this.sessionFile(sessionId))
+      const cached = previous[sessionId]
+      const unchanged =
+        cached?.size === fileStatus.size &&
+        cached.birthtimeMs === fileStatus.birthtimeMs &&
+        cached.mtimeMs === fileStatus.mtimeMs
+      if (unchanged && cached) {
+        current[sessionId] = cached
+        summaries.push(cached.summary)
+        continue
+      }
+      const loaded = await this.read(sessionId)
       const firstTurn = loaded.records.find((record): record is TurnStartedRecord => record.kind === "turn_started")
       const renamed = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
-      summaries.push({
+      const summary: SessionSummary = {
         sessionId: loaded.header.sessionId,
         name: renamed?.kind === "session_renamed" ? renamed.name : "",
         cwd: loaded.header.cwd,
         createdAt: loaded.header.createdAt,
         updatedAt: fileStatus.mtime.toISOString(),
         preview: firstTurn ? (firstText(firstTurn) ?? "新会话") : "新会话",
-      })
+      }
+      current[sessionId] = {
+        size: fileStatus.size,
+        birthtimeMs: fileStatus.birthtimeMs,
+        mtimeMs: fileStatus.mtimeMs,
+        summary,
+      }
+      summaries.push(summary)
     }
+    this.#warnings = this.#index ? await this.#index.updateProject(this.#projectKey, current) : []
     return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+  }
+
+  /** 取出最近一次列表操作产生的非阻断警告。 */
+  takeWarnings(): string[] {
+    return this.#warnings.splice(0)
   }
 
   async flush(): Promise<void> {

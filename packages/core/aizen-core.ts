@@ -1,4 +1,5 @@
-import { defaultAppPreferences, type AppPreferencesStore, parseAppPreferences } from "./app-preferences-store.ts"
+import { type AppPreferencesStore, defaultAppPreferences, parseAppPreferences } from "./app-preferences-store.ts"
+import { CoreErrorQueue } from "./error-queue.ts"
 import type { ModelConfigStore } from "./model-config-store.ts"
 import type { PiPort, PiPortEvent } from "./pi-port.ts"
 import type {
@@ -11,7 +12,6 @@ import type {
   ViewId,
 } from "./session-format.ts"
 import type { SessionStore } from "./session-store.ts"
-import type { ViewStore } from "./view-store.ts"
 import {
   type CoreCommand,
   type CoreCommandResult,
@@ -20,6 +20,7 @@ import {
   type CoreSnapshot,
   recordsToTranscript,
 } from "./types.ts"
+import type { ViewStore } from "./view-store.ts"
 
 export type ExtraMessageProvider = (input: {
   cwd: string
@@ -44,7 +45,7 @@ function sessionModel(model: ModelReference): ModelReference {
     providerId: model.providerId,
     modelId: model.modelId,
     api: model.api,
-    thinkingLevel: model.thinkingLevel,
+    ...(model.thinkingLevel === undefined ? {} : { thinkingLevel: model.thinkingLevel }),
   }
 }
 
@@ -61,9 +62,10 @@ export class AizenCore implements CorePort {
   #snapshot: CoreSnapshot
   #records: SessionRecord[] = []
   #writeQueue = Promise.resolve()
+  #writeError: Error | undefined
+  readonly #errors = new CoreErrorQueue()
   #currentTurnId: string | undefined
   #responseTimer: ReturnType<typeof setInterval> | undefined
-  #runtimeRecords = new Map<string, string>()
   #abortRequested = false
   #runtimeReady = false
   #preferencesLoaded = false
@@ -106,7 +108,7 @@ export class AizenCore implements CorePort {
     if (this.#disposed)
       return { ok: false, error: { code: "CORE_DISPOSED", message: "核心已经关闭", severity: "fatal" } }
     try {
-      delete this.#snapshot.lastError
+      this.#clearError()
       if (
         command.type !== "abort" &&
         command.type !== "answer_auth_prompt" &&
@@ -127,6 +129,7 @@ export class AizenCore implements CorePort {
         }
         case "list_sessions":
           this.#snapshot.sessions = await this.#store.list()
+          this.#reportStoreWarnings()
           break
         case "list_views":
           if (!this.#views) throw new Error("未配置视图存储")
@@ -253,7 +256,7 @@ export class AizenCore implements CorePort {
       return { ok: true }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      this.#snapshot.lastError = message
+      this.#reportError(message)
       if (this.#snapshot.status !== "running" && this.#snapshot.status !== "aborting") this.#snapshot.status = "idle"
       this.#notify()
       return { ok: false, error: { code: "COMMAND_FAILED", message, severity: "error" } }
@@ -263,13 +266,30 @@ export class AizenCore implements CorePort {
   async dispose(): Promise<void> {
     if (this.#disposed) return
     this.#disposed = true
-    if (this.#snapshot.status === "running" || this.#snapshot.status === "aborting") await this.#pi.abort()
-    this.#stopResponseTimer()
-    await this.#writeQueue
-    await this.#store.flush()
-    this.#unsubscribePi()
-    await this.#pi.dispose()
-    this.#listeners.clear()
+    let failure: unknown
+    try {
+      if (this.#snapshot.status === "running" || this.#snapshot.status === "aborting") await this.#pi.abort()
+    } catch (error) {
+      failure = error
+    } finally {
+      this.#stopResponseTimer()
+      try {
+        await this.#writeQueue
+        await this.#store.flush()
+      } catch (error) {
+        failure ??= error
+      } finally {
+        this.#unsubscribePi()
+        try {
+          await this.#pi.dispose()
+        } catch (error) {
+          failure ??= error
+        } finally {
+          this.#listeners.clear()
+        }
+      }
+    }
+    if (failure !== undefined) throw failure
   }
 
   async #readPreferences() {
@@ -325,7 +345,7 @@ export class AizenCore implements CorePort {
     ]
     for (const record of records) await this.#store.append(sessionId, record)
     this.#records = records
-    this.#runtimeRecords.clear()
+    this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
     this.#snapshot.currentSessionName = ""
     this.#runtimeReady = true
@@ -337,8 +357,9 @@ export class AizenCore implements CorePort {
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
-    delete this.#snapshot.lastError
+    this.#clearError()
     this.#snapshot.sessions = await this.#store.list()
+    this.#reportStoreWarnings()
     await this.#rememberSessionDefaults(actualModel, viewId)
   }
 
@@ -351,7 +372,7 @@ export class AizenCore implements CorePort {
     if (viewRecord?.kind !== "view_changed") throw new Error("会话没有视图记录")
     const view = await this.#resolveView(viewRecord.viewId).catch((error) => {
       this.#runtimeReady = false
-      this.#snapshot.lastError = error instanceof Error ? error.message : String(error)
+      this.#reportError(error instanceof Error ? error.message : String(error))
       return undefined
     })
     const actualModel = view
@@ -364,7 +385,7 @@ export class AizenCore implements CorePort {
       : modelRecord.model
     this.#runtimeReady = view !== undefined
     this.#records = loaded.records
-    this.#runtimeRecords = new Map(loaded.records.map((record) => [record.recordId, record.recordId]))
+    this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
     const renamedRecord = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
     this.#snapshot.currentSessionName = renamedRecord?.kind === "session_renamed" ? renamedRecord.name : ""
@@ -375,8 +396,8 @@ export class AizenCore implements CorePort {
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
-    if (loaded.warnings.length > 0) this.#snapshot.lastError = loaded.warnings.join("；")
-    else if (this.#runtimeReady) delete this.#snapshot.lastError
+    if (loaded.warnings.length > 0) this.#reportError(loaded.warnings.join("；"))
+    else if (this.#runtimeReady) this.#clearError()
     await this.#rememberSessionDefaults(actualModel, viewRecord.viewId)
   }
 
@@ -396,6 +417,7 @@ export class AizenCore implements CorePort {
       this.#snapshot.currentSessionName = normalizedName
     }
     this.#snapshot.sessions = await this.#store.list()
+    this.#reportStoreWarnings()
   }
 
   async #sendPrompt(text: string): Promise<void> {
@@ -403,6 +425,7 @@ export class AizenCore implements CorePort {
     const viewId = this.#snapshot.currentViewId
     if (!sessionId || viewId === undefined) throw new Error("请先新建或恢复会话")
     if (!text.trim()) throw new Error("消息不能为空")
+    if (this.#writeError) throw new Error(`会话持久化异常，请重新打开会话：${this.#writeError.message}`)
     if (!this.#runtimeReady) throw new Error("当前视图已失效，请先使用 /view 切换视图")
     const view = await this.#resolveView(viewId)
     await this.#pi.refreshView(view)
@@ -422,7 +445,6 @@ export class AizenCore implements CorePort {
     }
     await this.#store.append(sessionId, started)
     this.#records.push(started)
-    this.#runtimeRecords.set(started.recordId, started.recordId)
     this.#currentTurnId = turnId
     this.#snapshot.transcript.push({ type: "input", turnId, items: started.items })
     this.#snapshot.status = "running"
@@ -444,6 +466,7 @@ export class AizenCore implements CorePort {
     }
     try {
       await this.#writeQueue
+      if (this.#writeError) throw this.#writeError
       const lastMessage = [...this.#records]
         .reverse()
         .find((record) => record.kind === "message" && record.turnId === turnId)
@@ -465,10 +488,16 @@ export class AizenCore implements CorePort {
         outcome,
         ...(error ? { error } : {}),
       }
-      await this.#store.append(sessionId, finished)
+      try {
+        await this.#store.append(sessionId, finished)
+      } catch (caught) {
+        const actual = caught instanceof Error ? caught : new Error(String(caught))
+        this.#markWriteFailure(actual)
+        throw actual
+      }
       this.#records.push(finished)
       this.#snapshot.transcript.push({ type: "turn_end", turnId, outcome })
-      if (error) this.#snapshot.lastError = error.message
+      if (error) this.#reportError(error.message)
     } finally {
       this.#snapshot.status = "idle"
       this.#stopResponseTimer()
@@ -564,17 +593,13 @@ export class AizenCore implements CorePort {
     if (event.type === "message" && this.#currentTurnId && this.#snapshot.currentSessionId) {
       const record: SessionRecord = {
         kind: "message",
-        recordId: crypto.randomUUID(),
+        recordId: event.recordId,
         turnId: this.#currentTurnId,
         at: new Date().toISOString(),
         message: event.record,
       }
-      this.#runtimeRecords.set(event.runtimeRef, record.recordId)
       const sessionId = this.#snapshot.currentSessionId
-      this.#writeQueue = this.#writeQueue.then(async () => {
-        await this.#store.append(sessionId, record)
-        this.#records.push(record)
-      })
+      this.#enqueueRecord(sessionId, record)
       this.#snapshot.transcript.push({ type: "message", turnId: this.#currentTurnId, message: event.record })
       if (event.record.role === "assistant") {
         this.#snapshot.contextUsage = this.#contextUsageFromAssistant(event.record)
@@ -582,27 +607,57 @@ export class AizenCore implements CorePort {
       }
     }
     if (event.type === "compaction" && this.#snapshot.currentSessionId) {
-      const firstKeptRecordId = this.#runtimeRecords.get(event.firstKeptRuntimeRef)
-      if (!firstKeptRecordId) {
-        this.#snapshot.lastError = "无法保存上下文压缩：找不到保留位置"
-        this.#notify()
-        return
-      }
       const record: SessionRecord = {
         kind: "compaction",
         recordId: crypto.randomUUID(),
         at: new Date().toISOString(),
         summary: event.summary,
-        firstKeptRecordId,
+        firstKeptRecordId: event.firstKeptRecordId,
         tokensBefore: event.tokensBefore,
       }
       const sessionId = this.#snapshot.currentSessionId
-      this.#writeQueue = this.#writeQueue.then(async () => {
-        await this.#store.append(sessionId, record)
-        this.#records.push(record)
-      })
+      this.#enqueueRecord(sessionId, record)
     }
     this.#notify()
+  }
+
+  #enqueueRecord(sessionId: string, record: SessionRecord): void {
+    const operation = this.#writeQueue.then(async () => {
+      if (this.#writeError) return
+      await this.#store.append(sessionId, record)
+      this.#records.push(record)
+    })
+    this.#writeQueue = operation.catch((error) => {
+      const actual = error instanceof Error ? error : new Error(String(error))
+      this.#markWriteFailure(actual)
+      this.#notify()
+    })
+  }
+
+  #reportStoreWarnings(): void {
+    const warnings = this.#store.takeWarnings()
+    if (warnings.length > 0) this.#reportError(warnings.join("；"))
+  }
+
+  #markWriteFailure(error: Error): void {
+    this.#writeError = error
+    this.#reportError(`保存会话失败：${error.message}`)
+  }
+
+  #reportError(message: string): void {
+    this.#errors.report(message)
+    this.#syncVisibleError()
+  }
+
+  #clearError(): void {
+    this.#errors.clearVisible()
+    this.#syncVisibleError()
+  }
+
+  #syncVisibleError(): void {
+    const visible = this.#errors.visible()
+    if (visible) this.#snapshot.lastError = visible.message
+    else delete this.#snapshot.lastError
   }
 
   #contextUsageFromAssistant(message: AssistantMessage) {

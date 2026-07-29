@@ -28,7 +28,6 @@ const provider = {
 const model = {
   id: "model-a",
   name: "模型 A",
-  reasoning: false,
   input: ["text", "image"] as const,
   contextWindow: 128000,
   maxTokens: 16000,
@@ -53,6 +52,85 @@ describe("模型配置存储", () => {
     expect(JSON.parse(await readFile(path, "utf8"))).toMatchObject({
       providers: { company: { models: [{ id: "model-a" }] } },
     })
+  })
+
+  test("保存模型自身思考档位并限制六个开启档位", async () => {
+    const { path, store } = await makeStore()
+    let snapshot = await store.read()
+    await store.upsertProvider(snapshot.revision, provider)
+    snapshot = await store.read()
+    await store.upsertModel(snapshot.revision, provider.id, {
+      ...model,
+      input: [...model.input],
+      thinking: {
+        disableThinkingLevel: "关闭",
+        thinkingLevels: ["A", "B", "C"],
+        defaultThinkingLevel: "B",
+      },
+    })
+
+    const saved = JSON.parse(await readFile(path, "utf8"))
+    expect(saved.providers.company.models[0]).toMatchObject({
+      disableThinkingLevel: "关闭",
+      thinkingLevels: ["A", "B", "C"],
+      defaultThinkingLevel: "B",
+    })
+    expect((await store.read()).providers[0]?.models[0]?.thinking).toEqual({
+      disableThinkingLevel: "关闭",
+      thinkingLevels: ["A", "B", "C"],
+      defaultThinkingLevel: "B",
+    })
+
+    snapshot = await store.read()
+    await expect(
+      store.upsertModel(snapshot.revision, provider.id, {
+        ...model,
+        input: [...model.input],
+        thinking: {
+          thinkingLevels: ["A", "B", "C", "D", "E", "F", "G"],
+          defaultThinkingLevel: "A",
+        },
+      }),
+    ).rejects.toThrow("最多支持六个档位")
+  })
+
+  test("忽略废弃字段并严格校验Aizen思考字段", async () => {
+    const { store } = await makeStore({
+      providers: {
+        company: {
+          ...provider,
+          models: [
+            {
+              ...model,
+              reasoning: true,
+              thinkingLevelMap: { low: "旧档位" },
+              aizenThinkingDefault: "旧档位",
+            },
+          ],
+        },
+      },
+    })
+    expect((await store.read()).providers[0]?.models[0]?.thinking).toBeUndefined()
+
+    const snapshot = await store.read()
+    await expect(
+      store.upsertModel(snapshot.revision, provider.id, {
+        ...model,
+        input: [...model.input],
+        thinking: {
+          disableThinkingLevel: " A ",
+          thinkingLevels: ["A"],
+          defaultThinkingLevel: "A",
+        },
+      }),
+    ).rejects.toThrow("不能重复")
+    await expect(
+      store.upsertModel(snapshot.revision, provider.id, {
+        ...model,
+        input: [...model.input],
+        thinking: { thinkingLevels: ["A\nB"], defaultThinkingLevel: "A\nB" },
+      }),
+    ).rejects.toThrow("控制字符")
   })
 
   test("创建模式拒绝重复 ID", async () => {
