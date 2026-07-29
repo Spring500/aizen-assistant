@@ -37,8 +37,9 @@ test("可编辑菜单在当前选项内编辑并保留页面", async () => {
     await Bun.sleep(1)
     await setup.renderOnce()
     const editingFrame = setup.captureCharFrame()
-    expect(editingFrame).toContain("名称  ac")
+    expect(editingFrame).toContain("▶ 名称  ac")
     expect(editingFrame).toContain("保存")
+    expect(editingFrame).not.toContain("名称  acac")
     expect(editingFrame).toContain("编辑表单")
     expect(setup.renderer.root.getRenderable("editable-menu-overlay")).toBeDefined()
 
@@ -51,6 +52,81 @@ test("可编辑菜单在当前选项内编辑并保留页面", async () => {
     setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
     setup.renderer.keyInput.emit("keypress", key("\r"))
     expect(await pending).toBe("save")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("可编辑菜单滚动后仍在选中行值区域编辑", async () => {
+  const setup = await createTestRenderer({ width: 52, height: 12 })
+  let value = "old"
+  try {
+    const pending = selectEditableItem(
+      setup.renderer,
+      "scroll-editable-menu",
+      () =>
+        Array.from({ length: 14 }, (_, index) => ({
+          name: `字段 ${String(index).padStart(2, "0")}       ${index === 13 ? value : `值 ${index}`}`,
+          description: `第 ${index + 1} 项`,
+          value: index,
+          ...(index === 13
+            ? {
+                edit: {
+                  label: "字段 13       ",
+                  value,
+                  save: (next: string) => {
+                    value = next
+                  },
+                },
+              }
+            : {}),
+        })),
+      { title: "滚动编辑" },
+    )
+    for (let index = 0; index < 13; index += 1) setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
+    setup.renderer.keyInput.emit("keypress", key("\r"))
+    await Bun.sleep(1)
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("▶ 字段 13       old")
+    expect(frame).not.toContain("oldold")
+    setup.renderer.keyInput.emit("keypress", key("\x1b"))
+    await Bun.sleep(1)
+    setup.renderer.keyInput.emit("keypress", key("\x1b"))
+    expect(await pending).toBeUndefined()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("可编辑菜单 resize 后保持当前行缩进与输入对齐", async () => {
+  const setup = await createTestRenderer({ width: 60, height: 14 })
+  try {
+    const pending = selectEditableItem(
+      setup.renderer,
+      "resize-editable-menu",
+      () => [
+        {
+          name: "显示名称        测试名称",
+          description: "调整终端宽度",
+          value: "name",
+          edit: { label: "显示名称        ", value: "测试名称" },
+        },
+        { name: "保存", description: "保持可见", value: "save" },
+      ],
+      { title: "resize 编辑" },
+    )
+    setup.renderer.keyInput.emit("keypress", key("\r"))
+    setup.renderer.resize(34, 10)
+    await Bun.sleep(20)
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("▶ 显示名称        测试名称")
+    expect(frame).toContain("保存")
+    setup.renderer.keyInput.emit("keypress", key("\x1b"))
+    await Bun.sleep(1)
+    setup.renderer.keyInput.emit("keypress", key("\x1b"))
+    expect(await pending).toBeUndefined()
   } finally {
     setup.renderer.destroy()
   }
