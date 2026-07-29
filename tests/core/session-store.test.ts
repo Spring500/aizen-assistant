@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { appendFile, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { MnemonicIdGenerator } from "../../packages/core/mnemonic-id.ts"
+import { sessionFileName } from "../../packages/core/session-file-name.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 
 const temporaryDirectories: string[] = []
@@ -26,8 +27,9 @@ afterEach(async () => {
 describe("会话存储", () => {
   test("排他新建并按调用顺序追加", async () => {
     const { root, store } = await makeStore()
-    const header = await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" })
-    expect(await readdir(root)).toEqual(["s1.jsonl"])
+    const createdAt = "2026-07-23T10:00:00.000Z"
+    const header = await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt })
+    expect(await readdir(root)).toEqual([sessionFileName(createdAt, "s1")])
     await expect(
       store.create({ sessionId: "s1", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" }),
     ).rejects.toThrow()
@@ -69,6 +71,34 @@ describe("会话存储", () => {
     })
 
     expect(await store.suggestId()).toBe("otter-builds-bridge")
+  })
+
+  test("文件名不参与会话识别，外部改名后仍可读取和追加", async () => {
+    const { root, store } = await makeStore()
+    const createdAt = "2026-07-23T10:00:00.000Z"
+    await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt })
+    await rename(join(root, sessionFileName(createdAt, "s1")), join(root, "用户任意命名.jsonl"))
+
+    const reopened = new SessionStore(root)
+    expect((await reopened.list())[0]?.sessionId).toBe("s1")
+    await reopened.append("s1", {
+      kind: "session_renamed",
+      recordId: "r1",
+      at: "2026-07-23T10:01:00.000Z",
+      name: "外部改名后",
+    })
+    expect((await reopened.read("s1")).records).toHaveLength(1)
+  })
+
+  test("重复会话 ID 会明确报错", async () => {
+    const { root, store } = await makeStore()
+    const createdAt = "2026-07-23T10:00:00.000Z"
+    await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt })
+    await writeFile(
+      join(root, "复制文件.jsonl"),
+      `${JSON.stringify({ kind: "session", version: 1, sessionId: "s1", cwd: "E:\\project", createdAt })}\n`,
+    )
+    await expect(store.list()).rejects.toThrow("重复的会话 ID")
   })
 
   test("列表读取名称和第一条用户输入并按更新时间倒序", async () => {
@@ -125,7 +155,7 @@ describe("会话存储", () => {
     await store.append("s1", { kind: "session_renamed", recordId: "r2", at: new Date().toISOString(), name: "新名称" })
     expect((await store.list())[0]?.name).toBe("新名称")
 
-    await rm(join(root, "s1.jsonl"))
+    await rm(join(root, sessionFileName("2026-07-23T10:00:00.000Z", "s1")))
     expect(await store.list()).toEqual([])
     const repaired = JSON.parse(await readFile(indexPath, "utf8"))
     expect(Object.values(repaired.projects)[0]).toEqual({})
@@ -133,8 +163,9 @@ describe("会话存储", () => {
 
   test("忽略损坏尾行并拒绝损坏中间行", async () => {
     const { root, store } = await makeStore()
-    await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" })
-    const file = join(root, "s1.jsonl")
+    const createdAt = "2026-07-23T10:00:00.000Z"
+    await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt })
+    const file = join(root, sessionFileName(createdAt, "s1"))
     await appendFile(file, '{"kind":"turn_started"')
     const tailDamaged = await store.read("s1")
     expect(tailDamaged.warnings).toHaveLength(1)
