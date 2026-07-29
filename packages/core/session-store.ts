@@ -110,7 +110,10 @@ export class SessionStore {
       const path = await this.#sessionPath(sessionId)
       await withFileLock(path, async () => {
         const loaded = await this.#readPath(path)
-        if (JSON.stringify(loaded.records) !== JSON.stringify(expectedRecords))
+        if (
+          loaded.records.length !== expectedRecords.length ||
+          loaded.records.some((record, index) => record.recordId !== expectedRecords[index]?.recordId)
+        )
           throw new Error("会话已被其他程序修改，请重新打开后再试")
         await atomicWriteFile(path, serializeSession(loaded.header, records))
       })

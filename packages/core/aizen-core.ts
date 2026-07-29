@@ -194,6 +194,12 @@ export class AizenCore implements CorePort {
         case "rename_session":
           await this.#renameSession(command.sessionId, command.name)
           break
+        case "rewind":
+          await this.#rewind(command.turnId)
+          break
+        case "fork_session":
+          await this.#forkSession(command.turnId)
+          break
         case "send_prompt":
           await this.#sendPrompt(command.text)
           break
@@ -399,6 +405,85 @@ export class AizenCore implements CorePort {
     if (loaded.warnings.length > 0) this.#reportError(loaded.warnings.join("；"))
     else if (this.#runtimeReady) this.#clearError()
     await this.#rememberSessionDefaults(actualModel, viewRecord.viewId)
+  }
+
+  async #activateRecords(
+    sessionId: string,
+    records: SessionRecord[],
+    name: string,
+  ): Promise<void> {
+    const modelRecord = [...records].reverse().find((record) => record.kind === "model_changed")
+    const viewRecord = [...records].reverse().find((record) => record.kind === "view_changed")
+    if (modelRecord?.kind !== "model_changed") throw new Error("会话没有模型记录")
+    if (viewRecord?.kind !== "view_changed") throw new Error("会话没有视图记录")
+    const view = await this.#resolveView(viewRecord.viewId)
+    const actualModel = await this.#pi.restore({ cwd: this.#cwd, model: modelRecord.model, view, records })
+    this.#records = records
+    this.#writeError = undefined
+    this.#snapshot.currentSessionId = sessionId
+    this.#snapshot.currentSessionName = name
+    this.#snapshot.currentModel = actualModel
+    this.#snapshot.currentViewId = viewRecord.viewId
+    this.#snapshot.transcript = recordsToTranscript(records)
+    this.#snapshot.streamingText = ""
+    this.#snapshot.streamingThinking = ""
+    delete this.#snapshot.responseMetrics
+    this.#snapshot.contextUsage = this.#contextUsageFromRecords()
+    this.#runtimeReady = true
+    this.#clearError()
+    await this.#rememberSessionDefaults(actualModel, viewRecord.viewId)
+  }
+
+  #turnStartIndex(turnId: string): number {
+    const index = this.#records.findIndex((record) => record.kind === "turn_started" && record.turnId === turnId)
+    if (index < 0) throw new Error("找不到所选对话轮次")
+    const finished = this.#records.some(
+      (record) => record.kind === "turn_finished" && record.turnId === turnId,
+    )
+    if (!finished) throw new Error("只能选择已完成的对话轮次")
+    return index
+  }
+
+  #recordsBeforeTurn(turnId: string, name: string): SessionRecord[] {
+    const model = this.#snapshot.currentModel
+    const viewId = this.#snapshot.currentViewId
+    if (!model || viewId === undefined) throw new Error("当前会话设置不完整")
+    const at = new Date().toISOString()
+    return [
+      ...structuredClone(this.#records.slice(0, this.#turnStartIndex(turnId))),
+      { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(model) },
+      { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
+      { kind: "session_renamed", recordId: crypto.randomUUID(), at, name },
+    ]
+  }
+
+  async #rewind(turnId: string): Promise<void> {
+    const sessionId = this.#snapshot.currentSessionId
+    if (!sessionId) throw new Error("请先新建或恢复会话")
+    await this.#writeQueue
+    if (this.#writeError) throw this.#writeError
+    const name = this.#snapshot.currentSessionName ?? ""
+    const records = this.#recordsBeforeTurn(turnId, name)
+    await this.#store.rewrite(sessionId, this.#records, records)
+    await this.#activateRecords(sessionId, records, name)
+    this.#snapshot.sessions = await this.#store.list()
+    this.#reportStoreWarnings()
+  }
+
+  async #forkSession(turnId: string): Promise<void> {
+    const sourceSessionId = this.#snapshot.currentSessionId
+    if (!sourceSessionId) throw new Error("请先新建或恢复会话")
+    await this.#writeQueue
+    if (this.#writeError) throw this.#writeError
+    const sessionId = await this.#store.suggestId()
+    const at = new Date().toISOString()
+    const sourceName = this.#snapshot.currentSessionName || sourceSessionId
+    const name = `${sourceName}_副本`
+    const records = this.#recordsBeforeTurn(turnId, name)
+    await this.#store.createWithRecords({ sessionId, cwd: this.#cwd, createdAt: at }, records)
+    await this.#activateRecords(sessionId, records, name)
+    this.#snapshot.sessions = await this.#store.list()
+    this.#reportStoreWarnings()
   }
 
   async #renameSession(sessionId: string, name: string): Promise<void> {
