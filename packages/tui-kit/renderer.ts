@@ -14,7 +14,11 @@ export async function createAizenRenderer(): Promise<CliRenderer> {
 }
 
 function safeTerminalTitle(title: string): string {
-  return Array.from(title.replace(/[\u0000-\u001f\u007f-\u009f]/g, " "))
+  return Array.from(title)
+    .filter((character) => {
+      const codePoint = character.codePointAt(0) ?? 0
+      return codePoint > 31 && (codePoint < 127 || codePoint > 159)
+    })
     .slice(0, 120)
     .join("")
     .trim()
