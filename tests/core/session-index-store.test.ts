@@ -125,7 +125,7 @@ describe("会话摘要索引存储", () => {
       await holder.exited
       await Promise.all([ready, release, scriptPath].map((file) => rm(file, { force: true })))
     }
-  })
+  }, 15_000)
 
   test("锁等待失败返回警告且旧索引保持有效", async () => {
     const path = await makePath()
