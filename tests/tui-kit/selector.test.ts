@@ -137,7 +137,7 @@ test("split-footer 中选择器临时扩大显示区域并在退出后恢复", a
       })),
       { title: "选择会话" },
     )
-    expect(setup.renderer.footerHeight).toBe(18)
+    expect(setup.renderer.footerHeight).toBe(20)
     await setup.renderOnce()
     const frame = setup.captureCharFrame()
     expect(frame).toContain("会话 1")
