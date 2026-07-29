@@ -23,9 +23,11 @@ export type ChatEditor = {
   input: TextareaRenderable
   status: TextRenderable
   shortcuts: TextRenderable
+  error: TextRenderable
   setSessionTitle(session: { name: string; sessionId: string } | undefined): void
   setStatus(content: string): void
   setShortcuts(content: string): void
+  setError(content: string): void
   setBusy(busy: boolean): void
   setInputVisible(visible: boolean): void
   destroy(): void
@@ -125,7 +127,7 @@ export function createChatEditor(
     input.height = nextHeight
     topSeparator.content = titledSeparator(renderer.terminalWidth, sessionTitle)
     bottomSeparator.content = "─".repeat(Math.max(1, renderer.terminalWidth))
-    manager.setBaseFooterHeight(chatViewHeight + (inputVisible ? nextHeight + 2 : 0) + 2)
+    manager.setBaseFooterHeight(chatViewHeight + (inputVisible ? nextHeight + 2 : 0) + 3)
   }
   input = new TextareaRenderable(renderer, {
     id: "editor",
@@ -177,7 +179,17 @@ export function createChatEditor(
   renderer.root.add(input)
   renderer.root.add(bottomSeparator)
   renderer.root.add(status)
+  const error = new TextRenderable(renderer, {
+    id: "editor-error",
+    width: "100%",
+    height: 1,
+    wrapMode: "none",
+    truncate: true,
+    fg: systemColors.statusError,
+    content: "",
+  })
   renderer.root.add(shortcuts)
+  renderer.root.add(error)
   input.focus()
   updateLayout()
 
@@ -193,6 +205,7 @@ export function createChatEditor(
     input,
     status,
     shortcuts,
+    error,
     setSessionTitle(value) {
       sessionTitle = value
       updateLayout()
@@ -202,6 +215,9 @@ export function createChatEditor(
     },
     setShortcuts(content) {
       shortcuts.content = content
+    },
+    setError(content) {
+      error.content = content
     },
     setBusy(value) {
       busy = value
@@ -225,6 +241,7 @@ export function createChatEditor(
       bottomSeparator.destroy()
       status.destroy()
       shortcuts.destroy()
+      error.destroy()
     },
   }
 }

@@ -162,6 +162,7 @@ function shortcutContent(actions: OverlayAction[], fallback: string): string | S
 export class OverlayManager {
   private readonly stack: OverlayLayer[] = []
   private baseFooterHeight: number
+  private pendingError = ""
   private disposed = false
 
   constructor(
@@ -181,6 +182,22 @@ export class OverlayManager {
 
   setCtrlCHandler(handler: () => void): void {
     this.onCtrlC = handler
+  }
+
+  /** 将错误写入当前页面的错误说明行。 */
+  setCurrentError(error: string): boolean {
+    if (this.stack.length === 0) {
+      this.pendingError = error
+      return true
+    }
+    for (const layer of this.stack) layer.error.content = error
+    return true
+  }
+
+  /** 清除当前页面的错误说明。 */
+  clearCurrentError(): void {
+    const layer = this.stack.at(-1)
+    if (layer) layer.error.content = ""
   }
 
   setBaseFooterHeight(height: number): void {
@@ -243,7 +260,7 @@ export class OverlayManager {
       wrapMode: "none",
       truncate: true,
       fg: systemColors.statusError,
-      content: options.error ?? "",
+      content: options.error ?? this.pendingError,
     })
     container.add(title)
     container.add(content)
@@ -273,6 +290,7 @@ export class OverlayManager {
       ...(options.signal ? { externalSignal: options.signal } : {}),
     }
     this.stack.push(layer)
+    this.pendingError = ""
     if (options.signal) {
       layer.externalAbort = () => this.closeLayer(layer, true)
       if (options.signal.aborted) queueMicrotask(layer.externalAbort)

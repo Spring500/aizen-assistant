@@ -1,11 +1,4 @@
 import { join } from "node:path"
-import {
-  type CliRenderer,
-  SelectRenderable,
-  SelectRenderableEvents,
-  TextareaRenderable,
-  TextRenderable,
-} from "@opentui/core"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import type {
@@ -14,7 +7,6 @@ import type {
   EditableProviderConfig,
   ModelConfigEntry,
   ModelCostConfig,
-  ModelThinkingConfig,
   ProviderConfigEntry,
 } from "../../packages/core/model-config-store.ts"
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
@@ -25,14 +17,16 @@ import { ViewStore } from "../../packages/core/view-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
+import { selectEditableItem } from "../../packages/tui-kit/editable-selector.ts"
 import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
 import { selectMultiple } from "../../packages/tui-kit/multi-select.ts"
 import { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
 import { promptLine } from "../../packages/tui-kit/prompt.ts"
-import { createAizenRenderer, destroyRenderer } from "../../packages/tui-kit/renderer.ts"
+import { createAizenRenderer, destroyRenderer, type TuiRenderer } from "../../packages/tui-kit/renderer.ts"
 import { selectRichItem } from "../../packages/tui-kit/rich-selector.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
 import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
+import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-editor.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
 
 import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
@@ -46,7 +40,7 @@ const manageViewsValue = ":manage-views"
 export type InteractiveAppOptions = {
   cwd: string
   dataDirectory: string
-  testing?: { renderer: CliRenderer; core: CorePort }
+  testing?: { renderer: TuiRenderer; core: CorePort }
 }
 
 const authPromptLabels: Record<string, string> = {
@@ -105,10 +99,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   overlays.setCtrlCHandler(quit)
   const showError = async (title: string, error: string) => {
     if (exiting) return
-    await selectItem(overlays, `error-${crypto.randomUUID()}`, [{ name: "返回", description: error, value: true }], {
-      title,
-      signal: interactionController.signal,
-    })
+    if (overlays.depth > 0) overlays.setCurrentError(`${title}：${error}`)
+    else {
+      overlays.setCurrentError(`${title}：${error}`)
+      editor.setError(`${title}：${error}`)
+    }
   }
   const actions = new ActionQueue(showError)
   const runAction = (operation: () => Promise<unknown>) => actions.run(operation)
@@ -300,12 +295,38 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   async function manageView(viewId: string) {
     const viewItem = core.getSnapshot().views.find((item) => item.id === viewId)
     if (!viewItem) return
-    const action = await selectItem(
+    const action = await selectEditableItem(
       overlays,
       "view-action",
-      [
-        { name: "编辑名称", description: viewItem.name, value: "name" },
-        { name: "编辑目录路径", description: viewItem.path, value: "path" },
+      () => [
+        {
+          name: `名称  ${viewItem.name}`,
+          description: "视图显示名称",
+          value: "edited",
+          edit: {
+            label: "名称  ",
+            value: viewItem.name,
+            validate: (value) => (value.trim() ? undefined : "视图名称不能为空"),
+            save: async (value) => {
+              await dispatchWithError({ type: "update_view", viewId, name: value.trim() }, "更新视图失败")
+              viewItem.name = value.trim()
+            },
+          },
+        },
+        {
+          name: `目录路径  ${viewItem.path}`,
+          description: "视图资源所在目录",
+          value: "edited",
+          edit: {
+            label: "目录路径  ",
+            value: viewItem.path,
+            validate: (value) => (value.trim() ? undefined : "目录路径不能为空"),
+            save: async (value) => {
+              await dispatchWithError({ type: "update_view", viewId, path: value.trim() }, "更新视图失败")
+              viewItem.path = value.trim()
+            },
+          },
+        },
         { name: "编辑 SYSTEM.md", description: "不存在时自动创建", value: "system" },
         { name: "编辑 AGENTS.md", description: "不存在时自动创建", value: "agents" },
         { name: "打开 Skills 目录", description: viewItem.directory, value: "skills" },
@@ -314,19 +335,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       ],
       { title: `管理视图 · ${viewItem.name}`, signal: interactionController.signal },
     )
-    if (action === "name") {
-      const name = await promptLine(overlays, "view-edit-name", "新名称：", {
-        initialValue: viewItem.name,
-        signal: interactionController.signal,
-      })
-      if (name) await dispatchWithError({ type: "update_view", viewId, name }, "更新视图失败")
-    } else if (action === "path") {
-      const path = await promptLine(overlays, "view-edit-path", "新路径：", {
-        initialValue: viewItem.path,
-        signal: interactionController.signal,
-      })
-      if (path) await dispatchWithError({ type: "update_view", viewId, path }, "更新视图失败")
-    } else if (action === "system" || action === "agents") {
+    if (action === "edited") return manageView(viewId)
+    if (action === "system" || action === "agents") {
       const name = action === "system" ? "SYSTEM.md" : "AGENTS.md"
       const ensured = await dispatchWithError({ type: "ensure_view_file", viewId, name }, "创建视图文件失败")
       if (ensured.ok) await openExternalEditor(join(viewItem.directory, name))
@@ -360,14 +370,37 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         { key: "toolDetailTurns", name: "工具详情" },
       ] as const
       while (!exiting) {
-        const selected = await selectItem<(typeof fields)[number]["key"] | "reset" | "apply">(
+        const selected = await selectEditableItem<"reset" | "apply">(
           overlays,
           "fold-selector",
-          [
+          () => [
             ...fields.map((field) => ({
               name: `${field.name.padEnd(6, "　")} ${draft[field.key] === 0 ? "全部展开" : `最近 ${draft[field.key]} 轮`}`,
               description: field.key === "toolDetailTurns" ? "不能超过工具组；0 表示全部展开" : "0 表示全部展开",
-              value: field.key,
+              value: "apply" as const,
+              edit: {
+                label: `${field.name}  `,
+                value: String(draft[field.key]),
+                validate: (value: string) => (/^\d+$/.test(value) ? undefined : "请输入大于或等于 0 的整数"),
+                save: (value: string) => {
+                  const parsed = Number(value)
+                  if (!Number.isSafeInteger(parsed)) return
+                  draft = { ...draft, [field.key]: parsed }
+                  if (
+                    field.key === "toolGroupTurns" &&
+                    draft.toolGroupTurns !== 0 &&
+                    (draft.toolDetailTurns === 0 || draft.toolDetailTurns > draft.toolGroupTurns)
+                  )
+                    draft.toolDetailTurns = draft.toolGroupTurns
+                  if (
+                    field.key === "toolDetailTurns" &&
+                    (draft.toolDetailTurns === 0
+                      ? draft.toolGroupTurns !== 0
+                      : draft.toolGroupTurns !== 0 && draft.toolDetailTurns > draft.toolGroupTurns)
+                  )
+                    draft.toolGroupTurns = draft.toolDetailTurns
+                },
+              },
             })),
             { name: "恢复默认", description: "恢复内置折叠范围", value: "reset" as const },
             { name: "应用并返回", description: "保存设置并全量回放会话", value: "apply" as const },
@@ -384,27 +417,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           if (result.ok) view.setFoldPreferences(draft)
           return
         }
-        const value = await promptLine(overlays, `fold-${selected}`, "展开轮次（0 表示全部）：", {
-          initialValue: String(draft[selected]),
-          signal: interactionController.signal,
-        })
-        if (value === undefined || !/^\d+$/.test(value)) continue
-        const parsed = Number(value)
-        if (!Number.isSafeInteger(parsed)) continue
-        draft = { ...draft, [selected]: parsed }
-        if (
-          selected === "toolGroupTurns" &&
-          draft.toolGroupTurns !== 0 &&
-          (draft.toolDetailTurns === 0 || draft.toolDetailTurns > draft.toolGroupTurns)
-        )
-          draft.toolDetailTurns = draft.toolGroupTurns
-        if (
-          selected === "toolDetailTurns" &&
-          (draft.toolDetailTurns === 0
-            ? draft.toolGroupTurns !== 0
-            : draft.toolGroupTurns !== 0 && draft.toolDetailTurns > draft.toolGroupTurns)
-        )
-          draft.toolGroupTurns = draft.toolDetailTurns
       }
     } finally {
       endInteraction()
@@ -574,25 +586,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
-  async function ask(label: string, initialValue = "") {
-    return promptLine(overlays, `model-field-${crypto.randomUUID()}`, `${label}：`, {
-      initialValue,
-      signal: interactionController.signal,
-    })
-  }
-
-  async function askRequired(label: string, initialValue = ""): Promise<string | undefined> {
-    const value = await ask(label, initialValue)
-    return value?.trim() ? value.trim() : undefined
-  }
-
-  async function askNumber(label: string, initialValue: number): Promise<number | undefined> {
-    const value = await ask(label, String(initialValue))
-    if (!value) return undefined
-    const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : undefined
-  }
-
   async function chooseApi(title: string, inherited = false): Promise<ConfigurableApi | undefined | "cancel"> {
     const snapshot = core.getSnapshot().modelConfig
     if (!snapshot) return "cancel"
@@ -625,22 +618,55 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         }
       : { name: "", baseUrl: "https://", authHeader: true }
     while (!exiting) {
-      const action = await selectItem<"id" | "name" | "baseUrl" | "api" | "authHeader" | "save">(
+      const action = await selectEditableItem<"api" | "authHeader" | "save">(
         overlays,
         "provider-editor",
-        [
+        () => [
           {
             name: `供应商 ID       ${draft.id ?? "未设置"}`,
             description: existing ? "创建后不可修改" : "小写字母、数字、点、下划线或短横线",
-            value: "id",
+            value: "save",
             disabled: !!existing,
+            disabledReason: "创建后不可修改",
+            edit: {
+              label: "供应商 ID       ",
+              value: draft.id ?? "",
+              validate: (value) => (/^[a-z0-9._-]+$/.test(value) ? undefined : "供应商 ID 格式无效"),
+              save: (value) => {
+                draft.id = value.trim()
+              },
+            },
           },
-          { name: `显示名称        ${draft.name || "未设置"}`, description: "", value: "name" },
-          { name: `Base URL        ${draft.baseUrl || "未设置"}`, description: "", value: "baseUrl" },
-          { name: `API             ${draft.api ?? "未设置"}`, description: "", value: "api" },
+          {
+            name: `显示名称        ${draft.name || "未设置"}`,
+            description: "供应商显示名称",
+            value: "save",
+            edit: {
+              label: "显示名称        ",
+              value: draft.name ?? "",
+              validate: (value) => (value.trim() ? undefined : "显示名称不能为空"),
+              save: (value) => {
+                draft.name = value.trim()
+              },
+            },
+          },
+          {
+            name: `Base URL        ${draft.baseUrl || "未设置"}`,
+            description: "供应商接口地址",
+            value: "save",
+            edit: {
+              label: "Base URL        ",
+              value: draft.baseUrl ?? "",
+              validate: (value) => (value.trim() ? undefined : "Base URL 不能为空"),
+              save: (value) => {
+                draft.baseUrl = value.trim()
+              },
+            },
+          },
+          { name: `API             ${draft.api ?? "未设置"}`, description: "选择接口协议", value: "api" },
           {
             name: `Bearer 认证头   ${draft.authHeader ? "是" : "否"}`,
-            description: "",
+            description: "切换认证头格式",
             value: "authHeader",
           },
           { name: "保存", description: "校验并应用配置", value: "save" },
@@ -648,16 +674,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         { title: existing ? `编辑供应商 ${existing.id}` : "新增供应商", signal: interactionController.signal },
       )
       if (!action) return undefined
-      if (action === "id") {
-        const value = await askRequired("供应商 ID", draft.id)
-        if (value) draft.id = value
-      } else if (action === "name") {
-        const value = await askRequired("显示名称", draft.name)
-        if (value) draft.name = value
-      } else if (action === "baseUrl") {
-        const value = await askRequired("Base URL", draft.baseUrl)
-        if (value) draft.baseUrl = value
-      } else if (action === "api") {
+      if (action === "api") {
         const selected = await chooseApi("选择供应商 API")
         if (selected !== "cancel" && selected !== undefined) draft.api = selected
       } else if (action === "authHeader") draft.authHeader = !draft.authHeader
@@ -668,376 +685,38 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   }
 
   async function editCost(initial: ModelCostConfig): Promise<ModelCostConfig | undefined> {
-    const input = await askNumber("输入价格（美元/百万 token）", initial.input)
-    if (input === undefined) return undefined
-    const output = await askNumber("输出价格（美元/百万 token）", initial.output)
-    if (output === undefined) return undefined
-    const cacheRead = await askNumber("Cache Read 价格", initial.cacheRead)
-    if (cacheRead === undefined) return undefined
-    const cacheWrite = await askNumber("Cache Write 价格", initial.cacheWrite)
-    if (cacheWrite === undefined) return undefined
-    return { input, output, cacheRead, cacheWrite }
+    const draft = { ...initial }
+    while (!exiting) {
+      const selected = await selectEditableItem<"save">(
+        overlays,
+        "model-cost-editor",
+        () => [
+          ...(["input", "output", "cacheRead", "cacheWrite"] as const).map((key) => ({
+            name: `${{ input: "输入价格", output: "输出价格", cacheRead: "Cache Read", cacheWrite: "Cache Write" }[key]}  ${draft[key]}`,
+            description: "美元/百万 token",
+            value: "save" as const,
+            edit: {
+              label: `${{ input: "输入价格  ", output: "输出价格  ", cacheRead: "Cache Read  ", cacheWrite: "Cache Write  " }[key]}`,
+              value: String(draft[key]),
+              validate: (value: string) => (Number.isFinite(Number(value)) ? undefined : "请输入有效数字"),
+              save: (value: string) => {
+                draft[key] = Number(value)
+              },
+            },
+          })),
+          { name: "完成", description: "保存价格并返回模型编辑页", value: "save" as const },
+        ],
+        { title: "编辑模型价格", signal: interactionController.signal },
+      )
+      if (!selected) return undefined
+      if (selected === "save") return { ...draft }
+    }
+    return undefined
   }
 
-  async function editThinkingLevels(initial: string[]): Promise<string[] | undefined> {
-    const levels = [...initial]
-    return new Promise((resolve) => {
-      let editing:
-        | { index: number; input: TextareaRenderable; label: TextRenderable; adding: boolean; originalLevels: string[] }
-        | undefined
-      let settled = false
-      const finish = (value: string[] | undefined) => {
-        if (settled) return
-        settled = true
-        handle.close(value)
-        resolve(value)
-      }
-      const handle = overlays.open<string[]>({
-        id: "thinking-level-editor",
-        title: "思考档位名",
-        help: "↑↓ 选择 | Enter 编辑 | Esc 返回",
-        contentHeight: Math.min(10, Math.max(4, levels.length + 2)),
-        signal: interactionController.signal,
-        onCancel: () => finish(undefined),
-      })
-      const selector = new SelectRenderable(overlays.renderer, {
-        id: "thinking-level-list",
-        options: [],
-        position: "absolute",
-        top: 0,
-        right: 0,
-        bottom: 0,
-        left: 0,
-        showDescription: false,
-        itemSpacing: 0,
-        textColor: systemColors.secondary,
-        descriptionColor: systemColors.shortcuts,
-      })
-      handle.content.add(selector)
-      const updateHelp = () => {
-        if (editing) return
-        const index = selector.getSelectedIndex()
-        if (index < levels.length) handle.setHelp("↑↓ 选择 | Enter 编辑 | Esc 返回")
-        else if (index === levels.length)
-          handle.setHelp(
-            levels.length >= 6 ? "已达到 6 / 6，不能继续新增 | Esc 返回" : "↑↓ 选择 | Enter 新增 | Esc 返回",
-          )
-        else handle.setHelp("↑↓ 选择 | Enter 完成 | Esc 返回")
-      }
-      selector.on(SelectRenderableEvents.SELECTION_CHANGED, updateHelp)
-      const render = (selectedIndex = selector.getSelectedIndex()) => {
-        selector.options = [
-          ...levels.map((level, index) => ({
-            name: `${index + 1}. ${editing?.index === index ? "" : level}`,
-            description: "",
-            value: `item:${index}`,
-          })),
-          {
-            name: editing?.adding ? "新增档位" : `新增档位                              ${levels.length} / 6`,
-            description: "",
-            value: "add",
-          },
-          { name: "完成", description: "", value: "done" },
-        ]
-        selector.setSelectedIndex(Math.min(selectedIndex, levels.length + 1))
-        updateHelp()
-        if (editing) {
-          editing.label.top = editing.index
-          editing.input.top = editing.index
-        }
-        handle.setContentHeight(Math.min(10, Math.max(4, levels.length + 2)))
-      }
-      const startEditing = (index: number, value: string, adding: boolean) => {
-        const label = new TextRenderable(overlays.renderer, {
-          id: `thinking-level-label-${crypto.randomUUID()}`,
-          position: "absolute",
-          top: index,
-          left: 0,
-          width: adding ? 10 : 3,
-          height: 1,
-          wrapMode: "none",
-          content: adding ? "新增档位  " : `${index + 1}. `,
-          fg: systemColors.secondary,
-        })
-        const input = new TextareaRenderable(overlays.renderer, {
-          id: `thinking-level-input-${crypto.randomUUID()}`,
-          position: "absolute",
-          top: index,
-          left: adding ? 10 : 3,
-          right: 0,
-          height: 1,
-          wrapMode: "none",
-          initialValue: value,
-          backgroundColor: "#111827",
-          focusedBackgroundColor: "#111827",
-          textColor: systemColors.secondary,
-          focusedTextColor: systemColors.secondary,
-          keyBindings: [],
-        })
-        input.cursorOffset = input.plainText.length
-        handle.content.add(label)
-        handle.content.add(input)
-        editing = { index, input, label, adding, originalLevels: [...levels] }
-        input.focus()
-        handle.setHelp(
-          adding
-            ? "输入新增档位名 | Enter 确认 | Esc 取消"
-            : "输入修改名称 | ↑/↓ 排序 | Ctrl+X 删除 | Enter 确认 | Esc 取消",
-        )
-        render(index)
-      }
-      const stopEditing = (cancelled: boolean) => {
-        if (cancelled && editing) levels.splice(0, levels.length, ...editing.originalLevels)
-        const selectedIndex = editing?.adding ? levels.length : (editing?.index ?? selector.getSelectedIndex())
-        editing?.input.destroy()
-        editing?.label.destroy()
-        editing = undefined
-        handle.setHelp("↑↓ 选择 | Enter 编辑 | Esc 返回")
-        render(selectedIndex)
-      }
-      const confirmEditing = () => {
-        if (!editing) return
-        const value = editing.input.plainText.trim()
-        if (!value) return
-        if (editing.adding) levels.push(value)
-        else levels[editing.index] = value
-        stopEditing(false)
-      }
-      handle.setInput({
-        keypress: (key) => {
-          if (editing) {
-            if (key.name === "return") confirmEditing()
-            else if (key.name === "escape") stopEditing(true)
-            else if (!editing.adding && key.ctrl && key.name === "x") {
-              if (levels.length <= 1) {
-                handle.setHelp("至少保留一个思考档位 | ↑/↓ 排序 | Enter 确认 | Esc 取消")
-                return
-              }
-              const index = editing.index
-              levels.splice(index, 1)
-              editing.input.destroy()
-              editing.label.destroy()
-              editing = undefined
-              handle.setHelp("↑↓ 选择 | Enter 编辑 | Esc 返回")
-              render(Math.min(index, levels.length - 1))
-            } else if (!editing.adding && key.name === "up" && editing.index > 0) {
-              const index = editing.index
-              ;[levels[index - 1], levels[index]] = [levels[index] ?? "", levels[index - 1] ?? ""]
-              editing.index--
-              render(editing.index)
-            } else if (!editing.adding && key.name === "down" && editing.index < levels.length - 1) {
-              const index = editing.index
-              ;[levels[index], levels[index + 1]] = [levels[index + 1] ?? "", levels[index] ?? ""]
-              editing.index++
-              render(editing.index)
-            } else editing.input.handleKeyPress(key)
-            return
-          }
-          const index = selector.getSelectedIndex()
-          if (key.name === "escape") finish(levels)
-          else if (key.name === "return") {
-            if (index < levels.length) {
-              startEditing(index, levels[index] ?? "", false)
-            } else if (index === levels.length && levels.length < 6) {
-              startEditing(index, "", true)
-            } else if (index === levels.length + 1) finish(levels)
-          } else selector.handleKeyPress?.(key)
-        },
-        paste: (event) => {
-          editing?.input.handlePaste(event)
-        },
-      })
-      render()
-    })
-  }
-
-  async function editThinkingConfig(initial?: ModelThinkingConfig): Promise<ModelThinkingConfig | undefined | null> {
-    let supported = initial !== undefined
-    let allowDisable = initial?.disableThinkingLevel !== undefined
-    let disableThinkingLevel = initial?.disableThinkingLevel ?? "off"
-    let thinkingLevels = [...(initial?.thinkingLevels ?? ["low", "medium", "high"])]
-    let defaultThinkingLevel = initial?.defaultThinkingLevel ?? thinkingLevels[1] ?? thinkingLevels[0] ?? ""
-    return new Promise((resolve) => {
-      let editingDisable: { input: TextareaRenderable; label: TextRenderable } | undefined
-      let settled = false
-      const finish = (value: ModelThinkingConfig | undefined | null) => {
-        if (settled) return
-        settled = true
-        handle.close(value ?? undefined)
-        resolve(value)
-      }
-      const handle = overlays.open<ModelThinkingConfig>({
-        id: "thinking-config-editor",
-        title: "编辑思考配置",
-        help: "↑↓ 移动 | Enter 选择 | Esc 返回",
-        contentHeight: 16,
-        signal: interactionController.signal,
-        onCancel: () => finish(null),
-      })
-      const selector = new SelectRenderable(overlays.renderer, {
-        id: "thinking-config-list",
-        options: [],
-        position: "absolute",
-        top: 0,
-        right: 0,
-        bottom: 0,
-        left: 0,
-        showDescription: true,
-        textColor: systemColors.secondary,
-        descriptionColor: systemColors.shortcuts,
-      })
-      handle.content.add(selector)
-      const render = (selectedIndex = selector.getSelectedIndex()) => {
-        const summary = [allowDisable ? disableThinkingLevel : undefined, ...thinkingLevels].filter(Boolean).join("、")
-        selector.options = [
-          { name: `思考能力        ${supported ? "支持" : "不支持"}`, description: "Enter 切换", value: "supported" },
-          {
-            name: `允许关闭思考    ${supported && allowDisable ? "是" : "否"}`,
-            description: supported ? "Enter 切换" : "请先启用思考能力",
-            value: "allowDisable",
-          },
-          {
-            name: `关闭档位名      ${editingDisable ? "" : supported && allowDisable ? disableThinkingLevel : "—"}`,
-            description: editingDisable
-              ? "Enter 确认 · Esc 取消"
-              : supported && allowDisable
-                ? "Enter 原地编辑"
-                : "未允许关闭思考",
-            value: "disable",
-          },
-          {
-            name: `思考档位名      ${supported ? summary : "—"}       ${thinkingLevels.length} / 6`,
-            description: supported ? "Enter 管理" : "请先启用思考能力",
-            value: "levels",
-          },
-          {
-            name: `默认档位        ${supported ? defaultThinkingLevel || "未设置" : "—"}`,
-            description: supported ? "从合法档位中选择" : "请先启用思考能力",
-            value: "default",
-          },
-          { name: "保存", description: supported ? "校验并返回模型编辑页" : "清除全部思考配置", value: "save" },
-        ]
-        selector.setSelectedIndex(selectedIndex)
-      }
-      const startDisableEditing = () => {
-        const label = new TextRenderable(overlays.renderer, {
-          id: `thinking-disable-label-${crypto.randomUUID()}`,
-          position: "absolute",
-          top: 4,
-          left: 0,
-          width: 16,
-          height: 1,
-          wrapMode: "none",
-          content: "关闭档位名      ",
-          fg: systemColors.secondary,
-        })
-        const input = new TextareaRenderable(overlays.renderer, {
-          id: `thinking-disable-input-${crypto.randomUUID()}`,
-          position: "absolute",
-          top: 4,
-          left: 16,
-          right: 0,
-          height: 1,
-          wrapMode: "none",
-          initialValue: disableThinkingLevel,
-          backgroundColor: "#111827",
-          focusedBackgroundColor: "#111827",
-          textColor: systemColors.secondary,
-          focusedTextColor: systemColors.secondary,
-          keyBindings: [],
-        })
-        input.cursorOffset = input.plainText.length
-        handle.content.add(label)
-        handle.content.add(input)
-        editingDisable = { input, label }
-        input.focus()
-        handle.setHelp("输入关闭档位名 | Enter 确认 | Esc 取消")
-        render(2)
-      }
-      const validSelection = (index: number) =>
-        index === 0 || index === 5 || (supported && index !== 2) || (supported && allowDisable)
-      const stopEditing = (confirm: boolean) => {
-        const value = editingDisable?.input.plainText.trim()
-        if (confirm && value) {
-          const previous = disableThinkingLevel
-          disableThinkingLevel = value
-          if (defaultThinkingLevel === previous) defaultThinkingLevel = disableThinkingLevel
-        }
-        editingDisable?.input.destroy()
-        editingDisable?.label.destroy()
-        editingDisable = undefined
-        handle.setHelp("↑↓ 移动 | Enter 选择 | Esc 返回")
-        render(2)
-      }
-      const chooseDefault = async () => {
-        const available = [...(allowDisable ? [disableThinkingLevel] : []), ...thinkingLevels]
-        const selected = await selectItem<string>(
-          overlays,
-          `thinking-default-${crypto.randomUUID()}`,
-          available.map((level) => ({
-            name: level,
-            description: level === disableThinkingLevel ? "关闭档位" : "思考档位",
-            value: level,
-          })),
-          { title: "选择默认思考档位", signal: interactionController.signal },
-        )
-        if (selected) defaultThinkingLevel = selected
-        render(4)
-      }
-      const manageLevels = async () => {
-        const edited = await editThinkingLevels(thinkingLevels)
-        if (edited) {
-          thinkingLevels = edited
-          const available = [...(allowDisable ? [disableThinkingLevel] : []), ...thinkingLevels]
-          if (!available.includes(defaultThinkingLevel))
-            defaultThinkingLevel = thinkingLevels[0] ?? disableThinkingLevel
-        }
-        render(3)
-      }
-      handle.setInput({
-        keypress: (key) => {
-          if (editingDisable) {
-            if (key.name === "return") stopEditing(true)
-            else if (key.name === "escape") stopEditing(false)
-            else editingDisable.input.handleKeyPress(key)
-            return
-          }
-          if (key.name === "escape") finish(null)
-          else if (key.name === "return") {
-            const index = selector.getSelectedIndex()
-            if (!validSelection(index)) return
-            if (index === 0) {
-              supported = !supported
-              if (!supported) {
-                allowDisable = false
-                disableThinkingLevel = "off"
-                thinkingLevels = []
-                defaultThinkingLevel = ""
-              } else {
-                thinkingLevels = ["low", "medium", "high"]
-                defaultThinkingLevel = "medium"
-              }
-              render(index)
-            } else if (index === 1) {
-              allowDisable = !allowDisable
-              if (allowDisable && !disableThinkingLevel) disableThinkingLevel = "off"
-              if (!allowDisable && defaultThinkingLevel === disableThinkingLevel)
-                defaultThinkingLevel = thinkingLevels[0] ?? ""
-              render(index)
-            } else if (index === 2) {
-              startDisableEditing()
-            } else if (index === 3) void manageLevels()
-            else if (index === 4) void chooseDefault()
-            else if (!supported) finish(undefined)
-            else finish({ ...(allowDisable ? { disableThinkingLevel } : {}), thinkingLevels, defaultThinkingLevel })
-          } else selector.handleKeyPress?.(key)
-        },
-        paste: (event) => {
-          editingDisable?.input.handlePaste(event)
-        },
-      })
-      render()
-    })
+  const positiveIntegerError = (value: string) => {
+    const parsed = Number(value)
+    return Number.isSafeInteger(parsed) && parsed > 0 ? undefined : "请输入大于 0 的整数"
   }
 
   async function editModel(existing?: ModelConfigEntry, copy = false): Promise<EditableModelConfig | undefined> {
@@ -1064,20 +743,39 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       cost: { ...(existing?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }) },
     }
     while (!exiting) {
-      const action = await selectItem<
-        "id" | "name" | "api" | "input" | "output" | "reasoning" | "context" | "max" | "cost" | "save"
-      >(
+      const action = await selectEditableItem<"api" | "input" | "output" | "reasoning" | "cost" | "save">(
         overlays,
         "model-editor",
-        [
+        () => [
           {
             name: `模型 ID          ${draft.id || "未设置"}`,
-            description: existing && !copy ? "创建后不可修改" : "",
-            value: "id",
+            description: existing && !copy ? "创建后不可修改" : "模型服务使用的 ID",
+            value: "save",
             disabled: !!existing && !copy,
+            disabledReason: "创建后不可修改",
+            edit: {
+              label: "模型 ID          ",
+              value: draft.id,
+              validate: (value) => (value.trim() ? undefined : "模型 ID 不能为空"),
+              save: (value) => {
+                draft.id = value.trim()
+              },
+            },
           },
-          { name: `显示名称         ${draft.name || "未设置"}`, description: "", value: "name" },
-          { name: `API              ${draft.api ?? "继承供应商"}`, description: "", value: "api" },
+          {
+            name: `显示名称         ${draft.name || "未设置"}`,
+            description: "模型显示名称",
+            value: "save",
+            edit: {
+              label: "显示名称         ",
+              value: draft.name,
+              validate: (value) => (value.trim() ? undefined : "显示名称不能为空"),
+              save: (value) => {
+                draft.name = value.trim()
+              },
+            },
+          },
+          { name: `API              ${draft.api ?? "继承供应商"}`, description: "选择接口协议", value: "api" },
           { name: `输入模态         ${draft.input.join("、")}`, description: "多选", value: "input" },
           { name: "输出模态         当前 adapter 不支持配置", description: "查看扩展边界", value: "output" },
           {
@@ -1085,8 +783,32 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             description: draft.thinking ? "关闭档位独立显示；最多六个思考档位" : "Enter 启用",
             value: "reasoning",
           },
-          { name: `上下文窗口       ${draft.contextWindow}`, description: "", value: "context" },
-          { name: `最大输出 token   ${draft.maxTokens}`, description: "", value: "max" },
+          {
+            name: `上下文窗口       ${draft.contextWindow}`,
+            description: "模型最大上下文 token 数",
+            value: "save",
+            edit: {
+              label: "上下文窗口       ",
+              value: String(draft.contextWindow),
+              validate: positiveIntegerError,
+              save: (value) => {
+                draft.contextWindow = Number(value)
+              },
+            },
+          },
+          {
+            name: `最大输出 token   ${draft.maxTokens}`,
+            description: "单次回复最大 token 数",
+            value: "save",
+            edit: {
+              label: "最大输出 token   ",
+              value: String(draft.maxTokens),
+              validate: positiveIntegerError,
+              save: (value) => {
+                draft.maxTokens = Number(value)
+              },
+            },
+          },
           {
             name: "价格",
             description: `输入 ${draft.cost.input} / 输出 ${draft.cost.output} / 读缓存 ${draft.cost.cacheRead} / 写缓存 ${draft.cost.cacheWrite}`,
@@ -1097,9 +819,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         { title: existing && !copy ? `编辑模型 ${existing.id}` : "新增模型", signal: interactionController.signal },
       )
       if (!action) return undefined
-      if (action === "id") draft.id = (await askRequired("模型 ID", draft.id)) ?? draft.id
-      else if (action === "name") draft.name = (await askRequired("显示名称", draft.name)) ?? draft.name
-      else if (action === "api") {
+      if (action === "api") {
         const selected = await chooseApi("选择模型 API", true)
         if (selected !== "cancel") {
           if (selected === undefined) delete draft.api
@@ -1136,14 +856,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           interactionController.signal,
         )
       } else if (action === "reasoning") {
-        const thinking = await editThinkingConfig(draft.thinking)
+        const thinking = await editThinkingConfiguration(overlays, draft.thinking, interactionController.signal)
         if (thinking === undefined) delete draft.thinking
         else if (thinking !== null) draft.thinking = thinking
-      } else if (action === "context")
-        draft.contextWindow = (await askNumber("上下文窗口", draft.contextWindow)) ?? draft.contextWindow
-      else if (action === "max")
-        draft.maxTokens = (await askNumber("最大输出 token", draft.maxTokens)) ?? draft.maxTokens
-      else if (action === "cost") draft.cost = (await editCost(draft.cost)) ?? draft.cost
+      } else if (action === "cost") draft.cost = (await editCost(draft.cost)) ?? draft.cost
       else return draft
     }
     return undefined
