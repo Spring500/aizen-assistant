@@ -78,6 +78,28 @@ describe("会话存储", () => {
     expect((await store.read("s1")).records.at(-1)).toMatchObject({ recordId: "external" })
   })
 
+  test("生成 ID 和创建位于同一个排他事务", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-session-"))
+    temporaryDirectories.push(root)
+    let sequence = 0
+    const idGenerator: MnemonicIdGenerator = {
+      generate(exists) {
+        for (const candidate of ["shared-id", `fallback-${sequence++}`]) if (!exists(candidate)) return candidate
+        throw new Error("无法生成 ID")
+      },
+    }
+    const first = new SessionStore(root, { idGenerator })
+    const second = new SessionStore(root, { idGenerator })
+    const [left, right] = await Promise.all([
+      first.createGenerated({ cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" }, []),
+      second.createGenerated({ cwd: "E:\\project", createdAt: "2026-07-23T10:00:01.000Z" }, []),
+    ])
+    expect(left.sessionId).not.toBe(right.sessionId)
+    expect((await first.list()).map((session) => session.sessionId).sort()).toEqual(
+      [left.sessionId, right.sessionId].sort(),
+    )
+  })
+
   test("新会话使用助记词 ID 并避开已有会话", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-session-"))
     temporaryDirectories.push(root)

@@ -75,16 +75,37 @@ export class SessionStore {
     return withFileLock(join(this.root, ".sessions"), async () => {
       await this.#refreshPaths()
       if (this.#paths.has(input.sessionId)) throw new Error("会话 ID 已存在")
-      const path = join(this.root, sessionFileName(input.createdAt, input.sessionId))
-      const header: SessionHeader = { kind: "session", version: 1, ...input }
-      await atomicWriteFile(path, serializeSession(header, records))
-      this.#paths.set(input.sessionId, path)
-      return header
+      return this.#writeNewSession(input, records)
+    })
+  }
+
+  /** 在创建锁内生成唯一 ID 并原子创建会话。 */
+  async createGenerated(
+    input: Omit<SessionHeader, "kind" | "version" | "sessionId">,
+    records: SessionRecord[],
+  ): Promise<SessionHeader> {
+    await mkdir(this.root, { recursive: true })
+    return withFileLock(join(this.root, ".sessions"), async () => {
+      await this.#refreshPaths()
+      const existing = new Set([...this.#paths.keys()].map((sessionId) => sessionId.toLowerCase()))
+      const sessionId = this.#idGenerator.generate((candidate) => existing.has(candidate.toLowerCase()))
+      return this.#writeNewSession({ ...input, sessionId }, records)
     })
   }
 
   async create(input: Omit<SessionHeader, "kind" | "version">): Promise<SessionHeader> {
     return this.createWithRecords(input, [])
+  }
+
+  async #writeNewSession(
+    input: Omit<SessionHeader, "kind" | "version">,
+    records: SessionRecord[],
+  ): Promise<SessionHeader> {
+    const path = join(this.root, sessionFileName(input.createdAt, input.sessionId))
+    const header: SessionHeader = { kind: "session", version: 1, ...input }
+    await atomicWriteFile(path, serializeSession(header, records))
+    this.#paths.set(input.sessionId, path)
+    return header
   }
 
   append(sessionId: string, record: SessionRecord): Promise<void> {

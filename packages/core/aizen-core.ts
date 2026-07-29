@@ -340,16 +340,15 @@ export class AizenCore implements CorePort {
   }
 
   async #createSession(model: ModelReference, viewId: ViewId): Promise<void> {
-    const sessionId = await this.#store.suggestId()
     const at = new Date().toISOString()
     const view = await this.#resolveView(viewId)
     const actualModel = await this.#pi.create({ cwd: this.#cwd, model, view })
-    await this.#store.create({ sessionId, cwd: this.#cwd, createdAt: at })
     const records: SessionRecord[] = [
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(actualModel) },
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
     ]
-    for (const record of records) await this.#store.append(sessionId, record)
+    const header = await this.#store.createGenerated({ cwd: this.#cwd, createdAt: at }, records)
+    const sessionId = header.sessionId
     this.#records = records
     this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
@@ -469,12 +468,12 @@ export class AizenCore implements CorePort {
     if (!sourceSessionId) throw new Error("请先新建或恢复会话")
     await this.#writeQueue
     if (this.#writeError) throw this.#writeError
-    const sessionId = await this.#store.suggestId()
     const at = new Date().toISOString()
     const sourceName = this.#snapshot.currentSessionName || sourceSessionId
     const name = `${sourceName}_副本`
     const records = this.#recordsBeforeTurn(turnId, name)
-    await this.#store.createWithRecords({ sessionId, cwd: this.#cwd, createdAt: at }, records)
+    const header = await this.#store.createGenerated({ cwd: this.#cwd, createdAt: at }, records)
+    const sessionId = header.sessionId
     await this.#activateRecords(sessionId, records, name)
     this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
