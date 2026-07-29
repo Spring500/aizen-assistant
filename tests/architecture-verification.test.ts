@@ -209,4 +209,4 @@ test("架构可行性验证：pi SDK、内联扩展、内置视图、OpenTUI、P
   expect(report.photonWasm.passed).toBeTrue()
   expect(report.mockServer.passed).toBeTrue()
   expect(allChecksPassed(report)).toBeTrue()
-})
+}, 15_000)

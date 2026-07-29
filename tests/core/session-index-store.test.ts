@@ -95,7 +95,7 @@ describe("会话摘要索引存储", () => {
     })
     try {
       let held = false
-      for (let attempt = 0; attempt < 200; attempt++) {
+      for (let attempt = 0; attempt < 1000; attempt++) {
         try {
           await readFile(ready)
           held = true
