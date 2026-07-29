@@ -422,6 +422,12 @@ describe("核心编排", () => {
     expect(core.getSnapshot().currentModel).toMatchObject(model)
     expect(core.getSnapshot().currentViewId).toBeNull()
     await core.dispose()
+
+    const reopened = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
+    expect(await reopened.dispatch({ type: "open_session", sessionId })).toEqual({ ok: true })
+    expect(JSON.stringify(reopened.getSnapshot().transcript)).not.toContain("第二轮")
+    expect(reopened.getSnapshot().currentSessionName).toBe("需求讨论")
+    await reopened.dispose()
   })
 
   test("分支生成新会话并使用源名称副本", async () => {
@@ -448,6 +454,12 @@ describe("核心编排", () => {
     expect(JSON.stringify((await store.read(forkId)).records)).not.toContain("第二轮")
     expect((await store.list()).map((session) => session.sessionId)).toContainAllValues([sourceId, forkId])
     await core.dispose()
+
+    const reopened = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
+    expect(await reopened.dispatch({ type: "open_session", sessionId: forkId })).toEqual({ ok: true })
+    expect(reopened.getSnapshot().currentSessionName).toBe("需求讨论_副本")
+    expect(JSON.stringify(reopened.getSnapshot().transcript)).not.toContain("第二轮")
+    await reopened.dispose()
   })
 
   test("未命名会话分支使用源会话 ID 命名", async () => {
