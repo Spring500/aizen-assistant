@@ -23,7 +23,12 @@ import { editInline } from "../../packages/tui-kit/inline-input.ts"
 import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
 import { selectMultiple } from "../../packages/tui-kit/multi-select.ts"
 import { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
-import { createAizenRenderer, destroyRenderer, type TuiRenderer } from "../../packages/tui-kit/renderer.ts"
+import {
+  createAizenRenderer,
+  destroyRenderer,
+  setAizenTerminalTitle,
+  type TuiRenderer,
+} from "../../packages/tui-kit/renderer.ts"
 import { selectRichItem } from "../../packages/tui-kit/rich-selector.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
 import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
@@ -89,6 +94,17 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   let exiting = false
   let authProviderName: string | undefined
   let interactionDepth = 0
+  let terminalTitle = ""
+
+  const syncTerminalTitle = (snapshot: ReturnType<typeof core.getSnapshot>) => {
+    const identity = snapshot.currentSessionId
+      ? snapshot.currentSessionName || snapshot.currentSessionId
+      : "AizenAssistant"
+    const next = identity === "AizenAssistant" ? identity : `${identity} · AizenAssistant`
+    if (next === terminalTitle) return
+    terminalTitle = next
+    setAizenTerminalTitle(renderer, next)
+  }
 
   const quit = () => {
     if (exiting) return
@@ -138,6 +154,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
   const updateStatusBar = () => {
     const snapshot = core.getSnapshot()
+    syncTerminalTitle(snapshot)
     const statusBar = statusBarView(snapshot)
     editor.setStatus(statusBar.session)
     editor.setShortcuts(statusBar.shortcuts)
@@ -164,6 +181,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const unsubscribe = core.subscribe((event) => {
     if (event.type === "snapshot") {
       view.update(event.snapshot)
+      syncTerminalTitle(event.snapshot)
       const statusBar = statusBarView(event.snapshot)
       editor.setStatus(statusBar.session)
       editor.setShortcuts(statusBar.shortcuts)
