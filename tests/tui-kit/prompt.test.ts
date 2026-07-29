@@ -27,6 +27,19 @@ test("密钥输入只显示遮盖字符", async () => {
   }
 })
 
+test("原生输入支持左右移动且不会写入转义字符", async () => {
+  const setup = await createTestRenderer({ width: 40, height: 8 })
+  try {
+    const pending = promptLine(setup.renderer, "native-input", "名称：", { initialValue: "ac" })
+    emitKey(setup.renderer, "\x1b[D")
+    emitKey(setup.renderer, "b")
+    emitKey(setup.renderer, "\r")
+    expect(await pending).toBe("abc")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("认证输入可用 Esc 取消", async () => {
   const setup = await createTestRenderer({ width: 40, height: 5 })
   let cancelled = false
