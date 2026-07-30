@@ -60,14 +60,4 @@ AizenAssistant 的数据保存在本地：
 
 建议备份整个数据目录。由于其中包含认证信息，分享、同步或提交文件前请先检查敏感内容。
 
-## 开发与验证
-
-运行完整验证：
-
-```powershell
-bun run verify
-```
-
-该命令包含仓库配置、格式、静态检查、类型检查、构建、自动测试以及 Windows x64 单文件运行验证。
-
-协作和 PR 规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+开发、验证和 PR 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
