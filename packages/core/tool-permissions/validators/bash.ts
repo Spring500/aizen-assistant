@@ -19,7 +19,6 @@ const safeCommands = new Set([
   "nl",
   "pwd",
   "rg",
-  "sed",
   "stat",
   "tail",
   "true",
@@ -47,7 +46,8 @@ const humanCommands = new Set([
 const networkCommands = new Set(["curl", "wget"])
 const remoteMutationCommands = new Set(["push", "fetch", "pull", "clone"])
 const packageCommands = new Set(["bun", "npm", "pnpm", "yarn", "cargo", "pip", "pip3"])
-const unsupportedSyntax = /`|\$\(|\$\{|<<|\b(eval|function|for|while|until|case|select)\b|\n\s*(for|while|until|case)\b/
+const unsupportedSyntax =
+  /`|\$\(|\$\{|\$[A-Za-z_][A-Za-z0-9_]*|<<|\b(eval|function|for|while|until|case|select)\b|\n\s*(for|while|until|case)\b/
 const destructiveRoot =
   /\brm\b[^\n]*(?:-\w*r\w*f|-\w*f\w*r|--recursive)[^\n]*(?:\s\/\s*$|\s\/[\s;&|]|\s[A-Za-z]:[\\/]\s*$)/i
 const forkBomb = /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/
@@ -127,7 +127,7 @@ function splitCommands(command: string): string[] | undefined {
       current += character
       continue
     }
-    if (character === ";" || character === "|" || (character === "&" && next === "&")) {
+    if (character === ";" || character === "\n" || character === "|" || (character === "&" && next === "&")) {
       if (character === "|" && next === "|") index++
       if (character === "&" && next === "&") index++
       if (current.trim()) result.push(current.trim())
@@ -139,6 +139,35 @@ function splitCommands(command: string): string[] | undefined {
   if (quote || escaped) return undefined
   if (current.trim()) result.push(current.trim())
   return result
+}
+
+function hasUnsupportedControlSyntax(command: string): boolean {
+  let quote: "'" | '"' | undefined
+  let escaped = false
+  for (let index = 0; index < command.length; index++) {
+    const character = command[index] ?? ""
+    const next = command[index + 1] ?? ""
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (character === quote) quote = undefined
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+    if (character === ">" || character === "<") return true
+    if (character === "&" && next !== "&" && command[index - 1] !== "&") return true
+    if (character === "(" || character === ")") return true
+  }
+  return false
 }
 
 function unquote(value: string): string {
@@ -231,12 +260,19 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
     }
   }
   if (safeCommands.has(executable)) {
-    if (tokens.some((token) => token === ">" || token === ">>" || token.startsWith(">")))
-      return {
-        type: "needAiReview",
-        assessment: assessment(segment, "medium", "只读命令包含输出重定向"),
-        reviewPayload: { command: segment, declaredIntent: request.declaredIntent },
-      }
+    if (
+      executable === "rg" &&
+      tokens.some(
+        (token) =>
+          token === "--pre" ||
+          token.startsWith("--pre=") ||
+          token === "--hostname-bin" ||
+          token.startsWith("--hostname-bin=") ||
+          token === "--search-zip" ||
+          token === "-z",
+      )
+    )
+      return { type: "needHumanReview", assessment: assessment(segment, "high", "rg 参数会调用其他程序") }
     const targets = pathArguments(tokens)
       .map((path) => resolve(request.cwd, path))
       .filter((path) => isAbsolute(path))
@@ -289,7 +325,7 @@ export function createBashValidator(): ToolPermissionValidator {
       }
       if (request.environment && object(request.environment)?.shell !== "git-bash")
         return { type: "needHumanReview", assessment: assessment(command, "high", "当前 Shell 不在首期分析范围内") }
-      if (unsupportedSyntax.test(command))
+      if (unsupportedSyntax.test(command) || hasUnsupportedControlSyntax(command))
         return {
           type: "needHumanReview",
           assessment: assessment(command, "high", "命令使用了首期不可靠支持的动态语法"),
