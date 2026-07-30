@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises"
-import { dirname } from "node:path"
+import { readFile } from "node:fs/promises"
+import { atomicWriteFile } from "./file-transaction.ts"
 
 export const configurableApis = [
   "openai-completions",
@@ -471,13 +471,6 @@ export class ModelConfigStore {
   }
 
   async #writeSource(source: string): Promise<void> {
-    await mkdir(dirname(this.#path), { recursive: true })
-    const temporary = `${this.#path}.${crypto.randomUUID()}.tmp`
-    await writeFile(temporary, source, "utf8")
-    try {
-      await rename(temporary, this.#path)
-    } finally {
-      await rm(temporary, { force: true })
-    }
+    await atomicWriteFile(this.#path, source)
   }
 }

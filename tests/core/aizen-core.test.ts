@@ -397,6 +397,89 @@ describe("核心编排", () => {
     await restored.dispose()
   })
 
+  test("回退删除所选轮次及之后内容并保留当前设置", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const pi = new FakePi()
+    const core = new AizenCore({ cwd: "E:\\project", store, pi })
+
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    const sessionId = core.getSnapshot().currentSessionId ?? ""
+    await core.dispatch({ type: "rename_session", sessionId, name: "需求讨论" })
+    await core.dispatch({ type: "send_prompt", text: "第一轮" })
+    await core.dispatch({ type: "send_prompt", text: "第二轮" })
+    const secondTurn = core
+      .getSnapshot()
+      .transcript.find(
+        (entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第二轮")),
+      )
+    if (!secondTurn) throw new Error("缺少第二轮")
+
+    expect(await core.dispatch({ type: "rewind", turnId: secondTurn.turnId })).toEqual({ ok: true })
+    const loaded = await store.read(sessionId)
+    expect(JSON.stringify(loaded.records)).toContain("第一轮")
+    expect(JSON.stringify(loaded.records)).not.toContain("第二轮")
+    expect(core.getSnapshot().currentSessionName).toBe("需求讨论")
+    expect(core.getSnapshot().currentModel).toMatchObject(model)
+    expect(core.getSnapshot().currentViewId).toBeNull()
+    await core.dispose()
+
+    const reopened = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
+    expect(await reopened.dispatch({ type: "open_session", sessionId })).toEqual({ ok: true })
+    expect(JSON.stringify(reopened.getSnapshot().transcript)).not.toContain("第二轮")
+    expect(reopened.getSnapshot().currentSessionName).toBe("需求讨论")
+    await reopened.dispose()
+  })
+
+  test("分支生成新会话并使用源名称副本", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const core = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
+
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    const sourceId = core.getSnapshot().currentSessionId ?? ""
+    await core.dispatch({ type: "rename_session", sessionId: sourceId, name: "需求讨论" })
+    await core.dispatch({ type: "send_prompt", text: "第一轮" })
+    await core.dispatch({ type: "send_prompt", text: "第二轮" })
+    const secondTurn = core
+      .getSnapshot()
+      .transcript.find(
+        (entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第二轮")),
+      )
+    if (!secondTurn) throw new Error("缺少第二轮")
+
+    expect(await core.dispatch({ type: "fork_session", turnId: secondTurn.turnId })).toEqual({ ok: true })
+    const forkId = core.getSnapshot().currentSessionId ?? ""
+    expect(forkId).not.toBe(sourceId)
+    expect(core.getSnapshot().currentSessionName).toBe("需求讨论_副本")
+    expect(JSON.stringify((await store.read(sourceId)).records)).toContain("第二轮")
+    expect(JSON.stringify((await store.read(forkId)).records)).not.toContain("第二轮")
+    expect((await store.list()).map((session) => session.sessionId)).toContainAllValues([sourceId, forkId])
+    await core.dispose()
+
+    const reopened = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
+    expect(await reopened.dispatch({ type: "open_session", sessionId: forkId })).toEqual({ ok: true })
+    expect(reopened.getSnapshot().currentSessionName).toBe("需求讨论_副本")
+    expect(JSON.stringify(reopened.getSnapshot().transcript)).not.toContain("第二轮")
+    await reopened.dispose()
+  })
+
+  test("未命名会话分支使用源会话 ID 命名", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const core = new AizenCore({ cwd: "E:\\project", store: new SessionStore(root), pi: new FakePi() })
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    const sourceId = core.getSnapshot().currentSessionId ?? ""
+    await core.dispatch({ type: "send_prompt", text: "问题" })
+    const turn = core.getSnapshot().transcript.find((entry) => entry.type === "input")
+    if (!turn) throw new Error("缺少轮次")
+    await core.dispatch({ type: "fork_session", turnId: turn.turnId })
+    expect(core.getSnapshot().currentSessionName).toBe(`${sourceId}_副本`)
+    await core.dispose()
+  })
+
   test("额外消息先写入会话且 useLater 语义交给适配器", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)

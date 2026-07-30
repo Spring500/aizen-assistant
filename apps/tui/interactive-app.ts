@@ -19,10 +19,16 @@ import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { selectEditableItem } from "../../packages/tui-kit/editable-selector.ts"
+import { editInline } from "../../packages/tui-kit/inline-input.ts"
 import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
 import { selectMultiple } from "../../packages/tui-kit/multi-select.ts"
 import { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
-import { createAizenRenderer, destroyRenderer, type TuiRenderer } from "../../packages/tui-kit/renderer.ts"
+import {
+  createAizenRenderer,
+  destroyRenderer,
+  setAizenTerminalTitle,
+  type TuiRenderer,
+} from "../../packages/tui-kit/renderer.ts"
 import { selectRichItem } from "../../packages/tui-kit/rich-selector.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
 import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
@@ -30,7 +36,7 @@ import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-edito
 import { systemColors } from "../../packages/tui-kit/theme.ts"
 
 import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
-import { isTuiCommand, tuiCommands } from "./commands.ts"
+import { parseTuiCommand, tuiCommands } from "./commands.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
 import { type SessionSettingsDraft, sessionSettingsItems } from "./session-settings.ts"
 import { viewSelectionItems } from "./view-flow.ts"
@@ -88,6 +94,17 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   let exiting = false
   let authProviderName: string | undefined
   let interactionDepth = 0
+  let terminalTitle = ""
+
+  const syncTerminalTitle = (snapshot: ReturnType<typeof core.getSnapshot>) => {
+    const identity = snapshot.currentSessionId
+      ? snapshot.currentSessionName || snapshot.currentSessionId
+      : "AizenAssistant"
+    const next = identity === "AizenAssistant" ? identity : `${identity} · AizenAssistant`
+    if (next === terminalTitle) return
+    terminalTitle = next
+    setAizenTerminalTitle(renderer, next)
+  }
 
   const quit = () => {
     if (exiting) return
@@ -114,15 +131,18 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     renderer,
     {
       onSubmit: (value) => {
-        if (!isTuiCommand(value))
-          runAction(() => dispatchWithError({ type: "send_prompt", text: value }, "发送消息失败"))
-        else if (value === "/quit") quit()
-        else if (value === "/new") runAction(createSession)
-        else if (value === "/sessions") runAction(chooseSession)
-        else if (value === "/views") runAction(manageViews)
-        else if (value === "/view" || value === "/model") runAction(() => openSessionSettings("existing"))
-        else if (value === "/fold") runAction(chooseFold)
-        else if (value === "/models") runAction(manageModels)
+        const command = parseTuiCommand(value)
+        if (!command) runAction(() => dispatchWithError({ type: "send_prompt", text: value }, "发送消息失败"))
+        else if (command.name === "/quit") quit()
+        else if (command.name === "/new") runAction(createSession)
+        else if (command.name === "/sessions") runAction(chooseSession)
+        else if (command.name === "/rewind") runAction(() => changeConversation("rewind"))
+        else if (command.name === "/fork") runAction(() => changeConversation("fork"))
+        else if (command.name === "/rename") runAction(() => renameCurrentSession(command.argument))
+        else if (command.name === "/views") runAction(manageViews)
+        else if (command.name === "/view" || command.name === "/model") runAction(() => openSessionSettings("existing"))
+        else if (command.name === "/fold") runAction(chooseFold)
+        else if (command.name === "/models") runAction(manageModels)
       },
       onAbort: () => void core.dispatch({ type: "abort" }),
       onQuit: quit,
@@ -134,6 +154,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
   const updateStatusBar = () => {
     const snapshot = core.getSnapshot()
+    syncTerminalTitle(snapshot)
     const statusBar = statusBarView(snapshot)
     editor.setStatus(statusBar.session)
     editor.setShortcuts(statusBar.shortcuts)
@@ -160,6 +181,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const unsubscribe = core.subscribe((event) => {
     if (event.type === "snapshot") {
       view.update(event.snapshot)
+      syncTerminalTitle(event.snapshot)
       const statusBar = statusBarView(event.snapshot)
       editor.setStatus(statusBar.session)
       editor.setShortcuts(statusBar.shortcuts)
@@ -1168,6 +1190,84 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
   async function createSession() {
     await openSessionSettings("new")
+  }
+
+  function userTurnOptions() {
+    const transcript = core.getSnapshot().transcript
+    const completedTurns = new Set(transcript.filter((entry) => entry.type === "turn_end").map((entry) => entry.turnId))
+    return transcript
+      .filter(
+        (entry): entry is Extract<(typeof transcript)[number], { type: "input" }> =>
+          entry.type === "input" && completedTurns.has(entry.turnId),
+      )
+      .map((entry, index) => {
+        const text = entry.items
+          .filter((item) => item.source === "user")
+          .flatMap((item) => item.parts)
+          .filter((part) => part.kind === "text")
+          .map((part) => part.text.trim())
+          .find(Boolean)
+        return {
+          name: text || `第 ${index + 1} 轮`,
+          description: `回到第 ${index + 1} 轮之前`,
+          value: { turnId: entry.turnId, text: text ?? "" },
+        }
+      })
+  }
+
+  async function changeConversation(action: "rewind" | "fork"): Promise<void> {
+    const selected = await selectItem(overlays, `${action}-turn`, userTurnOptions(), {
+      title: action === "rewind" ? "选择回退位置" : "选择分支位置",
+      signal: interactionController.signal,
+    })
+    if (!selected) return
+    if (action === "rewind") {
+      const confirmed = await selectItem(
+        overlays,
+        "rewind-confirm",
+        [
+          { name: "确认回退", description: "仅删除对话，不会撤销文件修改和已执行命令", value: true },
+          { name: "取消", description: "保留当前对话", value: false },
+        ],
+        { title: "确认回退对话", signal: interactionController.signal },
+      )
+      if (!confirmed) return
+    }
+    const command =
+      action === "rewind"
+        ? ({ type: "rewind", turnId: selected.turnId } as const)
+        : ({ type: "fork_session", turnId: selected.turnId } as const)
+    const result = await dispatchWithError(command, action === "rewind" ? "回退对话失败" : "创建会话分支失败")
+    if (result.ok) editor.setInputText(selected.text)
+  }
+
+  async function renameCurrentSession(argument?: string): Promise<void> {
+    const snapshot = core.getSnapshot()
+    if (!snapshot.currentSessionId) return
+    if (argument !== undefined) {
+      await dispatchWithError(
+        { type: "rename_session", sessionId: snapshot.currentSessionId, name: argument },
+        "重命名会话失败",
+      )
+      return
+    }
+    const handle = overlays.open<string>({
+      id: "rename-current-session",
+      title: "重命名当前会话",
+      description: "可留空以清除名称",
+      actions: [],
+      contentHeight: 1,
+      signal: interactionController.signal,
+      onCancel: () => handle.close(undefined),
+    })
+    const name = await editInline(overlays, handle, {
+      id: "rename-current-session-input",
+      label: "会话名称  ",
+      initialValue: snapshot.currentSessionName ?? "",
+    })
+    handle.close(name)
+    if (name === undefined) return
+    await dispatchWithError({ type: "rename_session", sessionId: snapshot.currentSessionId, name }, "重命名会话失败")
   }
 
   const sessionSegments = (session: ReturnType<typeof core.getSnapshot>["sessions"][number]) => ({

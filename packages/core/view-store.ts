@@ -1,6 +1,7 @@
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 
+import { atomicWriteFile, withFileLock } from "./file-transaction.ts"
 import { WordTripletIdGenerator, type MnemonicIdGenerator } from "./mnemonic-id.ts"
 
 export type ViewDefinition = {
@@ -132,41 +133,43 @@ export class ViewStore {
     const id = input.id ?? (await this.suggestId())
     const parsed = parseViewsValue({ version: 1, views: [{ id, name: input.name, path: join("views", id) }] }).views[0]
     if (!parsed) throw new Error("无法创建视图")
-    const file = await this.#read()
-    if (file.views.some((view) => view.id === parsed.id)) throw new Error(`视图 ID 重复：${parsed.id}`)
     const directory = this.#directory(parsed)
-    await mkdir(join(directory, "skills"), { recursive: true })
-    await writeFile(join(directory, "AGENTS.md"), "# 视图说明\n\n请在这里填写项目背景和工作要求。\n", {
-      flag: "wx",
-    }).catch((error) => {
-      if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") throw error
+    await withFileLock(this.#file, async () => {
+      const file = await this.#read()
+      if (file.views.some((view) => view.id === parsed.id)) throw new Error(`视图 ID 重复：${parsed.id}`)
+      await mkdir(join(directory, "skills"), { recursive: true })
+      await writeFile(join(directory, "AGENTS.md"), "# 视图说明\n\n请在这里填写项目背景和工作要求。\n", {
+        flag: "wx",
+      }).catch((error) => {
+        if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") throw error
+      })
+      file.views.push(parsed)
+      await atomicWriteFile(this.#file, `${JSON.stringify(file, null, 2)}\n`)
     })
-    file.views.push(parsed)
-    await mkdir(dirname(this.#file), { recursive: true })
-    await writeFile(this.#file, `${JSON.stringify(file, null, 2)}\n`)
     return { ...parsed, directory }
   }
 
   async update(id: string, changes: { name?: string; path?: string }): Promise<void> {
-    const file = await this.#read()
-    const index = file.views.findIndex((view) => view.id === id)
-    if (index < 0) throw new Error(`视图不存在：${id}`)
-    const current = file.views[index]
-    if (!current) throw new Error(`视图不存在：${id}`)
-    const updated = parseViewsValue({
-      version: 1,
-      views: [
-        {
-          ...current,
-          ...(changes.name === undefined ? {} : { name: changes.name }),
-          ...(changes.path === undefined ? {} : { path: changes.path }),
-        },
-      ],
-    }).views[0]
-    if (!updated) throw new Error("无法更新视图")
-    file.views[index] = updated
-    await mkdir(dirname(this.#file), { recursive: true })
-    await writeFile(this.#file, `${JSON.stringify(file, null, 2)}\n`)
+    await withFileLock(this.#file, async () => {
+      const file = await this.#read()
+      const index = file.views.findIndex((view) => view.id === id)
+      if (index < 0) throw new Error(`视图不存在：${id}`)
+      const current = file.views[index]
+      if (!current) throw new Error(`视图不存在：${id}`)
+      const updated = parseViewsValue({
+        version: 1,
+        views: [
+          {
+            ...current,
+            ...(changes.name === undefined ? {} : { name: changes.name }),
+            ...(changes.path === undefined ? {} : { path: changes.path }),
+          },
+        ],
+      }).views[0]
+      if (!updated) throw new Error("无法更新视图")
+      file.views[index] = updated
+      await atomicWriteFile(this.#file, `${JSON.stringify(file, null, 2)}\n`)
+    })
   }
 
   async ensureFile(id: string, name: "SYSTEM.md" | "AGENTS.md"): Promise<string> {
@@ -177,12 +180,13 @@ export class ViewStore {
   }
 
   async remove(id: string): Promise<void> {
-    const file = await this.#read()
-    const index = file.views.findIndex((view) => view.id === id)
-    if (index < 0) throw new Error(`视图不存在：${id}`)
-    file.views.splice(index, 1)
-    await mkdir(dirname(this.#file), { recursive: true })
-    await writeFile(this.#file, `${JSON.stringify(file, null, 2)}\n`)
+    await withFileLock(this.#file, async () => {
+      const file = await this.#read()
+      const index = file.views.findIndex((view) => view.id === id)
+      if (index < 0) throw new Error(`视图不存在：${id}`)
+      file.views.splice(index, 1)
+      await atomicWriteFile(this.#file, `${JSON.stringify(file, null, 2)}\n`)
+    })
   }
 
   async deleteDirectory(id: string): Promise<void> {

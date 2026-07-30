@@ -1,5 +1,6 @@
 export * from "./aizen-core.ts"
 export * from "./error-queue.ts"
+export * from "./file-transaction.ts"
 export * from "./mnemonic-id.ts"
 export * from "./paths.ts"
 export * from "./pi-port.ts"

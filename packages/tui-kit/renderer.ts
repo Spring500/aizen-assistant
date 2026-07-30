@@ -13,6 +13,22 @@ export async function createAizenRenderer(): Promise<CliRenderer> {
   })
 }
 
+function safeTerminalTitle(title: string): string {
+  return Array.from(title)
+    .filter((character) => {
+      const codePoint = character.codePointAt(0) ?? 0
+      return codePoint > 31 && (codePoint < 127 || codePoint > 159)
+    })
+    .slice(0, 120)
+    .join("")
+    .trim()
+}
+
+/** 设置经过控制字符过滤和长度限制的终端标题。 */
+export function setAizenTerminalTitle(renderer: CliRenderer, title: string): void {
+  renderer.setTerminalTitle(safeTerminalTitle(title) || "AizenAssistant")
+}
+
 export function destroyRenderer(renderer: CliRenderer): void {
   renderer.destroy()
 }

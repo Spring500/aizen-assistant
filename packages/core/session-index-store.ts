@@ -1,6 +1,6 @@
-import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
+import { readFile, readdir, rm } from "node:fs/promises"
 import { dirname } from "node:path"
-import lockfile from "proper-lockfile"
+import { atomicWriteFile, withFileLock } from "./file-transaction.ts"
 import type { SessionSummary } from "./session-store.ts"
 
 export type SessionIndexEntry = {
@@ -90,22 +90,17 @@ export class SessionIndexStore {
   }
 
   async #updateLocked(projectKey: string, entries: Record<string, SessionIndexEntry>): Promise<string[]> {
-    await mkdir(dirname(this.#path), { recursive: true })
-    const release = await lockfile.lock(this.#path, {
-      realpath: false,
-      lockfilePath: this.#lockPath,
-      stale: 10_000,
-      update: 2_000,
-      retries: { retries: 20, factor: 1.2, minTimeout: 25, maxTimeout: 250 },
-    })
-    try {
-      const index = await this.#read()
-      index.projects[projectKey] = structuredClone(entries)
-      await this.#replace(index)
-      return []
-    } finally {
-      await release()
-    }
+    return withFileLock(
+      this.#path,
+      async () => {
+        await this.#cleanupLegacyTemporaryFiles()
+        const index = await this.#read()
+        index.projects[projectKey] = structuredClone(entries)
+        await atomicWriteFile(this.#path, `${JSON.stringify(index, null, 2)}\n`)
+        return []
+      },
+      this.#lockPath,
+    )
   }
 
   async #read(): Promise<SessionIndex> {
@@ -116,18 +111,7 @@ export class SessionIndexStore {
     }
   }
 
-  async #replace(index: SessionIndex): Promise<void> {
-    await this.#cleanupTemporaryFiles()
-    const temporary = `${this.#path}.${crypto.randomUUID()}.tmp`
-    await writeFile(temporary, `${JSON.stringify(index, null, 2)}\n`, "utf8")
-    try {
-      await rename(temporary, this.#path)
-    } finally {
-      await rm(temporary, { force: true })
-    }
-  }
-
-  async #cleanupTemporaryFiles(): Promise<void> {
+  async #cleanupLegacyTemporaryFiles(): Promise<void> {
     const directory = dirname(this.#path)
     const prefix = `${this.#path.slice(directory.length + 1)}.`
     const entries = await readdir(directory, { withFileTypes: true })

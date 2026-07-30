@@ -125,6 +125,19 @@ test("编辑器高度随视觉行数变化并显示带标题分割线", async ()
   }
 })
 
+test("可以回填编辑器文本", async () => {
+  const setup = await createTestRenderer({ width: 60, height: 15 })
+  const editor = createChatEditor(setup.renderer, { onSubmit() {}, onAbort() {}, onQuit() {} })
+  try {
+    editor.setInputText("重新编辑的问题")
+    expect(editor.input.plainText).toBe("重新编辑的问题")
+    expect(editor.input.cursorOffset).toBe(editor.input.plainText.length)
+  } finally {
+    editor.destroy()
+    setup.renderer.destroy()
+  }
+})
+
 test("没有会话名时标题只显示会话 ID", async () => {
   const setup = await createTestRenderer({ width: 40, height: 12 })
   try {

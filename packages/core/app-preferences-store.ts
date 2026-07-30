@@ -1,5 +1,5 @@
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
-import { dirname } from "node:path"
+import { readFile } from "node:fs/promises"
+import { atomicWriteFile } from "./file-transaction.ts"
 import type { ModelReference, ViewId } from "./session-format.ts"
 
 export type FoldPreferences = {
@@ -118,9 +118,6 @@ export class AppPreferencesStore {
   /** 原子写入经过校验的完整应用偏好。 */
   async write(value: AppPreferences): Promise<void> {
     const parsed = parseAppPreferences(value)
-    await mkdir(dirname(this.#file), { recursive: true })
-    const temporary = `${this.#file}.${crypto.randomUUID()}.tmp`
-    await writeFile(temporary, `${JSON.stringify(parsed, null, 2)}\n`)
-    await rename(temporary, this.#file)
+    await atomicWriteFile(this.#file, `${JSON.stringify(parsed, null, 2)}\n`)
   }
 }

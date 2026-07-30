@@ -62,6 +62,8 @@ export type CoreCommand =
   | { type: "create_session"; model: ModelReference; viewId: ViewId }
   | { type: "open_session"; sessionId: string }
   | { type: "rename_session"; sessionId: string; name: string }
+  | { type: "rewind"; turnId: string }
+  | { type: "fork_session"; turnId: string }
   | { type: "send_prompt"; text: string }
   | { type: "abort" }
   | { type: "list_models" }
