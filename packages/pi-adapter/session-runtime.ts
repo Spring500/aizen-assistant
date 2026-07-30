@@ -48,14 +48,15 @@ const piThinkingLevels = ["minimal", "low", "medium", "high", "xhigh", "max"] as
 
 type RuntimeThinkingConfig = ModelThinkingConfig | null | undefined
 
-function runtimeModel(model: Model<Api>, config: RuntimeThinkingConfig): Model<Api> {
-  if (config === undefined) return model
+function runtimeModel(model: Model<Api>, config: RuntimeThinkingConfig, baseUrl?: string): Model<Api> {
+  const actualModel = baseUrl === undefined ? model : { ...model, baseUrl }
+  if (config === undefined) return actualModel
   if (config === null) {
-    const { thinkingLevelMap: _thinkingLevelMap, ...plainModel } = model
+    const { thinkingLevelMap: _thinkingLevelMap, ...plainModel } = actualModel
     return { ...plainModel, reasoning: false }
   }
   return {
-    ...model,
+    ...actualModel,
     reasoning: true,
     thinkingLevelMap: {
       off: config.disableThinkingLevel === undefined ? null : config.disableThinkingLevel,
@@ -197,7 +198,8 @@ export class PiSessionRuntime implements PiPort {
   readonly #modelsPath: string | null
   readonly #listeners = new Set<(event: PiPortEvent) => void>()
   #thinkingConfigs = new Map<string, ModelThinkingConfig | null>()
-  #thinkingConfigError: Error | undefined
+  #modelBaseUrls = new Map<string, string>()
+  #modelConfigError: Error | undefined
   #session: AgentSession | undefined
   #unsubscribe: (() => void) | undefined
   #unsubscribeAgent: (() => void) | undefined
@@ -223,7 +225,7 @@ export class PiSessionRuntime implements PiPort {
       await ModelRuntime.create({ ...options, allowModelNetwork: false }),
       options.modelsPath,
     )
-    await runtime.#reloadThinkingConfigs()
+    await runtime.#reloadModelConfigs()
     return runtime
   }
 
@@ -241,8 +243,9 @@ export class PiSessionRuntime implements PiPort {
     await this.#disposeSession()
     const sourceModel = this.#modelRuntime.getModel(input.model.providerId, input.model.modelId)
     if (!sourceModel) throw new Error(`找不到模型：${input.model.providerId}/${input.model.modelId}`)
-    const thinkingConfig = this.#thinkingConfigs.get(`${sourceModel.provider}\0${sourceModel.id}`)
-    const model = runtimeModel(sourceModel, thinkingConfig)
+    const modelKey = `${sourceModel.provider}\0${sourceModel.id}`
+    const thinkingConfig = this.#thinkingConfigs.get(modelKey)
+    const model = runtimeModel(sourceModel, thinkingConfig, this.#modelBaseUrls.get(modelKey))
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: false } })
     const initialLoader = createViewLoader(input.cwd, input.view, settingsManager)
     await initialLoader.reload()
@@ -400,8 +403,8 @@ export class PiSessionRuntime implements PiPort {
     await this.#modelRuntime.reloadConfig()
     const configError = this.#modelRuntime.getError()
     if (configError) throw new Error(`models.json 配置错误：${configError}`)
-    await this.#reloadThinkingConfigs()
-    if (this.#thinkingConfigError) throw this.#thinkingConfigError
+    await this.#reloadModelConfigs()
+    if (this.#modelConfigError) throw this.#modelConfigError
   }
 
   async listModels(): Promise<ModelOption[]> {
@@ -448,8 +451,9 @@ export class PiSessionRuntime implements PiPort {
     if (!session.isIdle) throw new Error("生成或执行工具期间不能切换模型")
     const sourceModel = this.#modelRuntime.getModel(reference.providerId, reference.modelId)
     if (!sourceModel) throw new Error(`找不到模型：${reference.providerId}/${reference.modelId}`)
-    const thinkingConfig = this.#thinkingConfigs.get(`${sourceModel.provider}\0${sourceModel.id}`)
-    const model = runtimeModel(sourceModel, thinkingConfig)
+    const modelKey = `${sourceModel.provider}\0${sourceModel.id}`
+    const thinkingConfig = this.#thinkingConfigs.get(modelKey)
+    const model = runtimeModel(sourceModel, thinkingConfig, this.#modelBaseUrls.get(modelKey))
     await session.setModel(model)
     session.setThinkingLevel(internalThinkingLevel(model, reference.thinkingLevel, thinkingConfig))
     return modelReference(model, session.thinkingLevel, thinkingConfig)
@@ -553,8 +557,9 @@ export class PiSessionRuntime implements PiPort {
       if (record.kind === "model_changed") {
         const sourceModel = this.#modelRuntime.getModel(record.model.providerId, record.model.modelId)
         if (!sourceModel) throw new Error(`找不到模型：${record.model.providerId}/${record.model.modelId}`)
-        const thinkingConfig = this.#thinkingConfigs.get(`${sourceModel.provider}\0${sourceModel.id}`)
-        const model = runtimeModel(sourceModel, thinkingConfig)
+        const modelKey = `${sourceModel.provider}\0${sourceModel.id}`
+        const thinkingConfig = this.#thinkingConfigs.get(modelKey)
+        const model = runtimeModel(sourceModel, thinkingConfig, this.#modelBaseUrls.get(modelKey))
         this.#registerEntry(
           record.recordId,
           sessionManager.appendModelChange(record.model.providerId, record.model.modelId),
@@ -603,19 +608,22 @@ export class PiSessionRuntime implements PiPort {
     throw new Error("上下文压缩位置无法对应到会话记录")
   }
 
-  async #reloadThinkingConfigs(): Promise<void> {
+  async #reloadModelConfigs(): Promise<void> {
     this.#thinkingConfigs.clear()
-    this.#thinkingConfigError = undefined
+    this.#modelBaseUrls.clear()
+    this.#modelConfigError = undefined
     if (!this.#modelsPath) return
     try {
       const snapshot = await new ModelConfigStore(this.#modelsPath).read()
       for (const provider of snapshot.providers) {
         for (const model of provider.models) {
-          this.#thinkingConfigs.set(`${provider.id}\0${model.id}`, model.thinking ?? null)
+          const modelKey = `${provider.id}\0${model.id}`
+          this.#thinkingConfigs.set(modelKey, model.thinking ?? null)
+          if (model.baseUrl !== undefined) this.#modelBaseUrls.set(modelKey, model.baseUrl)
         }
       }
     } catch (error) {
-      this.#thinkingConfigError = error instanceof Error ? error : new Error(String(error))
+      this.#modelConfigError = error instanceof Error ? error : new Error(String(error))
     }
   }
 

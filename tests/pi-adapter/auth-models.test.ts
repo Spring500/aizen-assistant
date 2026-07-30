@@ -104,6 +104,65 @@ describe("认证与模型", () => {
     await runtime.dispose()
   })
 
+  test("请求使用模型 Base URL 覆写并保留供应商认证", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
+    directories.push(directory)
+    const modelsPath = join(directory, "models.json")
+    const requests: string[] = []
+    const server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        requests.push(new URL(request.url).pathname)
+        const body = [
+          `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id: "m1", type: "message", role: "assistant", content: [], model: "claude-test", usage: { input_tokens: 1, output_tokens: 1 } } })}`,
+          `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })}`,
+          `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "完成" } })}`,
+          `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: 0 })}`,
+          `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } })}`,
+          `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}`,
+          "",
+        ].join("\n\n")
+        return new Response(body, { headers: { "content-type": "text/event-stream" } })
+      },
+    })
+    await writeFile(
+      modelsPath,
+      JSON.stringify({
+        providers: {
+          example: {
+            baseUrl: "https://invalid.example/v1",
+            api: "openai-completions",
+            models: [
+              {
+                id: "claude-test",
+                api: "anthropic-messages",
+                baseUrl: `http://127.0.0.1:${server.port}`,
+              },
+            ],
+          },
+        },
+      }),
+    )
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath })
+    try {
+      await runtime.setRuntimeApiKey("example", "test-key")
+      const model = (await runtime.listModels()).find((item) => item.modelId === "claude-test")
+      expect(model).toBeDefined()
+      if (!model) return
+      await runtime.create({ cwd: directory, model, view: { viewId: null } })
+      await runtime.prompt({
+        recordId: crypto.randomUUID(),
+        turnId: crypto.randomUUID(),
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "测试" }] }],
+      })
+      expect(requests).toEqual(["/v1/messages"])
+    } finally {
+      await runtime.dispose()
+      server.stop(true)
+    }
+  })
+
   test("第三方模型向用户暴露自身档位名和默认档位", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
     directories.push(directory)
