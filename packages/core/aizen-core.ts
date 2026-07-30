@@ -1,9 +1,10 @@
 import { type AppPreferencesStore, defaultAppPreferences, parseAppPreferences } from "./app-preferences-store.ts"
 import { CoreErrorQueue } from "./error-queue.ts"
 import type { ModelConfigStore } from "./model-config-store.ts"
-import type { PiPort, PiPortEvent } from "./pi-port.ts"
+import type { PiPermissionExecutionEvent, PiPort, PiPortEvent } from "./pi-port.ts"
 import type {
   AssistantMessage,
+  JsonValue,
   ModelReference,
   SessionRecord,
   TurnFinishedRecord,
@@ -118,6 +119,7 @@ export class AizenCore implements CorePort {
         return Promise.resolve({ type: "deny", reason: "权限管理器不可用", source: "system" })
       return this.#permissionManager.authorize(request, signal)
     })
+    this.#pi.setPermissionExecutionHandler?.((event) => this.#recordPermissionExecution(event))
   }
 
   getSnapshot(): CoreSnapshot {
@@ -442,6 +444,11 @@ export class AizenCore implements CorePort {
       this.#reportError(error instanceof Error ? error.message : String(error))
       return undefined
     })
+    const recoveryRecords = this.#recoverInterruptedTools(loaded.records)
+    if (recoveryRecords.length > 0) {
+      for (const record of recoveryRecords) await this.#store.append(sessionId, record)
+      loaded.records.push(...recoveryRecords)
+    }
     const actualModel = view
       ? await this.#pi.restore({
           cwd: this.#cwd,
@@ -472,8 +479,59 @@ export class AizenCore implements CorePort {
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
     if (loaded.warnings.length > 0) this.#reportError(loaded.warnings.join("；"))
+    else if (recoveryRecords.length > 0)
+      this.#reportError("检测到上次异常退出时仍在执行的工具；已记录检查指引，未自动重试")
     else if (this.#runtimeReady) this.#clearError()
     await this.#rememberSessionDefaults(actualModel, viewRecord.viewId, this.#snapshot.currentPermissionMode)
+  }
+
+  #recoverInterruptedTools(records: SessionRecord[]): SessionRecord[] {
+    const started = new Map<string, Extract<SessionRecord, { kind: "tool_permission" }>>()
+    const finished = new Set<string>()
+    const recovered = new Set<string>()
+    for (const record of records) {
+      if (
+        record.kind !== "tool_permission" ||
+        !record.event ||
+        typeof record.event !== "object" ||
+        Array.isArray(record.event)
+      )
+        continue
+      const phase = record.event.phase
+      if (phase === "executionStarted") started.set(record.toolCallId, record)
+      if (phase === "executionFinished") finished.add(record.toolCallId)
+      if (record.event.type === "interruptedAfterStart") recovered.add(record.toolCallId)
+    }
+    return [...started]
+      .filter(([callId]) => !finished.has(callId) && !recovered.has(callId))
+      .map(([callId, record]) => {
+        const event = record.event as Record<string, JsonValue>
+        const authorization =
+          event.authorization && typeof event.authorization === "object" && !Array.isArray(event.authorization)
+            ? event.authorization
+            : undefined
+        const assessment =
+          authorization?.assessment &&
+          typeof authorization.assessment === "object" &&
+          !Array.isArray(authorization.assessment)
+            ? authorization.assessment
+            : undefined
+        const checks = Array.isArray(assessment?.recoveryChecks)
+          ? assessment.recoveryChecks.filter((item: JsonValue): item is string => typeof item === "string")
+          : ["检查原工具涉及的文件、进程或远程资源状态"]
+        return {
+          kind: "tool_permission" as const,
+          recordId: crypto.randomUUID(),
+          turnId: record.turnId,
+          at: new Date().toISOString(),
+          toolCallId: callId,
+          event: {
+            type: "interruptedAfterStart",
+            message: "应用在工具执行期间异常终止。操作可能未执行、部分执行或已完成；禁止直接重试，请先检查实际状态。",
+            recoveryChecks: checks,
+          },
+        }
+      })
   }
 
   async #activateRecords(
@@ -836,6 +894,20 @@ export class AizenCore implements CorePort {
       event: JSON.parse(JSON.stringify(event)),
     }
     await this.#appendRecord(sessionId, record)
+  }
+
+  async #recordPermissionExecution(event: PiPermissionExecutionEvent): Promise<void> {
+    const sessionId = this.#snapshot.currentSessionId
+    const turnId = this.#currentTurnId
+    if (!sessionId || !turnId) return
+    await this.#appendRecord(sessionId, {
+      kind: "tool_permission",
+      recordId: crypto.randomUUID(),
+      turnId,
+      at: event.at,
+      toolCallId: event.request.toolCallId,
+      event: JSON.parse(JSON.stringify(event)),
+    })
   }
 
   #handlePiEvent(event: PiPortEvent): void {

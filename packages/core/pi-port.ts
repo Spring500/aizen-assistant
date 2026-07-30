@@ -89,6 +89,17 @@ export type PiSessionTitleInput = {
 
 export type PiPermissionHandler = (request: ToolPermissionRequest, signal?: AbortSignal) => Promise<ToolAuthorization>
 
+export type PiPermissionExecutionEvent = {
+  phase: "executionStarted" | "executionFinished"
+  request: ToolPermissionRequest
+  authorization: ToolAuthorization
+  isError?: boolean
+  error?: string
+  at: string
+}
+
+export type PiPermissionExecutionHandler = (event: PiPermissionExecutionEvent) => Promise<void>
+
 export interface PiPort {
   create(input: PiCreateInput): Promise<ModelRuntimeInfo>
   restore(input: PiRestoreInput): Promise<ModelRuntimeInfo>
@@ -99,6 +110,8 @@ export interface PiPort {
   generateSessionTitle(input: PiSessionTitleInput): Promise<string>
   /** 设置核心提供的工具权限处理器。 */
   setPermissionHandler?(handler: PiPermissionHandler | undefined): void
+  /** 设置工具执行阶段记录处理器。 */
+  setPermissionExecutionHandler?(handler: PiPermissionExecutionHandler | undefined): void
   /** 返回使用当前模型运行时的独立 AI 权限审核器。 */
   permissionReviewer?(model: Pick<ModelReference, "providerId" | "modelId">): AiPermissionReviewer
   abort(): Promise<void>

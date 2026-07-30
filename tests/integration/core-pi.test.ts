@@ -134,6 +134,51 @@ test("真实 pi 链路完成两轮并恢复第三轮", async () => {
   }
 }, 30000)
 
+test("真实 pi 链路将权限拒绝结果返回模型", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aizen-integration-"))
+  directories.push(root)
+  const mock = await startMockServer()
+  try {
+    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+    await pi.setRuntimeApiKey("anthropic", "test-key")
+    const models = await pi.listModels()
+    const option = models.find((item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6")
+    if (!option) throw new Error("缺少集成测试模型")
+    pi.setModelBaseUrl(option.providerId, option.modelId, mock.url)
+    const core = new AizenCore({ cwd: root, store: new SessionStore(join(root, "sessions")), pi })
+    await core.dispatch({ type: "create_session", model: option, viewId: null, permissionMode: "hybrid" })
+    const sending = core.dispatch({ type: "send_prompt", text: "执行测试" })
+    const first = await mock.take({ modelId: option.modelId })
+    first.respond({
+      type: "tool_call",
+      name: "bash",
+      arguments: { command: "sudo rm file", declaredIntent: "删除文件" },
+      callId: "permission-call",
+    })
+    for (let attempt = 0; attempt < 50 && !core.getSnapshot().pendingPermissionRequests?.length; attempt++)
+      await Bun.sleep(2)
+    const pending = core.getSnapshot().pendingPermissionRequests?.[0]
+    expect(pending?.toolCallId).toBe("permission-call")
+    await core.dispatch({
+      type: "answer_permission_request",
+      requestId: pending?.requestId ?? "",
+      decision: "deny",
+    })
+    const second = await mock.take({ modelId: option.modelId })
+    const messages = JSON.stringify(second.messages)
+    expect(messages).toContain("permission-call")
+    expect(messages).toContain("工具调用被拒绝")
+    second.respond({ type: "text", text: "已停止操作" })
+    expect(await sending).toEqual({ ok: true })
+    expect(
+      core.getSnapshot().transcript.some((entry) => entry.type === "message" && entry.message.role === "tool"),
+    ).toBe(true)
+    await core.dispose()
+  } finally {
+    mock.stop()
+  }
+}, 30000)
+
 test("真实 pi 链路并行完成主回复和工具式自动命名", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-"))
   directories.push(root)

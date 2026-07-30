@@ -33,6 +33,7 @@ import type {
   PiCreateInput,
   PiPort,
   PiPortEvent,
+  PiPermissionExecutionHandler,
   PiPermissionHandler,
   PiPromptInput,
   PiRestoreInput,
@@ -40,6 +41,7 @@ import type {
   ViewRuntimeInput,
 } from "../core/pi-port.ts"
 import type { JsonValue, ModelReference, SessionRecord } from "../core/session-format.ts"
+import type { ToolAuthorization } from "../core/tool-permissions/types.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
 import { PiPermissionReviewer } from "./permission-reviewer.ts"
 import { generateSessionTitle } from "./session-title-generator.ts"
@@ -189,7 +191,9 @@ function auditedTools(
     arguments: JsonValue
     declaredIntent: string
     signal?: AbortSignal
-  }) => Promise<{ arguments: JsonValue }>,
+  }) => Promise<Extract<ToolAuthorization, { type: "allow" }>>,
+  activePrompt: () => PiPromptInput | undefined,
+  recordExecution: PiPermissionExecutionHandler | undefined,
 ): ToolDefinition[] {
   const intent = Type.Object({
     declaredIntent: Type.String({
@@ -213,7 +217,49 @@ function auditedTools(
         declaredIntent,
         ...(signal ? { signal } : {}),
       })
-      return tool.execute(callId, authorization.arguments as never, signal, onUpdate)
+      const prompt = activePrompt()
+      const request = prompt?.sessionId
+        ? {
+            sessionId: prompt.sessionId,
+            turnId: prompt.turnId,
+            toolCallId: callId,
+            toolName: tool.name,
+            arguments: authorization.arguments,
+            declaredIntent,
+            cwd,
+            mode: prompt.permissionMode ?? "hybrid",
+          }
+        : undefined
+      if (request)
+        await recordExecution?.({
+          phase: "executionStarted",
+          request,
+          authorization,
+          at: new Date().toISOString(),
+        })
+      try {
+        const result = await tool.execute(callId, authorization.arguments as never, signal, onUpdate)
+        if (request)
+          await recordExecution?.({
+            phase: "executionFinished",
+            request,
+            authorization,
+            isError: false,
+            at: new Date().toISOString(),
+          })
+        return result
+      } catch (error) {
+        if (request)
+          await recordExecution?.({
+            phase: "executionFinished",
+            request,
+            authorization,
+            isError: true,
+            error: error instanceof Error ? error.message : String(error),
+            at: new Date().toISOString(),
+          })
+        throw error
+      }
     },
   }))
 }
@@ -226,6 +272,7 @@ export class PiSessionRuntime implements PiPort {
   #modelBaseUrls = new Map<string, string>()
   #modelConfigError: Error | undefined
   #permissionHandler: PiPermissionHandler | undefined
+  #permissionExecutionHandler: PiPermissionExecutionHandler | undefined
   #activePrompt: PiPromptInput | undefined
   #session: AgentSession | undefined
   #unsubscribe: (() => void) | undefined
@@ -289,33 +336,38 @@ export class PiSessionRuntime implements PiPort {
       model,
       thinkingLevel: internalThinkingLevel(model, input.model.thinkingLevel, thinkingConfig),
       tools: ["read", "bash", "edit", "write"],
-      customTools: auditedTools(input.cwd, async (call) => {
-        const prompt = this.#activePrompt
-        if (!prompt?.sessionId || !this.#permissionHandler) throw new Error("工具权限处理器尚未初始化")
-        const authorization = await this.#permissionHandler(
-          {
-            sessionId: prompt.sessionId,
-            turnId: prompt.turnId,
-            toolCallId: call.callId,
-            toolName: call.name,
-            arguments: call.arguments,
-            declaredIntent: call.declaredIntent,
-            cwd: input.cwd,
-            mode: prompt.permissionMode ?? "hybrid",
-            ...(call.name === "bash"
-              ? {
-                  environment: {
-                    shell: this.#shellKind(),
-                  },
-                }
-              : {}),
-          },
-          call.signal,
-        )
-        if (authorization.type === "allow") return { arguments: authorization.arguments }
-        if (authorization.type === "aborted") throw new Error(authorization.reason)
-        throw new Error(`工具调用被拒绝（${authorization.source}）：${authorization.reason}`)
-      }),
+      customTools: auditedTools(
+        input.cwd,
+        async (call) => {
+          const prompt = this.#activePrompt
+          if (!prompt?.sessionId || !this.#permissionHandler) throw new Error("工具权限处理器尚未初始化")
+          const authorization = await this.#permissionHandler(
+            {
+              sessionId: prompt.sessionId,
+              turnId: prompt.turnId,
+              toolCallId: call.callId,
+              toolName: call.name,
+              arguments: call.arguments,
+              declaredIntent: call.declaredIntent,
+              cwd: input.cwd,
+              mode: prompt.permissionMode ?? "hybrid",
+              ...(call.name === "bash"
+                ? {
+                    environment: {
+                      shell: this.#shellKind(),
+                    },
+                  }
+                : {}),
+            },
+            call.signal,
+          )
+          if (authorization.type === "allow") return authorization
+          if (authorization.type === "aborted") throw new Error(authorization.reason)
+          throw new Error(`工具调用被拒绝（${authorization.source}）：${authorization.reason}`)
+        },
+        () => this.#activePrompt,
+        this.#permissionExecutionHandler,
+      ),
       resourceLoader,
       sessionManager,
       settingsManager,
@@ -452,6 +504,10 @@ export class PiSessionRuntime implements PiPort {
 
   setPermissionHandler(handler: PiPermissionHandler | undefined): void {
     this.#permissionHandler = handler
+  }
+
+  setPermissionExecutionHandler(handler: PiPermissionExecutionHandler | undefined): void {
+    this.#permissionExecutionHandler = handler
   }
 
   permissionReviewer(reference: Pick<ModelReference, "providerId" | "modelId">): PiPermissionReviewer {
