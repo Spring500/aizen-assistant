@@ -1,5 +1,5 @@
 import type { Api, AssistantMessage, Message, Model, ToolCall, ToolResultMessage } from "@earendil-works/pi-ai"
-import { ModelRuntime } from "@earendil-works/pi-coding-agent"
+import type { ModelRuntime } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 
 const titleToolName = "set_session_title"
