@@ -23,13 +23,16 @@ function setup(decision: ToolPermissionDecision, aiType: "allow" | "deny" | "nee
   const registry = new ToolPermissionRegistry()
   registry.register({ toolName: "demo", validate: async () => decision })
   const humanCalls: unknown[] = []
+  const aiRequests: unknown[] = []
   const ai: AiPermissionReviewer = {
-    review: async () =>
-      aiType === "allow"
+    review: async (request) => {
+      aiRequests.push(request)
+      return aiType === "allow"
         ? { type: "allow", reason: "风险可接受" }
         : aiType === "deny"
           ? { type: "deny", reason: "风险过高" }
-          : { type: "needHumanReview", reason: "需要用户判断" },
+          : { type: "needHumanReview", reason: "需要用户判断" }
+    },
   }
   const human: HumanPermissionReviewer = {
     review: async (request) => {
@@ -37,7 +40,11 @@ function setup(decision: ToolPermissionDecision, aiType: "allow" | "deny" | "nee
       return { type: "approve" }
     },
   }
-  return { manager: new ToolPermissionManager({ registry, aiReviewer: ai, humanReviewer: human }), humanCalls }
+  return {
+    manager: new ToolPermissionManager({ registry, aiReviewer: ai, humanReviewer: human }),
+    humanCalls,
+    aiRequests,
+  }
 }
 
 const assessment = { summary: "动作", targets: [], risk: "low" as const, reason: "测试" }
@@ -66,6 +73,19 @@ describe("ToolPermissionManager", () => {
     const escalated = setup(decision, "needHumanReview")
     expect(await escalated.manager.authorize(base)).toMatchObject({ type: "allow", source: "human" })
     expect(escalated.humanCalls).toHaveLength(1)
+  })
+
+  test("发送给AI的正文和密钥字段会被隐藏", async () => {
+    const decision = {
+      type: "needAiReview",
+      assessment,
+      reviewPayload: { content: "源码正文", apiKey: "secret", path: "file.ts" },
+    } as const
+    const setupResult = setup(decision)
+    await setupResult.manager.authorize(base)
+    expect(setupResult.aiRequests).toMatchObject([
+      { payload: { content: "[敏感内容已隐藏]", apiKey: "[敏感内容已隐藏]", path: "file.ts" } },
+    ])
   })
 
   test("确认拒绝模式把AI拒绝交给人工", async () => {

@@ -1,6 +1,7 @@
 import type { JsonValue } from "../session-format.ts"
 
-const sensitiveKey = /(token|password|passwd|secret|api[_-]?key|private[_-]?key|authorization|cookie|credential)/i
+const sensitiveKey =
+  /(token|password|passwd|secret|api[_-]?key|private[_-]?key|authorization|cookie|credential|content|body)/i
 const maximumStringBytes = 4096
 const maximumPayloadBytes = 16384
 
