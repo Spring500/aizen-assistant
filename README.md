@@ -71,7 +71,3 @@ bun run verify
 该命令包含仓库配置、格式、静态检查、类型检查、构建、自动测试以及 Windows x64 单文件运行验证。
 
 协作和 PR 规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-## 项目文档
-
-- [技术路线图](docs/AizenAssistant技术路线图.md)
