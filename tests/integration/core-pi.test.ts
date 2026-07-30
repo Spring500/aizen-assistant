@@ -57,7 +57,7 @@ afterEach(async () => {
 test("真实 pi 链路完成两轮并恢复第三轮", async () => {
   const root = await traceStage("创建临时目录", () => mkdtemp(join(tmpdir(), "aizen-integration-")))
   directories.push(root)
-  const mock = await traceStage("启动 mock server worker", () => startMockServer("完成"))
+  const mock = await traceStage("启动 mock server", () => startMockServer("完成"))
   try {
     const pi = await traceStage("创建首次 pi runtime", () =>
       PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null }),
