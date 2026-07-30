@@ -42,6 +42,28 @@ test("恢复时把已开始但未结束的工具标记为需先检查而不自�
     { kind: "view_changed", recordId: "view", at, viewId: null },
     { kind: "permission_mode_changed", recordId: "mode", at, permissionMode: "hybrid" },
     {
+      kind: "turn_started",
+      recordId: "turn-started",
+      turnId: "turn",
+      at,
+      viewId: null,
+      permissionMode: "hybrid",
+      items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "执行工具" }] }],
+    },
+    {
+      kind: "message",
+      recordId: "assistant",
+      turnId: "turn",
+      at,
+      message: {
+        role: "assistant",
+        parts: [{ kind: "tool_call", callId: "call", name: "write", arguments: { path: "file.ts", content: "x" } }],
+        source: { providerId: "test", modelId: "model", api: "anthropic-messages" },
+        stopReason: "toolUse",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+      },
+    },
+    {
       kind: "tool_permission",
       recordId: "started",
       turnId: "turn",
@@ -73,5 +95,18 @@ test("恢复时把已开始但未结束的工具标记为需先检查而不自�
     toolCallId: "call",
     event: { recoveryChecks: ["检查目标文件内容"] },
   })
+  expect(
+    loaded.records.find(
+      (record) => record.kind === "message" && record.message.role === "tool" && record.message.callId === "call",
+    ),
+  ).toMatchObject({ message: { isError: true, details: { interrupted: true, executionStarted: true } } })
+  expect(loaded.records.at(-1)).toMatchObject({ kind: "turn_finished", outcome: "failed" })
+  expect(
+    core
+      .getSnapshot()
+      .transcript.some(
+        (entry) => entry.type === "message" && entry.message.role === "tool" && entry.message.callId === "call",
+      ),
+  ).toBe(true)
   await core.dispose()
 })
