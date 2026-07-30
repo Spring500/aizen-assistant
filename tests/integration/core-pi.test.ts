@@ -151,8 +151,11 @@ test("真实 pi 链路并行完成主回复和工具式自动命名", async () =
     const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
     await preferencesStore.write({
       version: 1,
-      newSession: { viewId: null },
-      agents: { sessionNaming: { model: { providerId: naming.providerId, modelId: naming.modelId } } },
+      newSession: { viewId: null, permissionMode: "hybrid" },
+      agents: {
+        sessionNaming: { model: { providerId: naming.providerId, modelId: naming.modelId } },
+        permissionReview: {},
+      },
       fold: { userTurns: 0, assistantTurns: 3, thinkingTurns: 1, toolGroupTurns: 1, toolDetailTurns: 1 },
     })
     const core = new AizenCore({

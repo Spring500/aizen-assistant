@@ -72,8 +72,8 @@ async function configuredCore(root: string, pi: PiPort, store = new SessionStore
   const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
   await preferencesStore.write({
     version: 1,
-    newSession: { viewId: null },
-    agents: { sessionNaming: { model: { providerId: "test", modelId: "title-model" } } },
+    newSession: { viewId: null, permissionMode: "hybrid" },
+    agents: { sessionNaming: { model: { providerId: "test", modelId: "title-model" } }, permissionReview: {} },
     fold: { userTurns: 0, assistantTurns: 3, thinkingTurns: 1, toolGroupTurns: 1, toolDetailTurns: 1 },
   })
   const core = new AizenCore({ cwd: "E:\\project", store, pi, preferencesStore })
@@ -217,8 +217,8 @@ describe("核心编排", () => {
     const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
     await preferencesStore.write({
       version: 1,
-      newSession: { viewId: null },
-      agents: { sessionNaming: {} },
+      newSession: { viewId: null, permissionMode: "hybrid" },
+      agents: { sessionNaming: {}, permissionReview: {} },
       fold: { userTurns: 2, assistantTurns: 4, thinkingTurns: 1, toolGroupTurns: 3, toolDetailTurns: 1 },
     })
     const core = new AizenCore({
@@ -399,7 +399,7 @@ describe("核心编排", () => {
     expect(pi.titleCalls).toHaveLength(0)
     await core.dispatch({
       type: "save_agent_preferences",
-      agents: { sessionNaming: { model: { providerId: "test", modelId: "title-model" } } },
+      agents: { sessionNaming: { model: { providerId: "test", modelId: "title-model" } }, permissionReview: {} },
     })
     await core.dispatch({ type: "send_prompt", text: "第二条" })
     expect(pi.titleCalls).toEqual([{ firstUserMessage: "第一条" }])

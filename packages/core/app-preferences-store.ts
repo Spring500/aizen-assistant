@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises"
 import { atomicWriteFile } from "./file-transaction.ts"
 import type { ModelReference, ViewId } from "./session-format.ts"
+import { permissionModes, type PermissionMode } from "./tool-permissions/types.ts"
 
 export type AgentModelReference = {
   providerId: string
@@ -9,6 +10,9 @@ export type AgentModelReference = {
 
 export type AgentPreferences = {
   sessionNaming: {
+    model?: AgentModelReference
+  }
+  permissionReview?: {
     model?: AgentModelReference
   }
 }
@@ -26,6 +30,7 @@ export type AppPreferences = {
   newSession: {
     model?: ModelReference
     viewId: ViewId
+    permissionMode?: PermissionMode
   }
   agents: AgentPreferences
   fold: FoldPreferences
@@ -41,8 +46,8 @@ export const defaultFoldPreferences: FoldPreferences = {
 
 export const defaultAppPreferences: AppPreferences = {
   version: 1,
-  newSession: { viewId: null },
-  agents: { sessionNaming: {} },
+  newSession: { viewId: null, permissionMode: "hybrid" },
+  agents: { sessionNaming: {}, permissionReview: {} },
   fold: defaultFoldPreferences,
 }
 
@@ -60,14 +65,18 @@ function turns(value: unknown, label: string): number {
   return value as number
 }
 
-function agentModelReference(value: unknown): AgentModelReference {
-  const source = object(value, "agents.sessionNaming.model")
-  exact(source, ["providerId", "modelId"], "agents.sessionNaming.model")
+function agentModelReference(value: unknown, label: string): AgentModelReference {
+  const source = object(value, label)
+  exact(source, ["providerId", "modelId"], label)
   for (const key of ["providerId", "modelId"] as const) {
-    if (typeof source[key] !== "string" || !source[key])
-      throw new Error(`agents.sessionNaming.model.${key} 必须是非空字符串`)
+    if (typeof source[key] !== "string" || !source[key]) throw new Error(`${label}.${key} 必须是非空字符串`)
   }
   return { providerId: source.providerId as string, modelId: source.modelId as string }
+}
+
+function permissionMode(value: unknown): PermissionMode {
+  if (!permissionModes.includes(value as PermissionMode)) throw new Error("newSession.permissionMode 无效")
+  return value as PermissionMode
 }
 
 function modelReference(value: unknown): ModelReference {
@@ -92,13 +101,16 @@ export function parseAppPreferences(value: unknown): AppPreferences {
   exact(source, ["version", "newSession", "agents", "fold"], "preferences.json")
   if (source.version !== 1) throw new Error(`不支持的 preferences.json 版本：${String(source.version)}`)
   const newSession = object(source.newSession, "newSession")
-  exact(newSession, ["model", "viewId"], "newSession")
+  exact(newSession, ["model", "viewId", "permissionMode"], "newSession")
   if (newSession.viewId !== null && typeof newSession.viewId !== "string")
     throw new Error("newSession.viewId 必须是字符串或 null")
   const agents = source.agents === undefined ? {} : object(source.agents, "agents")
-  exact(agents, ["sessionNaming"], "agents")
+  exact(agents, ["sessionNaming", "permissionReview"], "agents")
   const sessionNaming = agents.sessionNaming === undefined ? {} : object(agents.sessionNaming, "agents.sessionNaming")
   exact(sessionNaming, ["model"], "agents.sessionNaming")
+  const permissionReview =
+    agents.permissionReview === undefined ? {} : object(agents.permissionReview, "agents.permissionReview")
+  exact(permissionReview, ["model"], "agents.permissionReview")
   const fold = object(source.fold, "fold")
   exact(fold, ["userTurns", "assistantTurns", "thinkingTurns", "toolGroupTurns", "toolDetailTurns"], "fold")
   const parsedFold: FoldPreferences = {
@@ -119,11 +131,23 @@ export function parseAppPreferences(value: unknown): AppPreferences {
     newSession: {
       ...(newSession.model === undefined ? {} : { model: modelReference(newSession.model) }),
       viewId: newSession.viewId as ViewId,
+      permissionMode: permissionMode(newSession.permissionMode ?? "hybrid"),
     },
     agents: {
       sessionNaming: {
-        ...(sessionNaming.model === undefined ? {} : { model: agentModelReference(sessionNaming.model) }),
+        ...(sessionNaming.model === undefined
+          ? {}
+          : { model: agentModelReference(sessionNaming.model, "agents.sessionNaming.model") }),
       },
+      ...(agents.permissionReview === undefined
+        ? {}
+        : {
+            permissionReview: {
+              ...(permissionReview.model === undefined
+                ? {}
+                : { model: agentModelReference(permissionReview.model, "agents.permissionReview.model") }),
+            },
+          }),
     },
     fold: parsedFold,
   }

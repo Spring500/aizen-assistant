@@ -26,6 +26,7 @@ describe("应用偏好存储", () => {
       newSession: {
         model: { providerId: "p", modelId: "m", api: "a", thinkingLevel: "high" },
         viewId: "view",
+        permissionMode: "hybrid" as const,
       },
       fold: { ...defaultAppPreferences.fold, assistantTurns: 5 },
     }
@@ -52,13 +53,19 @@ describe("应用偏好存储", () => {
     expect(
       parseAppPreferences({
         ...defaultAppPreferences,
-        agents: { sessionNaming: { model: { providerId: "provider", modelId: "title-model" } } },
+        agents: { sessionNaming: { model: { providerId: "provider", modelId: "title-model" } }, permissionReview: {} },
       }).agents,
-    ).toEqual({ sessionNaming: { model: { providerId: "provider", modelId: "title-model" } } })
+    ).toEqual({
+      sessionNaming: { model: { providerId: "provider", modelId: "title-model" } },
+      permissionReview: {},
+    })
     expect(() =>
       parseAppPreferences({
         ...defaultAppPreferences,
-        agents: { sessionNaming: { model: { providerId: "provider", modelId: "title-model", api: "invalid" } } },
+        agents: {
+          sessionNaming: { model: { providerId: "provider", modelId: "title-model", api: "invalid" } },
+          permissionReview: {},
+        },
       }),
     ).toThrow("未知字段")
   })

@@ -17,6 +17,7 @@ import {
   createReadTool,
   createWriteTool,
   DefaultResourceLoader,
+  getShellConfig,
   ModelRuntime,
   type ResourceLoader,
   SessionManager,
@@ -32,13 +33,15 @@ import type {
   PiCreateInput,
   PiPort,
   PiPortEvent,
+  PiPermissionHandler,
   PiPromptInput,
   PiRestoreInput,
   PiSessionTitleInput,
   ViewRuntimeInput,
 } from "../core/pi-port.ts"
-import type { ModelReference, SessionRecord } from "../core/session-format.ts"
+import type { JsonValue, ModelReference, SessionRecord } from "../core/session-format.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
+import { PiPermissionReviewer } from "./permission-reviewer.ts"
 import { generateSessionTitle } from "./session-title-generator.ts"
 
 export type PiSessionRuntimeOptions = {
@@ -174,7 +177,20 @@ function toolResultText(result: unknown): string {
     .join("\n")
 }
 
-function auditedTools(cwd: string): ToolDefinition[] {
+function jsonValue(value: unknown): JsonValue {
+  return JSON.parse(JSON.stringify(value)) as JsonValue
+}
+
+function auditedTools(
+  cwd: string,
+  authorize: (input: {
+    callId: string
+    name: string
+    arguments: JsonValue
+    declaredIntent: string
+    signal?: AbortSignal
+  }) => Promise<{ arguments: JsonValue }>,
+): ToolDefinition[] {
   const intent = Type.Object({
     declaredIntent: Type.String({
       minLength: 1,
@@ -189,8 +205,15 @@ function auditedTools(cwd: string): ToolDefinition[] {
     parameters: Type.Intersect([tool.parameters, intent]),
     ...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
     async execute(callId, params, signal, onUpdate) {
-      const { declaredIntent: _declaredIntent, ...actualParams } = params as Record<string, unknown>
-      return tool.execute(callId, actualParams as never, signal, onUpdate)
+      const { declaredIntent, ...actualParams } = params as Record<string, unknown> & { declaredIntent: string }
+      const authorization = await authorize({
+        callId,
+        name: tool.name,
+        arguments: jsonValue(actualParams),
+        declaredIntent,
+        ...(signal ? { signal } : {}),
+      })
+      return tool.execute(callId, authorization.arguments as never, signal, onUpdate)
     },
   }))
 }
@@ -202,6 +225,8 @@ export class PiSessionRuntime implements PiPort {
   #thinkingConfigs = new Map<string, ModelThinkingConfig | null>()
   #modelBaseUrls = new Map<string, string>()
   #modelConfigError: Error | undefined
+  #permissionHandler: PiPermissionHandler | undefined
+  #activePrompt: PiPromptInput | undefined
   #session: AgentSession | undefined
   #unsubscribe: (() => void) | undefined
   #unsubscribeAgent: (() => void) | undefined
@@ -264,7 +289,33 @@ export class PiSessionRuntime implements PiPort {
       model,
       thinkingLevel: internalThinkingLevel(model, input.model.thinkingLevel, thinkingConfig),
       tools: ["read", "bash", "edit", "write"],
-      customTools: auditedTools(input.cwd),
+      customTools: auditedTools(input.cwd, async (call) => {
+        const prompt = this.#activePrompt
+        if (!prompt?.sessionId || !this.#permissionHandler) throw new Error("工具权限处理器尚未初始化")
+        const authorization = await this.#permissionHandler(
+          {
+            sessionId: prompt.sessionId,
+            turnId: prompt.turnId,
+            toolCallId: call.callId,
+            toolName: call.name,
+            arguments: call.arguments,
+            declaredIntent: call.declaredIntent,
+            cwd: input.cwd,
+            mode: prompt.permissionMode ?? "hybrid",
+            ...(call.name === "bash"
+              ? {
+                  environment: {
+                    shell: this.#shellKind(),
+                  },
+                }
+              : {}),
+          },
+          call.signal,
+        )
+        if (authorization.type === "allow") return { arguments: authorization.arguments }
+        if (authorization.type === "aborted") throw new Error(authorization.reason)
+        throw new Error(`工具调用被拒绝（${authorization.source}）：${authorization.reason}`)
+      }),
       resourceLoader,
       sessionManager,
       settingsManager,
@@ -388,13 +439,29 @@ export class PiSessionRuntime implements PiPort {
       this.#registerEntry(input.recordId, entryId)
     }
     session.agent.state.messages = [...before, ...allMessages]
+    this.#activePrompt = input
     try {
       await session.agent.continue()
     } finally {
+      this.#activePrompt = undefined
       session.agent.state.messages = session.agent.state.messages.filter(
         (message) => message.role !== "user" || !temporaryMessages.has(message),
       )
     }
+  }
+
+  setPermissionHandler(handler: PiPermissionHandler | undefined): void {
+    this.#permissionHandler = handler
+  }
+
+  permissionReviewer(reference: Pick<ModelReference, "providerId" | "modelId">): PiPermissionReviewer {
+    const sourceModel = this.#modelRuntime.getModel(reference.providerId, reference.modelId)
+    if (!sourceModel) throw new Error(`找不到工具审核模型：${reference.providerId}/${reference.modelId}`)
+    const modelKey = `${sourceModel.provider}\0${sourceModel.id}`
+    return new PiPermissionReviewer(
+      this.#modelRuntime,
+      runtimeModel(sourceModel, this.#thinkingConfigs.get(modelKey), this.#modelBaseUrls.get(modelKey)),
+    )
   }
 
   async generateSessionTitle(input: PiSessionTitleInput): Promise<string> {
@@ -547,6 +614,7 @@ export class PiSessionRuntime implements PiPort {
     this.#viewLoader = undefined
     this.#settingsManager = undefined
     this.#cwd = undefined
+    this.#activePrompt = undefined
     this.#contentStarts.clear()
     this.#contentTimings.clear()
     this.#toolStarts.clear()
@@ -634,6 +702,15 @@ export class PiSessionRuntime implements PiPort {
       }
     } catch (error) {
       this.#modelConfigError = error instanceof Error ? error : new Error(String(error))
+    }
+  }
+
+  #shellKind(): string {
+    try {
+      const shell = getShellConfig().shell.replace(/\\/g, "/").toLowerCase()
+      return shell.includes("/git/") && shell.endsWith("/bash.exe") ? "git-bash" : "other"
+    } catch {
+      return "other"
     }
   }
 

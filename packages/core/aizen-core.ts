@@ -20,6 +20,16 @@ import {
   type CoreSnapshot,
   recordsToTranscript,
 } from "./types.ts"
+import { ToolPermissionManager } from "./tool-permissions/manager.ts"
+import { ToolPermissionRegistry } from "./tool-permissions/registry.ts"
+import type {
+  HumanReviewDecision,
+  HumanReviewRequest,
+  PermissionAuditEvent,
+  PermissionMode,
+} from "./tool-permissions/types.ts"
+import { createBashValidator } from "./tool-permissions/validators/bash.ts"
+import { createFileValidator } from "./tool-permissions/validators/file.ts"
 import type { ViewStore } from "./view-store.ts"
 
 export type ExtraMessageProvider = (input: {
@@ -59,6 +69,11 @@ export class AizenCore implements CorePort {
   readonly #preferencesStore: AppPreferencesStore | undefined
   readonly #listeners = new Set<(event: CoreEvent) => void>()
   readonly #unsubscribePi: () => void
+  readonly #permissionManager: ToolPermissionManager | undefined
+  readonly #pendingPermissionAnswers = new Map<
+    string,
+    { resolve: (decision: HumanReviewDecision) => void; reject: (error: Error) => void }
+  >()
   #snapshot: CoreSnapshot
   #records: SessionRecord[] = []
   #writeQueue = Promise.resolve()
@@ -88,6 +103,7 @@ export class AizenCore implements CorePort {
       authProviders: [],
       transcript: [],
       activeTools: [],
+      pendingPermissionRequests: [],
       streamingText: "",
       streamingThinking: "",
     }
@@ -96,6 +112,12 @@ export class AizenCore implements CorePort {
     this.#modelConfigStore = options.modelConfigStore
     this.#preferencesStore = options.preferencesStore
     this.#unsubscribePi = this.#pi.subscribe((event) => this.#handlePiEvent(event))
+    this.#permissionManager = this.#createPermissionManager()
+    this.#pi.setPermissionHandler?.((request, signal) => {
+      if (!this.#permissionManager)
+        return Promise.resolve({ type: "deny", reason: "权限管理器不可用", source: "system" })
+      return this.#permissionManager.authorize(request, signal)
+    })
   }
 
   getSnapshot(): CoreSnapshot {
@@ -115,6 +137,7 @@ export class AizenCore implements CorePort {
       if (
         command.type !== "abort" &&
         command.type !== "answer_auth_prompt" &&
+        command.type !== "answer_permission_request" &&
         command.type !== "cancel_auth" &&
         this.#snapshot.status !== "idle"
       ) {
@@ -194,7 +217,11 @@ export class AizenCore implements CorePort {
           this.#snapshot.authProviders = await this.#pi.listAuthProviders()
           break
         case "create_session":
-          await this.#createSession(command.model, command.viewId)
+          await this.#createSession(
+            command.model,
+            command.viewId,
+            command.permissionMode ?? this.#snapshot.preferences.newSession.permissionMode ?? "hybrid",
+          )
           break
         case "open_session":
           await this.#openSession(command.sessionId)
@@ -214,6 +241,7 @@ export class AizenCore implements CorePort {
         case "abort":
           if (this.#snapshot.status === "running") {
             this.#abortRequested = true
+            this.#cancelPendingPermissions("本轮已经中止")
             this.#snapshot.status = "aborting"
             this.#notify()
             await this.#pi.abort()
@@ -221,6 +249,12 @@ export class AizenCore implements CorePort {
           break
         case "set_view":
           await this.#setView(command.viewId)
+          break
+        case "set_permission_mode":
+          await this.#setPermissionMode(command.permissionMode)
+          break
+        case "answer_permission_request":
+          this.#answerPermissionRequest(command.requestId, command.decision)
           break
         case "create_view":
           if (!this.#views) throw new Error("未配置视图存储")
@@ -283,6 +317,7 @@ export class AizenCore implements CorePort {
     let failure: unknown
     try {
       this.#sessionNamingAbort?.abort()
+      this.#cancelPendingPermissions("核心已经关闭")
       if (this.#snapshot.status === "running" || this.#snapshot.status === "aborting") await this.#pi.abort()
     } catch (error) {
       failure = error
@@ -318,14 +353,22 @@ export class AizenCore implements CorePort {
     this.#preferencesLoaded = true
   }
 
-  async #rememberSessionDefaults(model: ModelReference, viewId: ViewId): Promise<void> {
+  async #rememberSessionDefaults(
+    model: ModelReference,
+    viewId: ViewId,
+    permissionMode?: PermissionMode,
+  ): Promise<void> {
     if (!this.#preferencesLoaded) {
       this.#snapshot.preferences = await this.#readPreferences()
       this.#preferencesLoaded = true
     }
     await this.#writePreferences({
       ...this.#snapshot.preferences,
-      newSession: { model: sessionModel(model), viewId },
+      newSession: {
+        model: sessionModel(model),
+        viewId,
+        permissionMode: permissionMode ?? this.#snapshot.currentPermissionMode ?? "hybrid",
+      },
     })
   }
 
@@ -349,7 +392,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.models = await this.#pi.listModels()
   }
 
-  async #createSession(model: ModelReference, viewId: ViewId): Promise<void> {
+  async #createSession(model: ModelReference, viewId: ViewId, permissionMode: PermissionMode): Promise<void> {
     this.#sessionNamingAbort?.abort()
     const at = new Date().toISOString()
     const view = await this.#resolveView(viewId)
@@ -357,6 +400,7 @@ export class AizenCore implements CorePort {
     const records: SessionRecord[] = [
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(actualModel) },
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
+      { kind: "permission_mode_changed", recordId: crypto.randomUUID(), at, permissionMode },
     ]
     const header = await this.#store.createGenerated({ cwd: this.#cwd, createdAt: at }, records)
     const sessionId = header.sessionId
@@ -369,6 +413,8 @@ export class AizenCore implements CorePort {
     this.#snapshot.currentModel = actualModel
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.currentViewId = viewId
+    this.#snapshot.currentPermissionMode = permissionMode
+    this.#snapshot.pendingPermissionRequests = []
     this.#snapshot.transcript = []
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
@@ -377,7 +423,7 @@ export class AizenCore implements CorePort {
     this.#clearError()
     this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
-    await this.#rememberSessionDefaults(actualModel, viewId)
+    await this.#rememberSessionDefaults(actualModel, viewId, permissionMode)
   }
 
   async #openSession(sessionId: string): Promise<void> {
@@ -386,6 +432,9 @@ export class AizenCore implements CorePort {
     if (loaded.header.cwd !== this.#cwd) throw new Error("该会话不属于当前工作目录")
     const modelRecord = [...loaded.records].reverse().find((record) => record.kind === "model_changed")
     const viewRecord = [...loaded.records].reverse().find((record) => record.kind === "view_changed")
+    const permissionRecord = [...loaded.records]
+      .reverse()
+      .find((record) => record.kind === "permission_mode_changed" || record.kind === "turn_started")
     if (modelRecord?.kind !== "model_changed") throw new Error("会话没有模型记录")
     if (viewRecord?.kind !== "view_changed") throw new Error("会话没有视图记录")
     const view = await this.#resolveView(viewRecord.viewId).catch((error) => {
@@ -411,13 +460,20 @@ export class AizenCore implements CorePort {
     this.#snapshot.currentModel = actualModel
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.currentViewId = viewRecord.viewId
+    this.#snapshot.currentPermissionMode =
+      permissionRecord?.kind === "permission_mode_changed"
+        ? permissionRecord.permissionMode
+        : permissionRecord?.kind === "turn_started"
+          ? (permissionRecord.permissionMode ?? "hybrid")
+          : (this.#snapshot.preferences.newSession.permissionMode ?? "hybrid")
+    this.#snapshot.pendingPermissionRequests = []
     this.#snapshot.transcript = recordsToTranscript(loaded.records)
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
     if (loaded.warnings.length > 0) this.#reportError(loaded.warnings.join("；"))
     else if (this.#runtimeReady) this.#clearError()
-    await this.#rememberSessionDefaults(actualModel, viewRecord.viewId)
+    await this.#rememberSessionDefaults(actualModel, viewRecord.viewId, this.#snapshot.currentPermissionMode)
   }
 
   async #activateRecords(
@@ -442,6 +498,16 @@ export class AizenCore implements CorePort {
     }
     this.#snapshot.currentModel = actualModel
     this.#snapshot.currentViewId = viewRecord.viewId
+    const permissionRecord = [...records]
+      .reverse()
+      .find((record) => record.kind === "permission_mode_changed" || record.kind === "turn_started")
+    this.#snapshot.currentPermissionMode =
+      permissionRecord?.kind === "permission_mode_changed"
+        ? permissionRecord.permissionMode
+        : permissionRecord?.kind === "turn_started"
+          ? (permissionRecord.permissionMode ?? "hybrid")
+          : "hybrid"
+    this.#snapshot.pendingPermissionRequests = []
     this.#snapshot.transcript = recordsToTranscript(records)
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
@@ -449,7 +515,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#runtimeReady = true
     this.#clearError()
-    await this.#rememberSessionDefaults(actualModel, viewRecord.viewId)
+    await this.#rememberSessionDefaults(actualModel, viewRecord.viewId, this.#snapshot.currentPermissionMode)
   }
 
   #turnStartIndex(turnId: string): number {
@@ -470,6 +536,12 @@ export class AizenCore implements CorePort {
       ...structuredClone(this.#records.slice(0, this.#turnStartIndex(turnId))),
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(model) },
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
+      {
+        kind: "permission_mode_changed",
+        recordId: crypto.randomUUID(),
+        at,
+        permissionMode: this.#snapshot.currentPermissionMode ?? "hybrid",
+      },
       ...(renamed ? [{ kind: "session_renamed" as const, recordId: crypto.randomUUID(), at, name }] : []),
     ]
   }
@@ -535,12 +607,14 @@ export class AizenCore implements CorePort {
       { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text }] },
     ]
     const firstUserMessage = this.#firstUserMessage() ?? text
+    const permissionMode = this.#snapshot.currentPermissionMode ?? "hybrid"
     const started: TurnStartedRecord = {
       kind: "turn_started",
       recordId: crypto.randomUUID(),
       turnId,
       at: new Date().toISOString(),
       viewId,
+      permissionMode,
       items,
     }
     await this.#store.append(sessionId, started)
@@ -558,7 +632,14 @@ export class AizenCore implements CorePort {
     let outcome: TurnFinishedRecord["outcome"] = "completed"
     let error: TurnFinishedRecord["error"]
     try {
-      await this.#pi.prompt({ recordId: started.recordId, turnId, viewId, items: started.items })
+      await this.#pi.prompt({
+        recordId: started.recordId,
+        sessionId,
+        turnId,
+        viewId,
+        permissionMode,
+        items: started.items,
+      })
       if (this.#abortRequested) outcome = "aborted"
     } catch (caught) {
       outcome = this.#abortRequested ? "aborted" : "failed"
@@ -630,7 +711,23 @@ export class AizenCore implements CorePort {
     this.#snapshot.currentViewId = viewId
     this.#snapshot.currentModel = actual
     this.#runtimeReady = true
-    await this.#rememberSessionDefaults(actual, viewId)
+    await this.#rememberSessionDefaults(actual, viewId, this.#snapshot.currentPermissionMode)
+  }
+
+  async #setPermissionMode(permissionMode: PermissionMode): Promise<void> {
+    const sessionId = this.#snapshot.currentSessionId
+    if (!sessionId) throw new Error("请先新建或恢复会话")
+    const record: SessionRecord = {
+      kind: "permission_mode_changed",
+      recordId: crypto.randomUUID(),
+      at: new Date().toISOString(),
+      permissionMode,
+    }
+    await this.#store.append(sessionId, record)
+    this.#records.push(record)
+    this.#snapshot.currentPermissionMode = permissionMode
+    const model = this.#snapshot.currentModel
+    if (model) await this.#rememberSessionDefaults(model, this.#snapshot.currentViewId ?? null, permissionMode)
   }
 
   async #resolveView(viewId: ViewId) {
@@ -654,7 +751,91 @@ export class AizenCore implements CorePort {
     this.#records.push(record)
     this.#snapshot.currentModel = actual
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
-    await this.#rememberSessionDefaults(actual, this.#snapshot.currentViewId ?? null)
+    await this.#rememberSessionDefaults(
+      actual,
+      this.#snapshot.currentViewId ?? null,
+      this.#snapshot.currentPermissionMode,
+    )
+  }
+
+  #createPermissionManager(): ToolPermissionManager | undefined {
+    if (!this.#pi.setPermissionHandler) return undefined
+    const registry = new ToolPermissionRegistry()
+    registry.register(createBashValidator())
+    registry.register(createFileValidator("read"))
+    registry.register(createFileValidator("write"))
+    registry.register(createFileValidator("edit"))
+    return new ToolPermissionManager({
+      registry,
+      aiReviewer: {
+        review: (request, signal) => {
+          const model = this.#snapshot.preferences.agents.permissionReview?.model
+          if (!model || !this.#pi.permissionReviewer) throw new Error("未配置可用的工具审核模型")
+          return this.#pi.permissionReviewer(model).review(request, signal)
+        },
+      },
+      humanReviewer: { review: (request, signal) => this.#requestPermissionAnswer(request, signal) },
+      audit: (event) => this.#recordPermissionAudit(event),
+    })
+  }
+
+  #requestPermissionAnswer(request: HumanReviewRequest, signal?: AbortSignal): Promise<HumanReviewDecision> {
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        this.#pendingPermissionAnswers.delete(request.requestId)
+        this.#snapshot.pendingPermissionRequests = (this.#snapshot.pendingPermissionRequests ?? []).filter(
+          (item) => item.requestId !== request.requestId,
+        )
+        this.#notify()
+        reject(signal?.reason instanceof Error ? signal.reason : new Error("权限审核已取消"))
+      }
+      signal?.addEventListener("abort", onAbort, { once: true })
+      this.#pendingPermissionAnswers.set(request.requestId, {
+        resolve: (decision) => {
+          signal?.removeEventListener("abort", onAbort)
+          resolve(decision)
+        },
+        reject: (error) => {
+          signal?.removeEventListener("abort", onAbort)
+          reject(error)
+        },
+      })
+      this.#snapshot.pendingPermissionRequests = [...(this.#snapshot.pendingPermissionRequests ?? []), request]
+      for (const listener of this.#listeners)
+        listener({ type: "permission_request", request: structuredClone(request) })
+      this.#notify()
+    })
+  }
+
+  #answerPermissionRequest(requestId: string, decision: "approve" | "deny"): void {
+    const pending = this.#pendingPermissionAnswers.get(requestId)
+    if (!pending) throw new Error("当前没有等待答复的工具权限请求")
+    this.#pendingPermissionAnswers.delete(requestId)
+    this.#snapshot.pendingPermissionRequests = (this.#snapshot.pendingPermissionRequests ?? []).filter(
+      (request) => request.requestId !== requestId,
+    )
+    pending.resolve(decision === "approve" ? { type: "approve" } : { type: "deny" })
+  }
+
+  #cancelPendingPermissions(message: string): void {
+    for (const pending of this.#pendingPermissionAnswers.values()) pending.reject(new Error(message))
+    this.#pendingPermissionAnswers.clear()
+    this.#snapshot.pendingPermissionRequests = []
+  }
+
+  async #recordPermissionAudit(event: PermissionAuditEvent): Promise<void> {
+    const sessionId = this.#snapshot.currentSessionId
+    const turnId = this.#currentTurnId
+    if (!sessionId || !turnId) return
+    const record: SessionRecord = {
+      kind: "tool_permission",
+      recordId: crypto.randomUUID(),
+      turnId,
+      at: event.at,
+      toolCallId: event.request.toolCallId,
+      event: JSON.parse(JSON.stringify(event)),
+    }
+    await this.#appendRecord(sessionId, record)
   }
 
   #handlePiEvent(event: PiPortEvent): void {

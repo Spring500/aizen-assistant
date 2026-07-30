@@ -38,6 +38,7 @@ import { systemColors } from "../../packages/tui-kit/theme.ts"
 import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
 import { agentSettingsItems } from "./agent-settings.ts"
 import { parseTuiCommand, tuiCommands } from "./commands.ts"
+import { createPermissionReview, type PermissionReviewController } from "./permission-review.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
 import { type SessionSettingsDraft, sessionSettingsItems } from "./session-settings.ts"
 import { viewSelectionItems } from "./view-flow.ts"
@@ -96,6 +97,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   let authProviderName: string | undefined
   let interactionDepth = 0
   let terminalTitle = ""
+  let permissionReview: PermissionReviewController | undefined
 
   const syncTerminalTitle = (snapshot: ReturnType<typeof core.getSnapshot>) => {
     const identity = snapshot.currentSessionId
@@ -154,6 +156,26 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   )
   editor.setInputVisible(false)
 
+  const openPermissionReview = () => {
+    const requests = core.getSnapshot().pendingPermissionRequests ?? []
+    if (permissionReview) {
+      permissionReview.update(requests)
+      if (requests.length === 0) permissionReview = undefined
+      return
+    }
+    if (requests.length === 0 || exiting) return
+    permissionReview = createPermissionReview(
+      overlays,
+      requests,
+      (requestId, decision) => {
+        void core
+          .dispatch({ type: "answer_permission_request", requestId, decision })
+          .then(() => openPermissionReview())
+      },
+      interactionController.signal,
+    )
+  }
+
   const updateStatusBar = () => {
     const snapshot = core.getSnapshot()
     syncTerminalTitle(snapshot)
@@ -197,6 +219,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       editor.setInputVisible(
         !exiting && interactionDepth === 0 && event.snapshot.status === "idle" && !!event.snapshot.currentSessionId,
       )
+      permissionReview?.update(event.snapshot.pendingPermissionRequests ?? [])
+      if ((event.snapshot.pendingPermissionRequests ?? []).length === 0) permissionReview = undefined
+    } else if (event.type === "permission_request") {
+      void openPermissionReview()
     } else if (event.promptType === "select") {
       editor.input.blur()
       void selectItem(
@@ -1105,11 +1131,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       if (!(await dispatchWithError({ type: "load_preferences" }, "读取 Agent 设置失败")).ok) return
       if (!(await dispatchWithError({ type: "list_models" }, "读取模型失败")).ok) return
       let model = core.getSnapshot().preferences.agents.sessionNaming.model
+      let reviewModel = core.getSnapshot().preferences.agents.permissionReview?.model
       while (!exiting) {
         const action = await selectRichItem(
           overlays,
           "agent-settings",
-          agentSettingsItems(model, core.getSnapshot().models),
+          agentSettingsItems(model, reviewModel, core.getSnapshot().models),
           { title: "Agent 设置", signal: interactionController.signal },
         )
         if (!action || action === "cancel") return
@@ -1130,11 +1157,19 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           }
           continue
         }
+        if (action === "permission-review") {
+          const selectedModel = await chooseModel()
+          if (selectedModel) reviewModel = { providerId: selectedModel.providerId, modelId: selectedModel.modelId }
+          continue
+        }
         if (action === "apply") {
           await dispatchWithError(
             {
               type: "save_agent_preferences",
-              agents: { sessionNaming: { ...(model ? { model } : {}) } },
+              agents: {
+                sessionNaming: { ...(model ? { model } : {}) },
+                permissionReview: { ...(reviewModel ? { model: reviewModel } : {}) },
+              },
             },
             "保存 Agent 设置失败",
           )
@@ -1147,7 +1182,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   }
 
   async function openSessionSettings(mode: "new" | "existing"): Promise<boolean> {
-    let draft: SessionSettingsDraft = { viewId: null }
+    let draft: SessionSettingsDraft = { viewId: null, permissionMode: "hybrid" }
     if (mode === "new") {
       await dispatchWithError({ type: "load_preferences" }, "读取应用偏好失败")
       const preferred = core.getSnapshot().preferences.newSession
@@ -1168,9 +1203,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               ...(preferred.model.thinkingLevel === undefined ? {} : { thinkingLevel: preferred.model.thinkingLevel }),
             },
             viewId: preferred.viewId,
+            permissionMode: preferred.permissionMode ?? "hybrid",
           }
-        else draft = { viewId: preferred.viewId }
-      } else draft = { viewId: preferred.viewId }
+        else draft = { viewId: preferred.viewId, permissionMode: preferred.permissionMode ?? "hybrid" }
+      } else draft = { viewId: preferred.viewId, permissionMode: preferred.permissionMode ?? "hybrid" }
     }
     if (mode === "existing") {
       const snapshot = core.getSnapshot()
@@ -1188,6 +1224,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           ...(listed?.offThinkingLevel ? { offThinkingLevel: listed.offThinkingLevel } : {}),
         },
         viewId: snapshot.currentViewId ?? null,
+        permissionMode: snapshot.currentPermissionMode ?? "hybrid",
       }
     }
     while (!exiting) {
@@ -1208,6 +1245,23 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       } else if (action === "view") {
         const viewId = await chooseView()
         if (viewId !== undefined) draft = { ...draft, viewId }
+      } else if (action === "permission-mode") {
+        const permissionMode = await selectItem(
+          overlays,
+          "session-permission-mode",
+          [
+            { name: "完全开放", description: "所有已校验工具直接执行", value: "unrestricted" as const },
+            { name: "自动审核 + 人工审核", description: "AI 拒绝直接生效", value: "hybrid" as const },
+            {
+              name: "自动审核 + 人工确认拒绝",
+              description: "AI 拒绝也交给用户确认",
+              value: "hybridConfirmDenials" as const,
+            },
+            { name: "仅自动审核", description: "所有人工分支直接拒绝", value: "aiOnly" as const },
+          ],
+          { title: "选择权限模式", signal: interactionController.signal },
+        )
+        if (permissionMode) draft = { ...draft, permissionMode }
       } else if (action === "manage-models") await manageModels("standalone")
       else if (action === "manage-views") await manageViews()
       else if (action === "apply") {
@@ -1217,7 +1271,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             continue
           }
           const result = await dispatchWithError(
-            { type: "create_session", model: draft.model, viewId: draft.viewId },
+            {
+              type: "create_session",
+              model: draft.model,
+              viewId: draft.viewId,
+              permissionMode: draft.permissionMode ?? "hybrid",
+            },
             "创建会话失败",
           )
           return result.ok
@@ -1230,6 +1289,17 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         }
         if (snapshot.currentViewId !== draft.viewId) {
           if (!(await dispatchWithError({ type: "set_view", viewId: draft.viewId }, "切换视图失败")).ok) continue
+        }
+        if (snapshot.currentPermissionMode !== draft.permissionMode) {
+          if (
+            !(
+              await dispatchWithError(
+                { type: "set_permission_mode", permissionMode: draft.permissionMode ?? "hybrid" },
+                "切换权限模式失败",
+              )
+            ).ok
+          )
+            continue
         }
         return true
       }
