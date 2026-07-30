@@ -25,7 +25,8 @@ export function sessionStatusText(snapshot: CoreSnapshot): string {
     ? `${snapshot.currentModel.providerId}/${snapshot.currentModel.modelId}`
     : "未选择模型"
   const view = snapshot.currentViewId ?? "未选择视图"
-  return `模型：${model} | 视图：${view} | 上下文：${contextText(snapshot)}`
+  const review = snapshot.permissionReviewError ? " | 工具审核模型：异常" : ""
+  return `模型：${model} | 视图：${view} | 上下文：${contextText(snapshot)}${review}`
 }
 
 export function shortcutText(context: ShortcutContext): string {

@@ -23,6 +23,7 @@ import {
 } from "./types.ts"
 import { ToolPermissionManager } from "./tool-permissions/manager.ts"
 import { ToolPermissionRegistry } from "./tool-permissions/registry.ts"
+import { sanitizeReviewPayload } from "./tool-permissions/sanitizer.ts"
 import type {
   HumanReviewDecision,
   HumanReviewRequest,
@@ -882,6 +883,13 @@ export class AizenCore implements CorePort {
   }
 
   async #recordPermissionAudit(event: PermissionAuditEvent): Promise<void> {
+    if (event.type === "aiReviewed") {
+      if (event.error) {
+        this.#snapshot.permissionReviewError = event.error
+        this.#reportError(event.error)
+      } else delete this.#snapshot.permissionReviewError
+      this.#notify()
+    }
     const sessionId = this.#snapshot.currentSessionId
     const turnId = this.#currentTurnId
     if (!sessionId || !turnId) return
@@ -891,7 +899,7 @@ export class AizenCore implements CorePort {
       turnId,
       at: event.at,
       toolCallId: event.request.toolCallId,
-      event: JSON.parse(JSON.stringify(event)),
+      event: sanitizeReviewPayload(JSON.parse(JSON.stringify(event))),
     }
     await this.#appendRecord(sessionId, record)
   }

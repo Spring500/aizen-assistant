@@ -1,4 +1,11 @@
-import type { Api, Message, Model, ToolCall, ToolResultMessage } from "@earendil-works/pi-ai"
+import {
+  type Api,
+  type Message,
+  type Model,
+  StringEnum,
+  type ToolCall,
+  type ToolResultMessage,
+} from "@earendil-works/pi-ai"
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 import type { AiPermissionReviewer, AiReviewDecision, AiReviewRequest } from "../core/tool-permissions/types.ts"
@@ -15,7 +22,7 @@ const reviewTool = {
   description: "提交工具权限风险评估",
   parameters: Type.Object(
     {
-      decision: Type.Union([Type.Literal("allow"), Type.Literal("deny"), Type.Literal("needHumanReview")]),
+      decision: StringEnum(["allow", "deny", "needHumanReview"] as const),
       reason: Type.String({ minLength: 1, maxLength: 500 }),
       question: Type.Optional(Type.String({ minLength: 1, maxLength: 500 })),
     },
