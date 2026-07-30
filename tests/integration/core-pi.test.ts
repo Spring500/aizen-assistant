@@ -3,6 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
+import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
@@ -57,7 +58,7 @@ afterEach(async () => {
 test("真实 pi 链路完成两轮并恢复第三轮", async () => {
   const root = await traceStage("创建临时目录", () => mkdtemp(join(tmpdir(), "aizen-integration-")))
   directories.push(root)
-  const mock = await traceStage("启动 mock server worker", () => startMockServer("完成"))
+  const mock = await traceStage("启动 mock server", () => startMockServer("完成"))
   try {
     const pi = await traceStage("创建首次 pi runtime", () =>
       PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null }),
@@ -128,6 +129,53 @@ test("真实 pi 链路完成两轮并恢复第三轮", async () => {
     expect(requests).toHaveLength(3)
     expect(JSON.stringify(requests[1])).toContain("第一轮")
     expect(JSON.stringify(requests[2])).toContain("第二轮")
+  } finally {
+    mock.stop()
+  }
+}, 30000)
+
+test("真实 pi 链路并行完成主回复和工具式自动命名", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aizen-integration-"))
+  directories.push(root)
+  const mock = await startMockServer()
+  try {
+    mock.handleModel("claude-sonnet-4-6", () => ({ type: "text", text: "主回复完成" }))
+    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+    await pi.setRuntimeApiKey("anthropic", "test-key")
+    const models = await pi.listModels()
+    const chat = models.find((item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6")
+    const naming = models.find((item) => item.providerId === "anthropic" && item.modelId === "claude-haiku-4-5")
+    if (!chat || !naming) throw new Error("缺少集成测试模型")
+    pi.setModelBaseUrl(chat.providerId, chat.modelId, mock.url)
+    pi.setModelBaseUrl(naming.providerId, naming.modelId, mock.url)
+    const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
+    await preferencesStore.write({
+      version: 1,
+      newSession: { viewId: null },
+      agents: { sessionNaming: { model: { providerId: naming.providerId, modelId: naming.modelId } } },
+      fold: { userTurns: 0, assistantTurns: 3, thinkingTurns: 1, toolGroupTurns: 1, toolDetailTurns: 1 },
+    })
+    const core = new AizenCore({
+      cwd: root,
+      store: new SessionStore(join(root, "sessions")),
+      pi,
+      preferencesStore,
+    })
+    await core.dispatch({ type: "load_preferences" })
+    await core.dispatch({ type: "create_session", model: chat, viewId: null })
+    const sending = core.dispatch({ type: "send_prompt", text: "分析自动命名机制" })
+    const titleRequest = await mock.take({ modelId: naming.modelId })
+    expect(JSON.stringify(titleRequest.messages)).toContain("分析自动命名机制")
+    expect(await sending).toEqual({ ok: true })
+    expect(core.getSnapshot().currentSessionName).toBe("")
+    titleRequest.respond({
+      type: "tool_call",
+      name: "set_session_title",
+      arguments: { title: "自动命名机制分析" },
+    })
+    for (let attempt = 0; attempt < 20 && !core.getSnapshot().currentSessionName; attempt++) await Bun.sleep(5)
+    expect(core.getSnapshot().currentSessionName).toBe("自动命名机制分析")
+    await core.dispose()
   } finally {
     mock.stop()
   }

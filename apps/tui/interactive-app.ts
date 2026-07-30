@@ -36,6 +36,7 @@ import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-edito
 import { systemColors } from "../../packages/tui-kit/theme.ts"
 
 import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
+import { agentSettingsItems } from "./agent-settings.ts"
 import { parseTuiCommand, tuiCommands } from "./commands.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
 import { type SessionSettingsDraft, sessionSettingsItems } from "./session-settings.ts"
@@ -143,6 +144,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         else if (command.name === "/view" || command.name === "/model") runAction(() => openSessionSettings("existing"))
         else if (command.name === "/fold") runAction(chooseFold)
         else if (command.name === "/models") runAction(manageModels)
+        else if (command.name === "/agents") runAction(openAgentSettings)
       },
       onAbort: () => void core.dispatch({ type: "abort" }),
       onQuit: quit,
@@ -1097,6 +1099,53 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
+  async function openAgentSettings(): Promise<void> {
+    beginInteraction()
+    try {
+      if (!(await dispatchWithError({ type: "load_preferences" }, "读取 Agent 设置失败")).ok) return
+      if (!(await dispatchWithError({ type: "list_models" }, "读取模型失败")).ok) return
+      let model = core.getSnapshot().preferences.agents.sessionNaming.model
+      while (!exiting) {
+        const action = await selectRichItem(
+          overlays,
+          "agent-settings",
+          agentSettingsItems(model, core.getSnapshot().models),
+          { title: "Agent 设置", signal: interactionController.signal },
+        )
+        if (!action || action === "cancel") return
+        if (action === "session-naming") {
+          const selected = await selectItem(
+            overlays,
+            "agent-session-naming-action",
+            [
+              { name: "选择命名模型", description: "为会话自动命名启用独立模型", value: "select" as const },
+              { name: "关闭自动命名", description: "不发起会话命名请求", value: "disable" as const },
+            ],
+            { title: "会话自动命名", signal: interactionController.signal },
+          )
+          if (selected === "disable") model = undefined
+          if (selected === "select") {
+            const selectedModel = await chooseModel()
+            if (selectedModel) model = { providerId: selectedModel.providerId, modelId: selectedModel.modelId }
+          }
+          continue
+        }
+        if (action === "apply") {
+          await dispatchWithError(
+            {
+              type: "save_agent_preferences",
+              agents: { sessionNaming: { ...(model ? { model } : {}) } },
+            },
+            "保存 Agent 设置失败",
+          )
+          return
+        }
+      }
+    } finally {
+      endInteraction()
+    }
+  }
+
   async function openSessionSettings(mode: "new" | "existing"): Promise<boolean> {
     let draft: SessionSettingsDraft = { viewId: null }
     if (mode === "new") {
@@ -1357,6 +1406,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   }
 
   try {
+    await dispatchWithError({ type: "load_preferences" }, "读取应用偏好失败")
     while (!exiting && !core.getSnapshot().currentSessionId) {
       await chooseSession()
       if (!core.getSnapshot().currentSessionId) await Bun.sleep(50)

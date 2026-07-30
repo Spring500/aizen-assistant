@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
-import type { PiPort, PiPortEvent } from "../../packages/core/pi-port.ts"
+import type { PiPort, PiPortEvent, PiSessionTitleInput } from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
@@ -20,6 +20,7 @@ class FakePi implements PiPort {
   restore = async () => model
   refreshView = async () => {}
   switchView = async () => model
+  generateSessionTitle = async (_input: PiSessionTitleInput) => "测试标题"
   abort = async () => {}
   listModels = async () => [{ ...model, name: "测试模型", available: true }]
   reloadModelConfig = async () => {}
@@ -51,6 +52,33 @@ class FakePi implements PiPort {
       listener({ type: "settled" })
     }
   }
+}
+
+class NamingFakePi extends FakePi {
+  titleCalls: Array<{ firstUserMessage: string }> = []
+  titleResult = "自动标题"
+  titleError: Error | undefined
+  titleDelay: Promise<void> | undefined
+
+  override generateSessionTitle = async (input: PiSessionTitleInput) => {
+    this.titleCalls.push({ firstUserMessage: input.firstUserMessage })
+    await this.titleDelay
+    if (this.titleError) throw this.titleError
+    return this.titleResult
+  }
+}
+
+async function configuredCore(root: string, pi: PiPort, store = new SessionStore(join(root, "sessions"))) {
+  const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
+  await preferencesStore.write({
+    version: 1,
+    newSession: { viewId: null },
+    agents: { sessionNaming: { model: { providerId: "test", modelId: "title-model" } } },
+    fold: { userTurns: 0, assistantTurns: 3, thinkingTurns: 1, toolGroupTurns: 1, toolDetailTurns: 1 },
+  })
+  const core = new AizenCore({ cwd: "E:\\project", store, pi, preferencesStore })
+  await core.dispatch({ type: "load_preferences" })
+  return { core, store }
 }
 
 class MessageFailingStore extends SessionStore {
@@ -190,6 +218,7 @@ describe("核心编排", () => {
     await preferencesStore.write({
       version: 1,
       newSession: { viewId: null },
+      agents: { sessionNaming: {} },
       fold: { userTurns: 2, assistantTurns: 4, thinkingTurns: 1, toolGroupTurns: 3, toolDetailTurns: 1 },
     })
     const core = new AizenCore({
@@ -329,6 +358,114 @@ describe("核心编排", () => {
     expect((await core.dispatch({ type: "rename_session", sessionId, name: "   " })).ok).toBe(true)
     expect(core.getSnapshot().currentSessionName).toBe("")
     expect((await store.list())[0]?.name).toBe("")
+    await core.dispose()
+  })
+
+  test("配置命名模型后异步使用第一条消息且每次加载只尝试一次", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new NamingFakePi()
+    const { core, store } = await configuredCore(root, pi)
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    const sessionId = core.getSnapshot().currentSessionId ?? ""
+    await core.dispatch({ type: "send_prompt", text: "第一条用户消息" })
+    await core.dispatch({ type: "send_prompt", text: "第二条用户消息" })
+    expect(pi.titleCalls).toEqual([{ firstUserMessage: "第一条用户消息" }])
+    expect(core.getSnapshot().currentSessionName).toBe("自动标题")
+    expect((await store.read(sessionId)).records.filter((record) => record.kind === "session_renamed")).toHaveLength(1)
+
+    const restoredPi = new NamingFakePi()
+    const restored = (await configuredCore(root, restoredPi, store)).core
+    await restored.dispatch({ type: "open_session", sessionId })
+    await restored.dispatch({ type: "send_prompt", text: "第三条用户消息" })
+    expect(restoredPi.titleCalls).toHaveLength(0)
+    await core.dispose()
+    await restored.dispose()
+  })
+
+  test("未配置模型不消耗本次加载的命名机会", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new NamingFakePi()
+    const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
+    const core = new AizenCore({
+      cwd: "E:\\project",
+      store: new SessionStore(join(root, "sessions")),
+      pi,
+      preferencesStore,
+    })
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    await core.dispatch({ type: "send_prompt", text: "第一条" })
+    expect(pi.titleCalls).toHaveLength(0)
+    await core.dispatch({
+      type: "save_agent_preferences",
+      agents: { sessionNaming: { model: { providerId: "test", modelId: "title-model" } } },
+    })
+    await core.dispatch({ type: "send_prompt", text: "第二条" })
+    expect(pi.titleCalls).toEqual([{ firstUserMessage: "第一条" }])
+    await core.dispose()
+  })
+
+  test("命名失败本次加载不重试，重新打开后恢复一次机会", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new NamingFakePi()
+    pi.titleError = new Error("网络波动")
+    const { core, store } = await configuredCore(root, pi)
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    const sessionId = core.getSnapshot().currentSessionId ?? ""
+    await core.dispatch({ type: "send_prompt", text: "第一条" })
+    for (let attempt = 0; attempt < 20 && !core.getSnapshot().lastError; attempt++) await Bun.sleep(5)
+    expect(core.getSnapshot().lastError).toBe("会话自动命名失败：网络波动")
+    await core.dispatch({ type: "send_prompt", text: "第二条" })
+    expect(pi.titleCalls).toHaveLength(1)
+
+    const restoredPi = new NamingFakePi()
+    const restored = (await configuredCore(root, restoredPi, store)).core
+    await restored.dispatch({ type: "open_session", sessionId })
+    await restored.dispatch({ type: "send_prompt", text: "重新加载后的请求" })
+    expect(restoredPi.titleCalls).toEqual([{ firstUserMessage: "第一条" }])
+    for (let attempt = 0; attempt < 20 && !restored.getSnapshot().currentSessionName; attempt++) await Bun.sleep(5)
+    expect(restored.getSnapshot().currentSessionName).toBe("自动标题")
+    await core.dispose()
+    await restored.dispose()
+  })
+
+  test("回退不重置本次加载的命名机会", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new NamingFakePi()
+    pi.titleError = new Error("命名失败")
+    const { core } = await configuredCore(root, pi)
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    await core.dispatch({ type: "send_prompt", text: "第一条" })
+    for (let attempt = 0; attempt < 20 && !core.getSnapshot().lastError; attempt++) await Bun.sleep(5)
+    const turn = core.getSnapshot().transcript.find((entry) => entry.type === "input")
+    if (!turn) throw new Error("缺少回退轮次")
+    await core.dispatch({ type: "rewind", turnId: turn.turnId })
+    await core.dispatch({ type: "send_prompt", text: "回退后的消息" })
+    expect(pi.titleCalls).toHaveLength(1)
+    await core.dispose()
+  })
+
+  test("后台命名不阻塞主请求且不会覆盖手动名称", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    let release = () => {}
+    const pi = new NamingFakePi()
+    pi.titleDelay = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const { core } = await configuredCore(root, pi)
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    const sessionId = core.getSnapshot().currentSessionId ?? ""
+    expect(await core.dispatch({ type: "send_prompt", text: "第一条" })).toEqual({ ok: true })
+    expect(core.getSnapshot().currentSessionName).toBe("")
+    await core.dispatch({ type: "rename_session", sessionId, name: "手动名称" })
+    release()
+    for (let attempt = 0; attempt < 20 && pi.titleCalls.length === 0; attempt++) await Bun.sleep(5)
+    await Bun.sleep(5)
+    expect(core.getSnapshot().currentSessionName).toBe("手动名称")
     await core.dispose()
   })
 

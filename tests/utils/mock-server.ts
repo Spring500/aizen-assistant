@@ -1,113 +1,225 @@
-export type MockServer = {
+export type MockRequestContext = {
+  id: string
+  sequence: number
+  method: string
   url: string
-  requests: () => Promise<unknown[]>
-  stop: () => void
+  headers: Record<string, string>
+  modelId?: string
+  body: Record<string, unknown>
+  system: unknown
+  messages: unknown[]
+  tools: unknown[]
 }
 
-/**
- * 拼出一段符合 Anthropic Messages API 流式响应格式（SSE）的报文，内容
- * 固定只有一段文本 `responseText`。字段结构模拟真实 API 的
- * message_start → content_block_* → message_delta → message_stop
- * 事件序列，让 pi 的 HTTP 客户端能像对接真实 API 一样把它解析出来。
- */
-function buildSseBody(responseText: string): string {
-  const id = `msg_${Date.now()}`
-  let body = ""
-  body += `event: message_start\ndata: ${JSON.stringify({ type: "message_start", message: { id, type: "message", role: "assistant", content: [], model: "claude-sonnet-4-6", usage: { input_tokens: 1, output_tokens: 1 } } })}\n\n`
-  body += `event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index: 0, content_block: { type: "text", text: "" } })}\n\n`
-  body += `event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index: 0, delta: { type: "text_delta", text: responseText } })}\n\n`
-  body += `event: content_block_stop\ndata: ${JSON.stringify({ type: "content_block_stop", index: 0 })}\n\n`
-  body += `event: message_delta\ndata: ${JSON.stringify({ type: "message_delta", delta: { stop_reason: "end_turn", stop_sequence: null }, usage: { output_tokens: 1 } })}\n\n`
-  body += `event: message_stop\ndata: ${JSON.stringify({ type: "message_stop" })}\n\n`
+export type MockResponse =
+  | { type: "text"; text: string }
+  | { type: "tool_call"; name: string; arguments: unknown; callId?: string }
+  | { type: "http_error"; status: number; body?: unknown }
+
+export type MockResponseHandler = (request: MockRequestContext) => MockResponse | Promise<MockResponse>
+
+export type MockPendingRequest = MockRequestContext & {
+  /** 向当前等待中的 HTTP 请求返回结构化响应；每个请求只能调用一次。 */
+  respond(response: MockResponse): void
+}
+
+export type MockTakeFilter = { modelId?: string }
+
+export type MockServer = {
+  url: string
+  /** 捕获一条尚未由处理器接管的请求；筛选不匹配的请求会留给后续捕获。 */
+  take(filter?: MockTakeFilter): Promise<MockPendingRequest>
+  /** 为所有未设置模型处理器的请求设置持续生效的响应逻辑。 */
+  handle(handler: MockResponseHandler): void
+  /** 为指定模型设置持续生效的响应逻辑。 */
+  handleModel(modelId: string, handler: MockResponseHandler): void
+  requests(): Promise<MockRequestContext[]>
+  stop(): void
+}
+
+type Pending = {
+  context: MockRequestContext
+  resolve: (response: MockResponse) => void
+  responded: boolean
+}
+
+type TakeWaiter = {
+  filter: MockTakeFilter
+  resolve: (request: MockPendingRequest) => void
+}
+
+function headers(request: Request): Record<string, string> {
+  return Object.fromEntries(request.headers.entries())
+}
+
+function objectBody(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {}
+}
+
+function matches(context: MockRequestContext, filter: MockTakeFilter): boolean {
+  return filter.modelId === undefined || context.modelId === filter.modelId
+}
+
+function sseEvent(event: string, data: unknown): string {
+  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+}
+
+function buildSseBody(response: Exclude<MockResponse, { type: "http_error" }>, modelId: string | undefined): string {
+  const id = `msg_${crypto.randomUUID()}`
+  const model = modelId ?? "mock-model"
+  let body = sseEvent("message_start", {
+    type: "message_start",
+    message: {
+      id,
+      type: "message",
+      role: "assistant",
+      content: [],
+      model,
+      usage: { input_tokens: 1, output_tokens: 1 },
+    },
+  })
+  if (response.type === "text") {
+    body += sseEvent("content_block_start", {
+      type: "content_block_start",
+      index: 0,
+      content_block: { type: "text", text: "" },
+    })
+    body += sseEvent("content_block_delta", {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "text_delta", text: response.text },
+    })
+    body += sseEvent("content_block_stop", { type: "content_block_stop", index: 0 })
+    body += sseEvent("message_delta", {
+      type: "message_delta",
+      delta: { stop_reason: "end_turn", stop_sequence: null },
+      usage: { output_tokens: 1 },
+    })
+  } else {
+    body += sseEvent("content_block_start", {
+      type: "content_block_start",
+      index: 0,
+      content_block: {
+        type: "tool_use",
+        id: response.callId ?? `tool_${crypto.randomUUID()}`,
+        name: response.name,
+        input: {},
+      },
+    })
+    body += sseEvent("content_block_delta", {
+      type: "content_block_delta",
+      index: 0,
+      delta: { type: "input_json_delta", partial_json: JSON.stringify(response.arguments) },
+    })
+    body += sseEvent("content_block_stop", { type: "content_block_stop", index: 0 })
+    body += sseEvent("message_delta", {
+      type: "message_delta",
+      delta: { stop_reason: "tool_use", stop_sequence: null },
+      usage: { output_tokens: 1 },
+    })
+  }
+  body += sseEvent("message_stop", { type: "message_stop" })
   return body
 }
 
-/**
- * 启动一个监听随机端口的 HTTP server，把自己伪装成 Anthropic Messages
- * API：收到 `POST /v1/messages` 就回一段固定内容的 SSE 响应，其余请求
- * 返回 404。供 `mock-server-worker.ts` 在 worker 线程里调用。
- */
-export function createMockAnthropicServer(
-  responseText: string,
-  requests: unknown[] = [],
-): ReturnType<typeof Bun.serve> {
-  return Bun.serve({
-    port: 0,
-    async fetch(request) {
-      const url = new URL(request.url)
-      if (request.method === "POST" && url.pathname === "/v1/messages") {
-        requests.push(await request.json())
-        return new Response(buildSseBody(responseText), {
-          status: 200,
-          headers: { "content-type": "text/event-stream" },
-        })
-      }
-      return new Response("not found", { status: 404 })
-    },
+function httpResponse(response: MockResponse, modelId: string | undefined): Response {
+  if (response.type === "http_error") {
+    const body = response.body === undefined ? { error: { message: `Mock HTTP ${response.status}` } } : response.body
+    return Response.json(body, { status: response.status })
+  }
+  return new Response(buildSseBody(response, modelId), {
+    status: 200,
+    headers: { "content-type": "text/event-stream" },
   })
 }
 
 /**
- * 在独立的 Worker 线程里启动上面的 mock server。供架构可行性验证和 CLI
- * 接口测试复用，避免各处重复实现同一套 mock 逻辑。
- *
- * 为什么放进 Worker，而不是直接在调用方所在的线程里调用
- * createMockAnthropicServer：调用方往往需要用 Bun.spawn 去跑被测的编译
- * 产物。若改用同步阻塞调用（如 Bun.spawnSync），会冻住调用方所在线程的
- * 整个事件循环——如果 mock server 也跑在那个线程上，一阻塞，mock
- * server 的请求回调就没有机会执行，子进程的 HTTP 请求永远等不到响应，
- * 父进程又要等子进程退出才能解除阻塞，构成死锁（父等子、子等父）。
- *
- * 把 mock server 放进独立 Worker 线程后，它有自己独立的事件循环，不会被
- * 主线程上任何同步阻塞调用拖累——不只是 spawnSync，未来任何测试代码里的
- * 同步阻塞都一样安全。这是结构上的保证，不依赖调用方记住某条约定。
+ * 启动可由测试逐请求控制的 Anthropic Messages Mock Server。
+ * 传入字符串时保留旧测试的固定文本响应行为。
  */
-export async function startMockServer(responseText: string): Promise<MockServer> {
-  const worker = new Worker(new URL("./mock-server-worker.ts", import.meta.url))
+export async function startMockServer(responseText?: string): Promise<MockServer> {
+  const history: MockRequestContext[] = []
+  const pending: Pending[] = []
+  const waiters: TakeWaiter[] = []
+  const modelHandlers = new Map<string, MockResponseHandler>()
+  let defaultHandler: MockResponseHandler | undefined = responseText
+    ? () => ({ type: "text", text: responseText })
+    : undefined
+  let sequence = 0
 
-  // 等 worker 内部的 Bun.serve 真正开始监听后，再把端口号交给调用方——
-  // 调用方拿到 url 时，mock server 保证已经可以接收请求。
-  const pendingRequests = new Map<string, (requests: unknown[]) => void>()
-  const url = await new Promise<string>((resolve, reject) => {
-    worker.onmessage = (event: MessageEvent<{ type: string; url?: string }>) => {
-      if (event.data?.type === "listening" && event.data.url) {
-        resolve(event.data.url)
+  const controlled = (item: Pending): MockPendingRequest => ({
+    ...item.context,
+    respond(response) {
+      if (item.responded) throw new Error(`Mock 请求 ${item.context.id} 已经响应`)
+      item.responded = true
+      const index = pending.indexOf(item)
+      if (index >= 0) pending.splice(index, 1)
+      item.resolve(response)
+    },
+  })
+
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      const url = new URL(request.url)
+      if (request.method !== "POST" || url.pathname !== "/v1/messages")
+        return new Response("not found", { status: 404 })
+      const body = objectBody(await request.json())
+      const context: MockRequestContext = {
+        id: crypto.randomUUID(),
+        sequence: sequence++,
+        method: request.method,
+        url: request.url,
+        headers: headers(request),
+        ...(typeof body.model === "string" ? { modelId: body.model } : {}),
+        body,
+        system: body.system,
+        messages: Array.isArray(body.messages) ? body.messages : [],
+        tools: Array.isArray(body.tools) ? body.tools : [],
       }
-      if (event.data?.type === "requests" && "requestId" in event.data && "requests" in event.data) {
-        const data = event.data as { requestId: string; requests: unknown[] }
-        pendingRequests.get(data.requestId)?.(data.requests)
-        pendingRequests.delete(data.requestId)
-      }
-    }
-    worker.onerror = (event) => {
-      reject(new Error(`mock server worker 启动失败：${event.message ?? String(event)}`))
-    }
-    worker.postMessage({ type: "start", responseText })
+      history.push(context)
+      const handler = (context.modelId ? modelHandlers.get(context.modelId) : undefined) ?? defaultHandler
+      if (handler) return httpResponse(await handler(structuredClone(context)), context.modelId)
+
+      const response = await new Promise<MockResponse>((resolve) => {
+        const item: Pending = { context, resolve, responded: false }
+        const waiterIndex = waiters.findIndex((waiter) => matches(context, waiter.filter))
+        if (waiterIndex < 0) {
+          pending.push(item)
+          return
+        }
+        const waiter = waiters.splice(waiterIndex, 1)[0]
+        if (!waiter) throw new Error("Mock 请求等待器意外丢失")
+        waiter.resolve(controlled(item))
+      })
+      return httpResponse(response, context.modelId)
+    },
   })
 
   return {
-    url,
-    requests: () =>
-      new Promise((resolve) => {
-        const requestId = crypto.randomUUID()
-        pendingRequests.set(requestId, resolve)
-        worker.postMessage({ type: "get_requests", requestId })
-      }),
-    stop: () => {
-      // 通知 worker 内部优雅关闭（等待在途请求完成，见 mock-server-worker.ts）。
-      worker.postMessage({ type: "stop" })
-      // 安全网：Bun 的 Worker 终止机制仍是实验特性（官方文档标注），若
-      // worker 未能在合理时间内自行退出，强制终止，避免测试进程挂起。
-      const forceTimeout = setTimeout(() => worker.terminate(), 2000)
-      worker.addEventListener("close", () => clearTimeout(forceTimeout))
+    url: `http://localhost:${server.port}`,
+    take(filter = {}) {
+      const index = pending.findIndex((item) => matches(item.context, filter))
+      const item = index >= 0 ? pending[index] : undefined
+      if (item) return Promise.resolve(controlled(item))
+      return new Promise((resolve) => waiters.push({ filter, resolve }))
+    },
+    handle(handler) {
+      defaultHandler = handler
+    },
+    handleModel(modelId, handler) {
+      if (!modelId) throw new Error("Mock 模型 ID 不能为空")
+      modelHandlers.set(modelId, handler)
+    },
+    async requests() {
+      return structuredClone(history)
+    },
+    stop() {
+      void server.stop()
     },
   }
 }
 
-// 手动验证用的入口：直接用 bun run 跑这个文件时执行，被其他文件 import
-// 时不会触发。启动一个 mock server 并常驻，方便人工在真实终端里测试
-// aizen-tui.exe（非交互模式或交互模式），不需要真实的 Anthropic API Key。
-// 用法：bun run tests/utils/mock-server.ts "自定义响应文本"
 if (import.meta.main) {
   const text = process.argv[2] ?? "架构可行性验证：Mock 链路通过"
   const mock = await startMockServer(text)
