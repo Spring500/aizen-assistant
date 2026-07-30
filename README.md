@@ -1,59 +1,63 @@
 # AizenAssistant
 
-AizenAssistant 是基于 pi SDK 构建的 AI Agent 应用。项目以无界面的 TypeScript 核心为基础，同时建设自研 TUI 与 Tauri/Vue 桌面 GUI，并支持每轮额外消息和视图式提示词组织。
+AizenAssistant 是一个面向重度 Coding Agent 用户的本地 Coding Agent 应用，适合长期维护项目、频繁切换任务方式，并希望对 Agent 上下文做定制化管理的开发者。
 
-当前已完成架构可行性验证，并建立可保存和恢复会话的自研 TUI 基础。
+## 主要特性
 
-## 本地开发
+### 视图式上下文
+
+你可以将系统提示词、项目规则和 Skill 组织成不同视图，为新会话选择视图，也可以在对话过程中切换——而非单纯使用工作目录下的 `AGENTS.md` 和 Skill。从而为同一工作目录下完全不同的工作需求、针对不同模型的项目提示词优化和裁剪提供更多可能。
+
+### 显式意图声明
+
+Agent 在执行工具前需要用自然语言简要说明调用目的，让连续的文件读取、代码修改和命令执行更容易被人理解，而不只是向用户展示一组工具参数。未来在补充权限审核与沙箱能力后，调用目的还可以作为审核操作合理性、解释权限请求和发现意图与实际行为偏差的依据。
+
+### 便利性设计
+
+- **助记词 ID**：会话和视图使用由三个单词组成的助记 ID，而不是难以辨认和交流的 UUID。即使没有主动命名，你仍然可以方便地查找、区分和引用它们。
+- **本地管理会话**：会话以本地单文件形式保存，文件名不参与会话身份识别，可以在应用外自行改名、备份和整理。会话支持命名、恢复、回退和创建独立分支，原始记录不会因为上下文压缩而被删除。
+
+### 后续计划
+
+- **Agent 自省体系建设**：让 Agent 感知自己的会话名称与 ID、当前模型、视图、可用能力、上下文边界和运行状态，尽可能缩小用户与 Agent 因观察窗口不同产生的信息差异。异常中断恢复也将是其中一部分：Agent 应当知道上一次工作在哪里停止，以及停止来自用户操作还是系统异常。
+- **Skill 管理机制建设**：支持通过 Git 链接下载和更新 Skill，并通过软链接为不同视图安装或卸载 Skill，使同一份 Skill 可以被多个视图复用，而不需要重复复制和维护。
+
+### 注意事项
+
+- 项目仍处于早期开发阶段，更新节奏有限。
+- 当前提供 TUI 界面，GUI 尚在规划中。
+- 暂时基于 [pi](https://github.com/earendil-works/pi) SDK 构建，后续考虑使用 `pi-ai` 并自行设计 Agent Loop。
+
+## 从源码运行
+
+项目使用 Bun workspace。安装锁定依赖并启动 TUI：
 
 ```powershell
 bun install --frozen-lockfile
-bun run verify
-```
-
-交互模式：
-
-```powershell
 bun run dev:tui
 ```
 
-该命令直接运行 TypeScript 源码，不编译 exe，也不会自动重启。无论从 worktree 内哪个目录执行，工作目录均为
-worktree 根目录，开发数据默认保存在 `<worktree>/.aizen/dev-data`。
+`bun run dev:tui` 直接运行 TypeScript 源码，不编译可执行文件，也不会自动重启。无论从 worktree 内哪个目录执行，工作目录均为 worktree 根目录。
 
-需要隔离另一组开发数据时，可显式指定目录：
+构建 Windows x64 单文件可执行程序：
 
 ```powershell
-bun run dev:tui --data-dir .aizen/另一组数据
+bun run build:tui
 ```
 
-相对路径以 worktree 根目录为基准；数据目录不能直接指定为 worktree 根目录。直接运行
-`bun apps/tui/main.ts` 时必须传入 `--data-dir`，相对路径则以执行命令时的当前目录为基准。
+编译后的 `dist/aizen-tui.exe` 运行时不要求用户另行安装 Node.js 或 Bun。
 
-编译后的 `aizen-tui.exe` 默认使用 exe 同目录的 `data`，也可通过 `--data-dir` 指定其它目录。`--plain`
-是单次、无状态调用，不读写该目录。
+## 数据存储
 
-### TUI 交互
+AizenAssistant 的数据保存在本地：
 
-- 页面底部依次显示当前选项说明、可用快捷键和错误信息。
-- 文本与数值字段在当前选项内编辑；Enter 确认，Esc 取消。
-- 在聊天输入框的第一个有效字符处输入 `/`，会在输入框上方显示命令候选。
-- 上下键切换候选，Enter 或 Tab 只补全命令；再次按 Enter 才会执行。
-- 正文、路径、后续段落及带参数的文本不会触发命令候选。
+- 通过 `bun run dev:tui` 启动时，默认数据目录为 `<worktree>/.aizen/dev-data`；相对路径以 worktree 根目录为基准；
+- 直接运行 `bun apps/tui/main.ts` 时必须指定 `--data-dir <目录>`；相对路径以执行命令时的当前目录为基准；
+- 运行 `aizen-tui.exe` 时，默认数据目录为 `<可执行文件所在目录>/data`；
+- 以上启动方式都可以通过 `--data-dir <目录>` 改用指定的数据目录，数据目录不能直接指定为当前工作目录。
 
-协作和 PR 规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+数据目录包含会话、视图、模型配置、应用偏好和认证信息。会话按工作目录分组保存在 `sessions/` 下，每个会话对应一个 JSONL 文件；文件名由本地创建时间和助记词 ID 组成，可以在应用外改名。会话文件是完整记录的事实来源，摘要索引只是可重建缓存。
 
-## 项目文档
+建议备份整个数据目录。由于其中包含认证信息，分享、同步或提交文件前请先检查敏感内容。
 
-- [技术路线图](docs/AizenAssistant技术路线图.md)
-- [AI Agent 行为指令](AGENTS.md)
-- [汇报指南](TALK_GUIDE.md)
-
-## 当前技术方向
-
-- Bun workspace 与 TypeScript 核心
-- pi SDK adapter
-- OpenTUI 自研终端界面
-- Vue + Vite + Tauri 桌面界面
-- Windows x64 首发，用户环境无需 Node/Bun
-
-具体实现必须先通过设计文档定义的架构可行性验证。
+开发、验证和 PR 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
