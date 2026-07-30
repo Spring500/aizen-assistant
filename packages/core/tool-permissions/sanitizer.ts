@@ -1,7 +1,7 @@
 import type { JsonValue } from "../session-format.ts"
 
-const sensitiveKey =
-  /(token|password|passwd|secret|api[_-]?key|private[_-]?key|authorization|cookie|credential|content|body)/i
+const sensitiveKey = /(token|password|passwd|secret|api[_-]?key|private[_-]?key|authorization|cookie|credential)/i
+const hiddenPayloadKey = /(token|password|passwd|secret|api[_-]?key|private[_-]?key|authorization|cookie|credential|content|body)/i
 const maximumStringBytes = 4096
 const maximumPayloadBytes = 16384
 
@@ -15,7 +15,7 @@ function truncate(value: string): string {
 }
 
 function sanitize(value: JsonValue, key?: string): JsonValue {
-  if (key && sensitiveKey.test(key)) return "[敏感内容已隐藏]"
+  if (key && hiddenPayloadKey.test(key)) return "[敏感内容已隐藏]"
   if (typeof value === "string") return truncate(value)
   if (Array.isArray(value)) return value.map((item) => sanitize(item))
   if (value && typeof value === "object")
