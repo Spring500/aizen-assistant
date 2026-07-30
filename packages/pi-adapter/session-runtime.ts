@@ -34,10 +34,12 @@ import type {
   PiPortEvent,
   PiPromptInput,
   PiRestoreInput,
+  PiSessionTitleInput,
   ViewRuntimeInput,
 } from "../core/pi-port.ts"
 import type { ModelReference, SessionRecord } from "../core/session-format.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
+import { generateSessionTitle } from "./session-title-generator.ts"
 
 export type PiSessionRuntimeOptions = {
   authPath: string
@@ -393,6 +395,14 @@ export class PiSessionRuntime implements PiPort {
         (message) => message.role !== "user" || !temporaryMessages.has(message),
       )
     }
+  }
+
+  async generateSessionTitle(input: PiSessionTitleInput): Promise<string> {
+    const sourceModel = this.#modelRuntime.getModel(input.model.providerId, input.model.modelId)
+    if (!sourceModel) throw new Error(`找不到命名模型：${input.model.providerId}/${input.model.modelId}`)
+    const modelKey = `${sourceModel.provider}\0${sourceModel.id}`
+    const model = runtimeModel(sourceModel, this.#thinkingConfigs.get(modelKey), this.#modelBaseUrls.get(modelKey))
+    return generateSessionTitle(this.#modelRuntime, model, input.firstUserMessage, input.signal)
   }
 
   abort(): Promise<void> {

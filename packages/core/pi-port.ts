@@ -73,12 +73,20 @@ export type PiPromptInput = {
   items: TurnInputItem[]
 }
 
+export type PiSessionTitleInput = {
+  model: Pick<ModelReference, "providerId" | "modelId">
+  firstUserMessage: string
+  signal?: AbortSignal
+}
+
 export interface PiPort {
   create(input: PiCreateInput): Promise<ModelRuntimeInfo>
   restore(input: PiRestoreInput): Promise<ModelRuntimeInfo>
   refreshView(view: ViewRuntimeInput): Promise<void>
   switchView(view: ViewRuntimeInput, records: SessionRecord[]): Promise<ModelRuntimeInfo>
   prompt(input: PiPromptInput): Promise<void>
+  /** 使用独立模型请求为首条用户消息生成经过校验的会话标题。 */
+  generateSessionTitle(input: PiSessionTitleInput): Promise<string>
   abort(): Promise<void>
   listModels(): Promise<ModelOption[]>
   reloadModelConfig(): Promise<void>

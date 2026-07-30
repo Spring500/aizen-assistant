@@ -10,6 +10,7 @@ export type TuiCommandName =
   | "/fold"
   | "/model"
   | "/models"
+  | "/agents"
 
 export type TuiCommand = {
   name: TuiCommandName
@@ -26,6 +27,7 @@ export const tuiCommands: readonly TuiCommand[] = [
   { name: "/views", description: "管理视图" },
   { name: "/model", description: "切换当前模型" },
   { name: "/models", description: "管理供应商和模型" },
+  { name: "/agents", description: "设置内置 Agent" },
   { name: "/fold", description: "设置会话内容折叠范围" },
   { name: "/quit", description: "退出应用" },
 ]

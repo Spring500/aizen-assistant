@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -31,6 +31,36 @@ describe("应用偏好存储", () => {
     }
     await store.write(preferences)
     expect(await store.read()).toEqual(preferences)
+  })
+
+  test("兼容缺少 Agent 设置的既有偏好", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aizen-preferences-"))
+    directories.push(directory)
+    const file = join(directory, "preferences.json")
+    await writeFile(
+      file,
+      JSON.stringify({
+        version: 1,
+        newSession: { viewId: null },
+        fold: defaultAppPreferences.fold,
+      }),
+    )
+    expect((await new AppPreferencesStore(file).read()).agents).toEqual({ sessionNaming: {} })
+  })
+
+  test("会话命名偏好只保存供应商和模型标识", () => {
+    expect(
+      parseAppPreferences({
+        ...defaultAppPreferences,
+        agents: { sessionNaming: { model: { providerId: "provider", modelId: "title-model" } } },
+      }).agents,
+    ).toEqual({ sessionNaming: { model: { providerId: "provider", modelId: "title-model" } } })
+    expect(() =>
+      parseAppPreferences({
+        ...defaultAppPreferences,
+        agents: { sessionNaming: { model: { providerId: "provider", modelId: "title-model", api: "invalid" } } },
+      }),
+    ).toThrow("未知字段")
   })
 
   test("工具详情范围不得超过工具组", () => {

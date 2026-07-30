@@ -69,6 +69,9 @@ export class AizenCore implements CorePort {
   #abortRequested = false
   #runtimeReady = false
   #preferencesLoaded = false
+  #sessionNamingAttempted = false
+  #sessionNamingTask: Promise<void> | undefined
+  #sessionNamingAbort: AbortController | undefined
   #disposed = false
 
   constructor(options: AizenCoreOptions) {
@@ -124,6 +127,11 @@ export class AizenCore implements CorePort {
           break
         case "save_fold_preferences": {
           const preferences = parseAppPreferences({ ...this.#snapshot.preferences, fold: command.fold })
+          await this.#writePreferences(preferences)
+          break
+        }
+        case "save_agent_preferences": {
+          const preferences = parseAppPreferences({ ...this.#snapshot.preferences, agents: command.agents })
           await this.#writePreferences(preferences)
           break
         }
@@ -274,12 +282,14 @@ export class AizenCore implements CorePort {
     this.#disposed = true
     let failure: unknown
     try {
+      this.#sessionNamingAbort?.abort()
       if (this.#snapshot.status === "running" || this.#snapshot.status === "aborting") await this.#pi.abort()
     } catch (error) {
       failure = error
     } finally {
       this.#stopResponseTimer()
       try {
+        await this.#sessionNamingTask
         await this.#writeQueue
         await this.#store.flush()
       } catch (error) {
@@ -340,6 +350,7 @@ export class AizenCore implements CorePort {
   }
 
   async #createSession(model: ModelReference, viewId: ViewId): Promise<void> {
+    this.#sessionNamingAbort?.abort()
     const at = new Date().toISOString()
     const view = await this.#resolveView(viewId)
     const actualModel = await this.#pi.create({ cwd: this.#cwd, model, view })
@@ -353,6 +364,7 @@ export class AizenCore implements CorePort {
     this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
     this.#snapshot.currentSessionName = ""
+    this.#sessionNamingAttempted = false
     this.#runtimeReady = true
     this.#snapshot.currentModel = actualModel
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
@@ -369,6 +381,7 @@ export class AizenCore implements CorePort {
   }
 
   async #openSession(sessionId: string): Promise<void> {
+    this.#sessionNamingAbort?.abort()
     const loaded = await this.#store.read(sessionId)
     if (loaded.header.cwd !== this.#cwd) throw new Error("该会话不属于当前工作目录")
     const modelRecord = [...loaded.records].reverse().find((record) => record.kind === "model_changed")
@@ -392,6 +405,7 @@ export class AizenCore implements CorePort {
     this.#records = loaded.records
     this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
+    this.#sessionNamingAttempted = false
     const renamedRecord = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
     this.#snapshot.currentSessionName = renamedRecord?.kind === "session_renamed" ? renamedRecord.name : ""
     this.#snapshot.currentModel = actualModel
@@ -406,7 +420,12 @@ export class AizenCore implements CorePort {
     await this.#rememberSessionDefaults(actualModel, viewRecord.viewId)
   }
 
-  async #activateRecords(sessionId: string, records: SessionRecord[], name: string): Promise<void> {
+  async #activateRecords(
+    sessionId: string,
+    records: SessionRecord[],
+    name: string,
+    resetNamingOpportunity: boolean,
+  ): Promise<void> {
     const modelRecord = [...records].reverse().find((record) => record.kind === "model_changed")
     const viewRecord = [...records].reverse().find((record) => record.kind === "view_changed")
     if (modelRecord?.kind !== "model_changed") throw new Error("会话没有模型记录")
@@ -417,6 +436,10 @@ export class AizenCore implements CorePort {
     this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
     this.#snapshot.currentSessionName = name
+    if (resetNamingOpportunity) {
+      this.#sessionNamingAbort?.abort()
+      this.#sessionNamingAttempted = false
+    }
     this.#snapshot.currentModel = actualModel
     this.#snapshot.currentViewId = viewRecord.viewId
     this.#snapshot.transcript = recordsToTranscript(records)
@@ -437,16 +460,17 @@ export class AizenCore implements CorePort {
     return index
   }
 
-  #recordsBeforeTurn(turnId: string, name: string): SessionRecord[] {
+  #recordsBeforeTurn(turnId: string, name: string, forceName = false): SessionRecord[] {
     const model = this.#snapshot.currentModel
     const viewId = this.#snapshot.currentViewId
     if (!model || viewId === undefined) throw new Error("当前会话设置不完整")
     const at = new Date().toISOString()
+    const renamed = forceName || this.#records.some((record) => record.kind === "session_renamed")
     return [
       ...structuredClone(this.#records.slice(0, this.#turnStartIndex(turnId))),
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(model) },
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
-      { kind: "session_renamed", recordId: crypto.randomUUID(), at, name },
+      ...(renamed ? [{ kind: "session_renamed" as const, recordId: crypto.randomUUID(), at, name }] : []),
     ]
   }
 
@@ -458,7 +482,7 @@ export class AizenCore implements CorePort {
     const name = this.#snapshot.currentSessionName ?? ""
     const records = this.#recordsBeforeTurn(turnId, name)
     await this.#store.rewrite(sessionId, this.#records, records)
-    await this.#activateRecords(sessionId, records, name)
+    await this.#activateRecords(sessionId, records, name, false)
     this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
   }
@@ -471,10 +495,10 @@ export class AizenCore implements CorePort {
     const at = new Date().toISOString()
     const sourceName = this.#snapshot.currentSessionName || sourceSessionId
     const name = `${sourceName}_副本`
-    const records = this.#recordsBeforeTurn(turnId, name)
+    const records = this.#recordsBeforeTurn(turnId, name, true)
     const header = await this.#store.createGenerated({ cwd: this.#cwd, createdAt: at }, records)
     const sessionId = header.sessionId
-    await this.#activateRecords(sessionId, records, name)
+    await this.#activateRecords(sessionId, records, name, true)
     this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
   }
@@ -489,11 +513,8 @@ export class AizenCore implements CorePort {
       at: new Date().toISOString(),
       name: normalizedName,
     }
-    await this.#store.append(sessionId, record)
-    if (this.#snapshot.currentSessionId === sessionId) {
-      this.#records.push(record)
-      this.#snapshot.currentSessionName = normalizedName
-    }
+    await this.#appendRecord(sessionId, record)
+    if (this.#snapshot.currentSessionId === sessionId) this.#snapshot.currentSessionName = normalizedName
     this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
   }
@@ -513,6 +534,7 @@ export class AizenCore implements CorePort {
       ...extraItems,
       { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text }] },
     ]
+    const firstUserMessage = this.#firstUserMessage() ?? text
     const started: TurnStartedRecord = {
       kind: "turn_started",
       recordId: crypto.randomUUID(),
@@ -532,6 +554,7 @@ export class AizenCore implements CorePort {
     this.#startResponseTimer()
     this.#abortRequested = false
     this.#notify()
+    this.#startSessionNaming(sessionId, firstUserMessage)
     let outcome: TurnFinishedRecord["outcome"] = "completed"
     let error: TurnFinishedRecord["error"]
     try {
@@ -704,17 +727,74 @@ export class AizenCore implements CorePort {
     this.#notify()
   }
 
-  #enqueueRecord(sessionId: string, record: SessionRecord): void {
+  async #appendRecord(sessionId: string, record: SessionRecord): Promise<void> {
     const operation = this.#writeQueue.then(async () => {
-      if (this.#writeError) return
+      if (this.#writeError) throw this.#writeError
       await this.#store.append(sessionId, record)
-      this.#records.push(record)
+      if (this.#snapshot.currentSessionId === sessionId) this.#records.push(record)
     })
     this.#writeQueue = operation.catch((error) => {
       const actual = error instanceof Error ? error : new Error(String(error))
       this.#markWriteFailure(actual)
       this.#notify()
     })
+    await operation
+  }
+
+  #enqueueRecord(sessionId: string, record: SessionRecord): void {
+    void this.#appendRecord(sessionId, record).catch(() => {})
+  }
+
+  #firstUserMessage(): string | undefined {
+    for (const record of this.#records) {
+      if (record.kind !== "turn_started") continue
+      const text = record.items
+        .filter((item) => item.source === "user" && item.role === "user")
+        .flatMap((item) => item.parts)
+        .filter((part) => part.kind === "text")
+        .map((part) => part.text.trim())
+        .filter(Boolean)
+        .join("\n")
+      if (text) return text
+    }
+    return undefined
+  }
+
+  #startSessionNaming(sessionId: string, firstUserMessage: string): void {
+    const model = this.#snapshot.preferences.agents.sessionNaming.model
+    if (!model || this.#sessionNamingAttempted || this.#records.some((record) => record.kind === "session_renamed"))
+      return
+    this.#sessionNamingAttempted = true
+    const controller = new AbortController()
+    this.#sessionNamingAbort = controller
+    const task = this.#pi
+      .generateSessionTitle({ model, firstUserMessage, signal: controller.signal })
+      .then(async (name) => {
+        await this.#writeQueue
+        if (this.#snapshot.currentSessionId !== sessionId) return
+        if (this.#records.some((record) => record.kind === "session_renamed")) return
+        const record: SessionRecord = {
+          kind: "session_renamed",
+          recordId: crypto.randomUUID(),
+          at: new Date().toISOString(),
+          name,
+        }
+        await this.#appendRecord(sessionId, record)
+        this.#snapshot.currentSessionName = name
+        this.#snapshot.sessions = await this.#store.list()
+        this.#reportStoreWarnings()
+        this.#notify()
+      })
+      .catch((error) => {
+        if (controller.signal.aborted || this.#disposed) return
+        this.#reportError(`会话自动命名失败：${error instanceof Error ? error.message : String(error)}`)
+        this.#notify()
+      })
+      .finally(() => {
+        if (this.#sessionNamingAbort === controller) this.#sessionNamingAbort = undefined
+        if (this.#sessionNamingTask === task) this.#sessionNamingTask = undefined
+      })
+    this.#sessionNamingTask = task
   }
 
   #reportStoreWarnings(): void {

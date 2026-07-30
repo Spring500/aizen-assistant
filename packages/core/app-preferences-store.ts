@@ -2,6 +2,17 @@ import { readFile } from "node:fs/promises"
 import { atomicWriteFile } from "./file-transaction.ts"
 import type { ModelReference, ViewId } from "./session-format.ts"
 
+export type AgentModelReference = {
+  providerId: string
+  modelId: string
+}
+
+export type AgentPreferences = {
+  sessionNaming: {
+    model?: AgentModelReference
+  }
+}
+
 export type FoldPreferences = {
   userTurns: number
   assistantTurns: number
@@ -16,6 +27,7 @@ export type AppPreferences = {
     model?: ModelReference
     viewId: ViewId
   }
+  agents: AgentPreferences
   fold: FoldPreferences
 }
 
@@ -30,6 +42,7 @@ export const defaultFoldPreferences: FoldPreferences = {
 export const defaultAppPreferences: AppPreferences = {
   version: 1,
   newSession: { viewId: null },
+  agents: { sessionNaming: {} },
   fold: defaultFoldPreferences,
 }
 
@@ -45,6 +58,16 @@ function exact(value: Record<string, unknown>, keys: string[], label: string): v
 function turns(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label} 必须是非负安全整数`)
   return value as number
+}
+
+function agentModelReference(value: unknown): AgentModelReference {
+  const source = object(value, "agents.sessionNaming.model")
+  exact(source, ["providerId", "modelId"], "agents.sessionNaming.model")
+  for (const key of ["providerId", "modelId"] as const) {
+    if (typeof source[key] !== "string" || !source[key])
+      throw new Error(`agents.sessionNaming.model.${key} 必须是非空字符串`)
+  }
+  return { providerId: source.providerId as string, modelId: source.modelId as string }
 }
 
 function modelReference(value: unknown): ModelReference {
@@ -66,12 +89,16 @@ function modelReference(value: unknown): ModelReference {
 /** 校验并规范化应用偏好，防止无效配置进入核心和界面。 */
 export function parseAppPreferences(value: unknown): AppPreferences {
   const source = object(value, "preferences.json")
-  exact(source, ["version", "newSession", "fold"], "preferences.json")
+  exact(source, ["version", "newSession", "agents", "fold"], "preferences.json")
   if (source.version !== 1) throw new Error(`不支持的 preferences.json 版本：${String(source.version)}`)
   const newSession = object(source.newSession, "newSession")
   exact(newSession, ["model", "viewId"], "newSession")
   if (newSession.viewId !== null && typeof newSession.viewId !== "string")
     throw new Error("newSession.viewId 必须是字符串或 null")
+  const agents = source.agents === undefined ? {} : object(source.agents, "agents")
+  exact(agents, ["sessionNaming"], "agents")
+  const sessionNaming = agents.sessionNaming === undefined ? {} : object(agents.sessionNaming, "agents.sessionNaming")
+  exact(sessionNaming, ["model"], "agents.sessionNaming")
   const fold = object(source.fold, "fold")
   exact(fold, ["userTurns", "assistantTurns", "thinkingTurns", "toolGroupTurns", "toolDetailTurns"], "fold")
   const parsedFold: FoldPreferences = {
@@ -92,6 +119,11 @@ export function parseAppPreferences(value: unknown): AppPreferences {
     newSession: {
       ...(newSession.model === undefined ? {} : { model: modelReference(newSession.model) }),
       viewId: newSession.viewId as ViewId,
+    },
+    agents: {
+      sessionNaming: {
+        ...(sessionNaming.model === undefined ? {} : { model: agentModelReference(sessionNaming.model) }),
+      },
     },
     fold: parsedFold,
   }

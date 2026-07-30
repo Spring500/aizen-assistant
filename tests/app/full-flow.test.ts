@@ -24,6 +24,7 @@ class FixturePi implements PiPort {
   restore = async () => model
   refreshView = async () => {}
   switchView = async () => model
+  generateSessionTitle = async () => "测试标题"
   prompt = async () => {}
   abort = async () => {}
   listModels = async () => [{ ...model, name: "Fixture Model", available: true }]
