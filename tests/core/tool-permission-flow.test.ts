@@ -59,6 +59,31 @@ class PermissionPi implements PiPort {
   }
 }
 
+test("Core允许第三方工具注入同一验证器接口", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aizen-permission-validator-"))
+  directories.push(root)
+  const pi = new PermissionPi()
+  const core = new AizenCore({
+    cwd: root,
+    store: new SessionStore(join(root, "sessions")),
+    pi,
+    permissionValidators: [
+      {
+        toolName: "unknown",
+        validate: async () => ({
+          type: "allow",
+          assessment: { summary: "第三方工具", targets: [], risk: "low", reason: "第三方固定规则允许" },
+        }),
+      },
+    ],
+  })
+  await core.dispatch({ type: "create_session", model, viewId: null, permissionMode: "hybrid" })
+  await core.dispatch({ type: "send_prompt", text: "执行" })
+  expect(pi.authorization).toMatchObject({ type: "allow", source: "validator" })
+  expect(core.getSnapshot().pendingPermissionRequests).toEqual([])
+  await core.dispose()
+})
+
 test("Core发布人工审批并只接受一次答复", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-permission-flow-"))
   directories.push(root)

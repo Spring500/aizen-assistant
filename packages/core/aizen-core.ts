@@ -29,6 +29,7 @@ import type {
   HumanReviewRequest,
   PermissionAuditEvent,
   PermissionMode,
+  ToolPermissionValidator,
 } from "./tool-permissions/types.ts"
 import { createBashValidator } from "./tool-permissions/validators/bash.ts"
 import { createFileValidator } from "./tool-permissions/validators/file.ts"
@@ -50,6 +51,7 @@ export type AizenCoreOptions = {
   extraMessages?: ExtraMessageProvider
   modelConfigStore?: ModelConfigStore
   preferencesStore?: AppPreferencesStore
+  permissionValidators?: ToolPermissionValidator[]
 }
 
 function sessionModel(model: ModelReference): ModelReference {
@@ -69,6 +71,7 @@ export class AizenCore implements CorePort {
   readonly #extraMessages: ExtraMessageProvider
   readonly #modelConfigStore: ModelConfigStore | undefined
   readonly #preferencesStore: AppPreferencesStore | undefined
+  readonly #permissionValidators: ToolPermissionValidator[]
   readonly #listeners = new Set<(event: CoreEvent) => void>()
   readonly #unsubscribePi: () => void
   readonly #permissionManager: ToolPermissionManager | undefined
@@ -113,6 +116,7 @@ export class AizenCore implements CorePort {
     this.#extraMessages = options.extraMessages ?? (async () => [])
     this.#modelConfigStore = options.modelConfigStore
     this.#preferencesStore = options.preferencesStore
+    this.#permissionValidators = options.permissionValidators ?? []
     this.#unsubscribePi = this.#pi.subscribe((event) => this.#handlePiEvent(event))
     this.#permissionManager = this.#createPermissionManager()
     this.#pi.setPermissionHandler?.((request, signal) => {
@@ -824,6 +828,7 @@ export class AizenCore implements CorePort {
     registry.register(createFileValidator("read"))
     registry.register(createFileValidator("write"))
     registry.register(createFileValidator("edit"))
+    for (const validator of this.#permissionValidators) registry.register(validator)
     return new ToolPermissionManager({
       registry,
       aiReviewer: {
