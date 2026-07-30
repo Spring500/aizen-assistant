@@ -1,0 +1,303 @@
+import { isAbsolute, relative, resolve } from "node:path"
+import type { JsonValue } from "../../session-format.ts"
+import type {
+  ToolAssessment,
+  ToolPermissionDecision,
+  ToolPermissionRequest,
+  ToolPermissionValidator,
+} from "../types.ts"
+
+const safeCommands = new Set([
+  "cat",
+  "cut",
+  "echo",
+  "false",
+  "grep",
+  "head",
+  "id",
+  "ls",
+  "nl",
+  "pwd",
+  "rg",
+  "sed",
+  "stat",
+  "tail",
+  "true",
+  "uname",
+  "uniq",
+  "wc",
+  "which",
+  "whoami",
+])
+const safeGitCommands = new Set(["status", "diff", "log", "show"])
+const humanCommands = new Set([
+  "chmod",
+  "chown",
+  "dd",
+  "eval",
+  "fdisk",
+  "mkfs",
+  "mount",
+  "passwd",
+  "shutdown",
+  "sudo",
+  "systemctl",
+  "umount",
+])
+const networkCommands = new Set(["curl", "wget"])
+const remoteMutationCommands = new Set(["push", "fetch", "pull", "clone"])
+const packageCommands = new Set(["bun", "npm", "pnpm", "yarn", "cargo", "pip", "pip3"])
+const unsupportedSyntax = /`|\$\(|\$\{|<<|\b(eval|function|for|while|until|case|select)\b|\n\s*(for|while|until|case)\b/
+const destructiveRoot =
+  /\brm\b[^\n]*(?:-\w*r\w*f|-\w*f\w*r|--recursive)[^\n]*(?:\s\/\s*$|\s\/[\s;&|]|\s[A-Za-z]:[\\/]\s*$)/i
+const forkBomb = /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/
+
+function object(value: JsonValue): Record<string, JsonValue> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : undefined
+}
+
+function inside(root: string, target: string): boolean {
+  const path = relative(root, target)
+  return path === "" || (!path.startsWith("..") && !isAbsolute(path))
+}
+
+function tokenize(command: string): string[] | undefined {
+  const tokens: string[] = []
+  let current = ""
+  let quote: "'" | '"' | undefined
+  let escaped = false
+  for (const character of command) {
+    if (escaped) {
+      current += character
+      escaped = false
+      continue
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true
+      current += character
+      continue
+    }
+    if (quote) {
+      current += character
+      if (character === quote) quote = undefined
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      current += character
+      continue
+    }
+    if (/\s/.test(character)) {
+      if (current) tokens.push(current)
+      current = ""
+      continue
+    }
+    current += character
+  }
+  if (quote || escaped) return undefined
+  if (current) tokens.push(current)
+  return tokens
+}
+
+function splitCommands(command: string): string[] | undefined {
+  const result: string[] = []
+  let current = ""
+  let quote: "'" | '"' | undefined
+  let escaped = false
+  for (let index = 0; index < command.length; index++) {
+    const character = command[index] ?? ""
+    const next = command[index + 1] ?? ""
+    if (escaped) {
+      current += character
+      escaped = false
+      continue
+    }
+    if (character === "\\" && quote !== "'") {
+      current += character
+      escaped = true
+      continue
+    }
+    if (quote) {
+      current += character
+      if (character === quote) quote = undefined
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      current += character
+      continue
+    }
+    if (character === ";" || character === "|" || (character === "&" && next === "&")) {
+      if (character === "|" && next === "|") index++
+      if (character === "&" && next === "&") index++
+      if (current.trim()) result.push(current.trim())
+      current = ""
+      continue
+    }
+    current += character
+  }
+  if (quote || escaped) return undefined
+  if (current.trim()) result.push(current.trim())
+  return result
+}
+
+function unquote(value: string): string {
+  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'")))
+    return value.slice(1, -1)
+  return value
+}
+
+function pathArguments(tokens: string[]): string[] {
+  return tokens
+    .slice(1)
+    .filter((token) => token && !token.startsWith("-"))
+    .map(unquote)
+}
+
+function assessment(
+  command: string,
+  risk: ToolAssessment["risk"],
+  reason: string,
+  targets: string[] = [],
+): ToolAssessment {
+  return {
+    summary: `执行命令：${command}`,
+    targets,
+    risk,
+    reason,
+    details: { command },
+    match: { command },
+    recoveryChecks: ["检查命令涉及的文件、进程或远程资源是否已发生变化"],
+  }
+}
+
+function networkReview(tokens: string[], request: ToolPermissionRequest, command: string): ToolPermissionDecision {
+  const executable = tokens[0]?.toLowerCase()
+  const target = tokens.find((token) => /^https?:\/\//i.test(unquote(token)))
+  const dynamic = !target || /[$`]/.test(target)
+  const upload = tokens.some((token) =>
+    ["-d", "--data", "--data-binary", "-F", "--form", "-T", "--upload-file"].includes(token),
+  )
+  const methodIndex = tokens.findIndex((token) => token === "-X" || token === "--request")
+  const method =
+    methodIndex >= 0 ? unquote(tokens[methodIndex + 1] ?? "").toUpperCase() : executable === "wget" ? "GET" : "GET"
+  const analyzed = assessment(
+    command,
+    dynamic || upload || !["GET", "HEAD"].includes(method) ? "high" : "medium",
+    "网络请求需要审核",
+    target ? [unquote(target)] : [],
+  )
+  if (dynamic || upload || !["GET", "HEAD"].includes(method)) return { type: "needHumanReview", assessment: analyzed }
+  return {
+    type: "needAiReview",
+    assessment: analyzed,
+    reviewPayload: {
+      command,
+      destination: /^https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::|\/|$)/i.test(unquote(target))
+        ? "loopback"
+        : "remote",
+      operation: "read",
+      method,
+      declaredIntent: request.declaredIntent,
+    },
+  }
+}
+
+function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPermissionDecision {
+  const tokens = tokenize(segment)
+  if (!tokens || tokens.length === 0)
+    return { type: "needHumanReview", assessment: assessment(segment, "high", "命令无法可靠解析") }
+  const executable =
+    unquote(tokens[0] ?? "")
+      .split(/[\\/]/)
+      .at(-1)
+      ?.toLowerCase() ?? ""
+  if (humanCommands.has(executable))
+    return { type: "needHumanReview", assessment: assessment(segment, "high", "命令会修改系统级状态") }
+  if (networkCommands.has(executable)) return networkReview(tokens, request, segment)
+  if (executable === "git") {
+    const subcommand = tokens
+      .slice(1)
+      .find((token) => !token.startsWith("-"))
+      ?.toLowerCase()
+    if (subcommand && safeGitCommands.has(subcommand))
+      return { type: "allow", assessment: assessment(segment, "low", "只读 Git 查询") }
+    if (subcommand && remoteMutationCommands.has(subcommand))
+      return { type: "needHumanReview", assessment: assessment(segment, "high", "Git 远程操作需要用户判断") }
+    return {
+      type: "needAiReview",
+      assessment: assessment(segment, "medium", "Git 操作可能修改工作区或历史"),
+      reviewPayload: { command: segment, declaredIntent: request.declaredIntent },
+    }
+  }
+  if (safeCommands.has(executable)) {
+    if (tokens.some((token) => token === ">" || token === ">>" || token.startsWith(">")))
+      return {
+        type: "needAiReview",
+        assessment: assessment(segment, "medium", "只读命令包含输出重定向"),
+        reviewPayload: { command: segment, declaredIntent: request.declaredIntent },
+      }
+    const targets = pathArguments(tokens)
+      .map((path) => resolve(request.cwd, path))
+      .filter((path) => isAbsolute(path))
+    if (targets.some((path) => !inside(resolve(request.cwd), path)))
+      return { type: "needHumanReview", assessment: assessment(segment, "high", "命令读取工作区外路径", targets) }
+    return { type: "allow", assessment: assessment(segment, "low", "命中保守只读命令规则", targets) }
+  }
+  if (packageCommands.has(executable))
+    return {
+      type: "needAiReview",
+      assessment: assessment(segment, "medium", "包管理或构建命令可能写入文件并执行脚本"),
+      reviewPayload: { command: segment, declaredIntent: request.declaredIntent },
+    }
+  if (executable === "rm" || executable === "mv" || executable === "cp" || executable === "mkdir") {
+    const targets = pathArguments(tokens).map((path) => resolve(request.cwd, path))
+    if (targets.some((path) => !inside(resolve(request.cwd), path)))
+      return { type: "needHumanReview", assessment: assessment(segment, "high", "命令修改工作区外路径", targets) }
+    return {
+      type: "needAiReview",
+      assessment: assessment(segment, "medium", "命令会修改工作区文件", targets),
+      reviewPayload: { command: segment, targets, declaredIntent: request.declaredIntent },
+    }
+  }
+  return {
+    type: "needAiReview",
+    assessment: assessment(segment, "medium", "可执行命令未命中只读规则"),
+    reviewPayload: { command: segment, declaredIntent: request.declaredIntent },
+  }
+}
+
+function combine(left: ToolPermissionDecision, right: ToolPermissionDecision): ToolPermissionDecision {
+  const rank = { allow: 0, needAiReview: 1, needHumanReview: 2, deny: 3 } as const
+  return rank[right.type] > rank[left.type] ? right : left
+}
+
+/** 创建首期面向 Git Bash 保守语法子集的权限验证器。 */
+export function createBashValidator(): ToolPermissionValidator {
+  return {
+    toolName: "bash",
+    async validate(request) {
+      const input = object(request.arguments)
+      const command = input?.command
+      if (!input || typeof command !== "string" || !command.trim()) {
+        const invalid = assessment("", "critical", "命令为空或格式无效")
+        return { type: "deny", reason: invalid.reason, assessment: invalid }
+      }
+      if (destructiveRoot.test(command) || forkBomb.test(command)) {
+        const destructive = assessment(command, "critical", "命令命中明确的全系统破坏模式")
+        return { type: "deny", reason: destructive.reason, assessment: destructive }
+      }
+      if (request.environment && object(request.environment)?.shell !== "git-bash")
+        return { type: "needHumanReview", assessment: assessment(command, "high", "当前 Shell 不在首期分析范围内") }
+      if (unsupportedSyntax.test(command))
+        return {
+          type: "needHumanReview",
+          assessment: assessment(command, "high", "命令使用了首期不可靠支持的动态语法"),
+        }
+      const segments = splitCommands(command)
+      if (!segments || segments.length === 0)
+        return { type: "needHumanReview", assessment: assessment(command, "high", "命令无法可靠拆分") }
+      return segments.map((segment) => simpleDecision(segment, request)).reduce(combine)
+    },
+  }
+}
