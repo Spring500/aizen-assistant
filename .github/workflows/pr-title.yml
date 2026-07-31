@@ -15,6 +15,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
       - run: bun run scripts/repo/validate-pr-title.ts "$env:PR_TITLE"
         env:
           PR_TITLE: ${{ github.event.pull_request.title }}
