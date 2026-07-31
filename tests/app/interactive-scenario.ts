@@ -1,5 +1,6 @@
 import { rm } from "node:fs/promises"
 import { KeyEvent, parseKeypress } from "@opentui/core"
+import type { TextareaRenderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { runInteractiveApp } from "../../apps/tui/interactive-app.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
@@ -46,6 +47,93 @@ class ThrowingCreateCore implements CorePort {
     return structuredClone(this.snapshot)
   }
   dispose = async () => {}
+}
+
+class RecoverablePromptCore implements CorePort {
+  readonly commands: CoreCommand[] = []
+  readonly listeners = new Set<(event: CoreEvent) => void>()
+  readonly snapshot: CoreSnapshot = {
+    cwd: "E:\\fixture",
+    status: "idle",
+    sessions: [],
+    currentSessionId: "fixture-session",
+    currentSessionName: "恢复测试",
+    currentModel: { ...model, thinkingLevel: "旧档位" },
+    currentViewId: null,
+    runtimeIssue: { kind: "model", message: "模型思考档位已失效" },
+    models: [{ ...model, thinkingLevel: "标准", thinkingLevels: ["快速", "标准"] }],
+    modelConfig: {
+      revision: "fixture",
+      providers: [],
+      apiChoices: ["anthropic-messages"],
+      inputModalities: [{ value: "text", enabled: true }],
+      outputModalities: [],
+    },
+    preferences: structuredClone(defaultAppPreferences),
+    views: [],
+    authProviders: [{ id: "anthropic", name: "Anthropic", configured: true, supportsApiKey: true }],
+    transcript: [],
+    activeTools: [],
+    streamingText: "",
+    streamingThinking: "",
+  }
+
+  async dispatch(command: CoreCommand) {
+    this.commands.push(command)
+    const sendCount = this.commands.filter((item) => item.type === "send_prompt").length
+    if (command.type === "send_prompt" && sendCount === 1)
+      return {
+        ok: false as const,
+        error: { code: "MODEL_SELECTION_REQUIRED", message: "模型思考档位已失效", severity: "error" as const },
+      }
+    if (command.type === "set_model") {
+      this.snapshot.currentModel = { ...command.model }
+      delete this.snapshot.runtimeIssue
+    }
+    for (const listener of this.listeners) listener({ type: "snapshot", snapshot: this.getSnapshot() })
+    return { ok: true as const }
+  }
+  subscribe(listener: (event: CoreEvent) => void) {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+  getSnapshot() {
+    return structuredClone(this.snapshot)
+  }
+  dispose = async () => {}
+}
+
+class RecoverableViewPromptCore extends RecoverablePromptCore {
+  constructor() {
+    super()
+    this.snapshot.currentViewId = "deleted-view"
+    this.snapshot.runtimeIssue = { kind: "view", message: "视图目录不存在" }
+    this.snapshot.views = [
+      {
+        id: "replacement-view",
+        name: "替代视图",
+        path: "E:\\fixture\\replacement-view",
+        directory: "E:\\fixture\\replacement-view",
+        valid: true,
+      },
+    ]
+  }
+
+  override async dispatch(command: CoreCommand) {
+    this.commands.push(command)
+    const sendCount = this.commands.filter((item) => item.type === "send_prompt").length
+    if (command.type === "send_prompt" && sendCount === 1)
+      return {
+        ok: false as const,
+        error: { code: "VIEW_SELECTION_REQUIRED", message: "视图目录不存在", severity: "error" as const },
+      }
+    if (command.type === "set_view") {
+      this.snapshot.currentViewId = command.viewId
+      delete this.snapshot.runtimeIssue
+    }
+    for (const listener of this.listeners) listener({ type: "snapshot", snapshot: this.getSnapshot() })
+    return { ok: true as const }
+  }
 }
 
 function assertIncludes(frame: string, value: string): void {
@@ -210,8 +298,78 @@ async function throwingCreate(): Promise<void> {
   }
 }
 
+async function recoverPrompt(): Promise<void> {
+  const setup = await setupRenderer()
+  const core = new RecoverablePromptCore()
+  const running = runInteractiveApp({
+    cwd: core.snapshot.cwd,
+    dataDirectory: "unused",
+    testing: { renderer: setup.renderer, core },
+  })
+  try {
+    await waitForCondition(() => core.commands.some((command) => command.type === "load_preferences"), "应用启动")
+    const editor = setup.renderer.root.getRenderable("editor") as TextareaRenderable | undefined
+    if (!editor) throw new Error("找不到聊天输入框")
+    editor.setText("保留并自动重试的消息")
+    await pressEnter(setup)
+    await waitForText(setup, "选择供应商")
+    await pressEnter(setup)
+    await waitForText(setup, "选择模型")
+    await pressEnter(setup)
+    await waitForText(setup, "选择思考档位")
+    await pressEnter(setup)
+    await waitForCondition(
+      () => core.commands.filter((command) => command.type === "send_prompt").length === 2,
+      "自动重试原消息",
+    )
+    const sends = core.commands.filter((command) => command.type === "send_prompt")
+    if (sends.some((command) => command.type !== "send_prompt" || command.text !== "保留并自动重试的消息"))
+      throw new Error("自动重试没有保留原消息")
+    const selected = core.commands.find((command) => command.type === "set_model")
+    if (selected?.type !== "set_model" || selected.model.thinkingLevel !== "快速")
+      throw new Error("没有应用重新选择的思考档位")
+  } finally {
+    setup.renderer.keyInput.emit("keypress", key("\x03"))
+    await running
+    setup.renderer.destroy()
+  }
+}
+
+async function recoverViewPrompt(): Promise<void> {
+  const setup = await setupRenderer()
+  const core = new RecoverableViewPromptCore()
+  const running = runInteractiveApp({
+    cwd: core.snapshot.cwd,
+    dataDirectory: "unused",
+    testing: { renderer: setup.renderer, core },
+  })
+  try {
+    await waitForCondition(() => core.commands.some((command) => command.type === "load_preferences"), "应用启动")
+    const editor = setup.renderer.root.getRenderable("editor") as TextareaRenderable | undefined
+    if (!editor) throw new Error("找不到聊天输入框")
+    editor.setText("视图修复后重试的消息")
+    await pressEnter(setup)
+    await waitForText(setup, "选择视图")
+    await press(setup, "\x1b[B")
+    await pressEnter(setup)
+    await waitForCondition(
+      () => core.commands.filter((command) => command.type === "send_prompt").length === 2,
+      "切换视图后自动重试原消息",
+    )
+    const selected = core.commands.find((command) => command.type === "set_view")
+    if (selected?.type !== "set_view" || selected.viewId !== "replacement-view")
+      throw new Error("没有应用重新选择的视图")
+  } finally {
+    setup.renderer.keyInput.emit("keypress", key("\x03"))
+    await running
+    setup.renderer.destroy()
+  }
+}
+
 const scenario = process.argv[2]
 if (scenario === "invalid-model") await invalidModel()
 else if (scenario === "no-views") await noViews()
 else if (scenario === "throwing-create") await throwingCreate()
+else if (scenario === "recover-prompt") await recoverPrompt()
+else if (scenario === "recover-view-prompt") await recoverViewPrompt()
 else throw new Error(`未知场景：${scenario}`)

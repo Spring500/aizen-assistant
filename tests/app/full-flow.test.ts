@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
-import { ActionQueue, dispatchOrPresent } from "../../apps/tui/action-runner.ts"
+import { ActionQueue, dispatchOrPresent, sendPromptWithRecovery } from "../../apps/tui/action-runner.ts"
 import { viewSelectionItems } from "../../apps/tui/view-flow.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import type { PiPort, PiPortEvent } from "../../packages/core/pi-port.ts"
@@ -99,4 +99,96 @@ test("统一操作边界展示 dispatch 失败、直接 throw 和队列异常", 
     { title: "读取失败", message: "边界外异常" },
     { title: "操作失败", message: "队列异常" },
   ])
+})
+
+test("发送遇到模型失效时选择新模型并自动重试原文", async () => {
+  const commands: CoreCommand[] = []
+  const replacement = { ...model, modelId: "replacement", thinkingLevel: "high" }
+  const core = {
+    async dispatch(command: CoreCommand) {
+      commands.push(command)
+      if (command.type === "send_prompt" && commands.filter((item) => item.type === "send_prompt").length === 1)
+        return {
+          ok: false as const,
+          error: { code: "MODEL_SELECTION_REQUIRED", message: "模型配置失效", severity: "error" as const },
+        }
+      return { ok: true as const }
+    },
+  } as CorePort
+  const restored: string[] = []
+  const shown: string[] = []
+
+  expect(
+    await sendPromptWithRecovery({
+      core,
+      text: "已经输入很久的消息",
+      chooseModel: async () => replacement,
+      chooseView: async () => undefined,
+      present: async (_title, message) => {
+        shown.push(message)
+      },
+      restoreDraft: (text) => restored.push(text),
+    }),
+  ).toEqual({ ok: true })
+  expect(commands).toEqual([
+    { type: "send_prompt", text: "已经输入很久的消息" },
+    { type: "set_model", model: replacement },
+    { type: "send_prompt", text: "已经输入很久的消息" },
+  ])
+  expect(restored).toEqual([])
+  expect(shown).toEqual([])
+})
+
+test("用户取消模型选择时恢复原输入", async () => {
+  const core = {
+    async dispatch() {
+      return {
+        ok: false as const,
+        error: { code: "MODEL_SELECTION_REQUIRED", message: "模型配置失效", severity: "error" as const },
+      }
+    },
+  } as unknown as CorePort
+  const restored: string[] = []
+  await sendPromptWithRecovery({
+    core,
+    text: "不能丢失的原输入",
+    chooseModel: async () => undefined,
+    chooseView: async () => undefined,
+    present: async () => {},
+    restoreDraft: (text) => restored.push(text),
+  })
+  expect(restored).toEqual(["不能丢失的原输入"])
+})
+
+test("发送遇到视图失效时选择新视图并自动重试原文", async () => {
+  const commands: CoreCommand[] = []
+  const core = {
+    async dispatch(command: CoreCommand) {
+      commands.push(command)
+      if (command.type === "send_prompt" && commands.filter((item) => item.type === "send_prompt").length === 1)
+        return {
+          ok: false as const,
+          error: { code: "VIEW_SELECTION_REQUIRED", message: "视图目录不存在", severity: "error" as const },
+        }
+      return { ok: true as const }
+    },
+  } as CorePort
+  const restored: string[] = []
+
+  expect(
+    await sendPromptWithRecovery({
+      core,
+      text: "保留的消息",
+      chooseModel: async () => undefined,
+      chooseView: async () => "replacement-view",
+      present: async () => {},
+      restoreDraft: (text) => restored.push(text),
+    }),
+  ).toEqual({ ok: true })
+  expect(commands).toEqual([
+    { type: "send_prompt", text: "保留的消息" },
+    { type: "set_view", viewId: "replacement-view" },
+    { type: "send_prompt", text: "保留的消息" },
+  ])
+  expect(restored).toEqual([])
 })

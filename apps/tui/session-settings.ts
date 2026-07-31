@@ -1,5 +1,5 @@
 import type { ModelOption } from "../../packages/core/pi-port.ts"
-import type { ViewId } from "../../packages/core/session-format.ts"
+import type { ModelReference, ViewId } from "../../packages/core/session-format.ts"
 import type { ViewOption } from "../../packages/core/view-store.ts"
 import type { RichSelectorItem } from "../../packages/tui-kit/rich-selector.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
@@ -10,6 +10,20 @@ export type SessionSettingsDraft = {
 }
 
 export type SessionSettingsAction = "model" | "view" | "manage-models" | "manage-views" | "apply" | "cancel"
+
+/** 旧偏好中的档位只有在当前模型仍支持时才能覆盖模型的新默认档位。 */
+export function modelWithPreferredThinkingLevel(available: ModelOption, preferred: ModelReference): ModelOption {
+  const levels = [
+    ...(available.offThinkingLevel === undefined ? [] : [available.offThinkingLevel]),
+    ...(available.thinkingLevels ?? []),
+  ]
+  return {
+    ...available,
+    ...(preferred.thinkingLevel !== undefined && levels.includes(preferred.thinkingLevel)
+      ? { thinkingLevel: preferred.thinkingLevel }
+      : {}),
+  }
+}
 
 export function sessionSettingsItems(
   draft: SessionSettingsDraft,

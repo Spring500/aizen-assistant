@@ -32,6 +32,12 @@ export type ContextUsage = {
   total?: number
 }
 
+/** 会话已经可以查看和编辑，但当前 pi runtime 尚不能安全发送下一轮请求。 */
+export type RuntimeIssue = {
+  kind: "model" | "view" | "runtime"
+  message: string
+}
+
 export type CoreSnapshot = {
   cwd: string
   status: CoreStatus
@@ -40,6 +46,7 @@ export type CoreSnapshot = {
   currentSessionName?: string
   currentModel?: ModelRuntimeInfo
   currentViewId?: ViewId
+  runtimeIssue?: RuntimeIssue
   models: ModelOption[]
   modelConfig?: ModelConfigSnapshot
   preferences: AppPreferences

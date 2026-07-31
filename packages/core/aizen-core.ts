@@ -1,7 +1,7 @@
 import { type AppPreferencesStore, defaultAppPreferences, parseAppPreferences } from "./app-preferences-store.ts"
 import { CoreErrorQueue } from "./error-queue.ts"
 import type { ModelConfigStore } from "./model-config-store.ts"
-import type { PiPort, PiPortEvent } from "./pi-port.ts"
+import { PiModelRuntimeError, type PiPort, type PiPortEvent, type ViewRuntimeInput } from "./pi-port.ts"
 import type {
   AssistantMessage,
   ModelReference,
@@ -49,6 +49,16 @@ function sessionModel(model: ModelReference): ModelReference {
   }
 }
 
+/** 让交互层依据稳定错误码采取修复动作，避免解析中文错误文本。 */
+class CoreCommandError extends Error {
+  constructor(
+    readonly code: string,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
 export class AizenCore implements CorePort {
   readonly #cwd: string
   readonly #store: SessionStore
@@ -67,7 +77,6 @@ export class AizenCore implements CorePort {
   #currentTurnId: string | undefined
   #responseTimer: ReturnType<typeof setInterval> | undefined
   #abortRequested = false
-  #runtimeReady = false
   #preferencesLoaded = false
   #sessionNamingAttempted = false
   #sessionNamingTask: Promise<void> | undefined
@@ -107,6 +116,7 @@ export class AizenCore implements CorePort {
     return () => this.#listeners.delete(listener)
   }
 
+  /** 串行执行核心命令，并把可修复状态转换为稳定错误码供交互层处理。 */
   async dispatch(command: CoreCommand): Promise<CoreCommandResult> {
     if (this.#disposed)
       return { ok: false, error: { code: "CORE_DISPOSED", message: "核心已经关闭", severity: "fatal" } }
@@ -166,11 +176,6 @@ export class AizenCore implements CorePort {
           )
           break
         case "save_model":
-          if (
-            this.#snapshot.currentModel?.providerId === command.providerId &&
-            this.#snapshot.currentModel.modelId === command.model.id
-          )
-            throw new Error("不能修改当前会话正在使用的模型，请先切换模型")
           await this.#changeModelConfig(() =>
             this.#requireModelConfigStore().upsertModel(
               command.revision,
@@ -273,7 +278,15 @@ export class AizenCore implements CorePort {
       this.#reportError(message)
       if (this.#snapshot.status !== "running" && this.#snapshot.status !== "aborting") this.#snapshot.status = "idle"
       this.#notify()
-      return { ok: false, error: { code: "COMMAND_FAILED", message, severity: "error" } }
+      // 只有需要交互层继续处理的错误使用专用错误码，其余异常统一返回 COMMAND_FAILED。
+      return {
+        ok: false,
+        error: {
+          code: error instanceof CoreCommandError ? error.code : "COMMAND_FAILED",
+          message,
+          severity: "error",
+        },
+      }
     }
   }
 
@@ -318,6 +331,7 @@ export class AizenCore implements CorePort {
     this.#preferencesLoaded = true
   }
 
+  /** 仅保存新会话默认值，不参与当前会话记录和 runtime 的一致性判断。 */
   async #rememberSessionDefaults(model: ModelReference, viewId: ViewId): Promise<void> {
     if (!this.#preferencesLoaded) {
       this.#snapshot.preferences = await this.#readPreferences()
@@ -329,11 +343,24 @@ export class AizenCore implements CorePort {
     })
   }
 
+  /** 会话操作落盘后，默认偏好只是便利设置；写入失败应提示，但不能把已完成的操作报告为失败。 */
+  async #tryRememberSessionDefaults(model: ModelReference, viewId: ViewId): Promise<void> {
+    try {
+      await this.#rememberSessionDefaults(model, viewId)
+    } catch (error) {
+      this.#reportError(`保存默认会话设置失败：${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
   #requireModelConfigStore(): ModelConfigStore {
     if (!this.#modelConfigStore) throw new Error("当前运行模式不支持编辑模型配置")
     return this.#modelConfigStore
   }
 
+  /**
+   * 配置文件本身无效时回滚；配置合法但当前会话不再兼容时保留配置，
+   * 并由 runtimeIssue 阻止发送，等待用户为该会话重新选择运行参数。
+   */
   async #changeModelConfig(change: () => Promise<string>): Promise<void> {
     const store = this.#requireModelConfigStore()
     const previous = await store.source()
@@ -347,8 +374,10 @@ export class AizenCore implements CorePort {
     }
     this.#snapshot.modelConfig = await store.read()
     this.#snapshot.models = await this.#pi.listModels()
+    if (this.#snapshot.currentSessionId) await this.#tryActivateCurrentRecords()
   }
 
+  /** 先成功创建 pi runtime，再原子创建会话，避免留下无法运行的空会话。 */
   async #createSession(model: ModelReference, viewId: ViewId): Promise<void> {
     this.#sessionNamingAbort?.abort()
     const at = new Date().toISOString()
@@ -365,7 +394,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.currentSessionId = sessionId
     this.#snapshot.currentSessionName = ""
     this.#sessionNamingAttempted = false
-    this.#runtimeReady = true
+    delete this.#snapshot.runtimeIssue
     this.#snapshot.currentModel = actualModel
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.currentViewId = viewId
@@ -377,9 +406,13 @@ export class AizenCore implements CorePort {
     this.#clearError()
     this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
-    await this.#rememberSessionDefaults(actualModel, viewId)
+    await this.#tryRememberSessionDefaults(actualModel, viewId)
   }
 
+  /**
+   * 打开会话首先是纯本地历史操作。即使当前模型或视图已经失效，
+   * 对话记录也必须可见；无法重建 pi 内存会话时只禁止发送新消息。
+   */
   async #openSession(sessionId: string): Promise<void> {
     this.#sessionNamingAbort?.abort()
     const loaded = await this.#store.read(sessionId)
@@ -388,38 +421,28 @@ export class AizenCore implements CorePort {
     const viewRecord = [...loaded.records].reverse().find((record) => record.kind === "view_changed")
     if (modelRecord?.kind !== "model_changed") throw new Error("会话没有模型记录")
     if (viewRecord?.kind !== "view_changed") throw new Error("会话没有视图记录")
-    const view = await this.#resolveView(viewRecord.viewId).catch((error) => {
-      this.#runtimeReady = false
-      this.#reportError(error instanceof Error ? error.message : String(error))
-      return undefined
-    })
-    const actualModel = view
-      ? await this.#pi.restore({
-          cwd: this.#cwd,
-          model: modelRecord.model,
-          view,
-          records: loaded.records,
-        })
-      : modelRecord.model
-    this.#runtimeReady = view !== undefined
     this.#records = loaded.records
     this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
     this.#sessionNamingAttempted = false
     const renamedRecord = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
     this.#snapshot.currentSessionName = renamedRecord?.kind === "session_renamed" ? renamedRecord.name : ""
-    this.#snapshot.currentModel = actualModel
+    this.#snapshot.currentModel = modelRecord.model
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.currentViewId = viewRecord.viewId
     this.#snapshot.transcript = recordsToTranscript(loaded.records)
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
+    delete this.#snapshot.runtimeIssue
+    await this.#tryActivateCurrentRecords()
     if (loaded.warnings.length > 0) this.#reportError(loaded.warnings.join("；"))
-    else if (this.#runtimeReady) this.#clearError()
-    await this.#rememberSessionDefaults(actualModel, viewRecord.viewId)
   }
 
+  /**
+   * rewind/fork 落盘后无条件采用新记录，再尝试重建 pi 内存会话。
+   * 这样不会出现磁盘已经变更、界面却仍声称历史操作失败的半状态。
+   */
   async #activateRecords(
     sessionId: string,
     records: SessionRecord[],
@@ -430,8 +453,6 @@ export class AizenCore implements CorePort {
     const viewRecord = [...records].reverse().find((record) => record.kind === "view_changed")
     if (modelRecord?.kind !== "model_changed") throw new Error("会话没有模型记录")
     if (viewRecord?.kind !== "view_changed") throw new Error("会话没有视图记录")
-    const view = await this.#resolveView(viewRecord.viewId)
-    const actualModel = await this.#pi.restore({ cwd: this.#cwd, model: modelRecord.model, view, records })
     this.#records = records
     this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
@@ -440,16 +461,48 @@ export class AizenCore implements CorePort {
       this.#sessionNamingAbort?.abort()
       this.#sessionNamingAttempted = false
     }
-    this.#snapshot.currentModel = actualModel
+    this.#snapshot.currentModel = modelRecord.model
     this.#snapshot.currentViewId = viewRecord.viewId
     this.#snapshot.transcript = recordsToTranscript(records)
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
-    this.#runtimeReady = true
-    this.#clearError()
-    await this.#rememberSessionDefaults(actualModel, viewRecord.viewId)
+    delete this.#snapshot.runtimeIssue
+    await this.#tryActivateCurrentRecords()
+  }
+
+  /**
+   * 用会话当前设置和完整历史重建 pi 内存会话。失败时记录原因并禁止发送，
+   * 但不让失败覆盖已经完成的打开、回退或创建分支操作。
+   */
+  async #tryActivateCurrentRecords(): Promise<void> {
+    const model = this.#snapshot.currentModel
+    const viewId = this.#snapshot.currentViewId
+    if (!model || viewId === undefined) return
+    let view: ViewRuntimeInput
+    try {
+      view = await this.#resolveView(viewId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.#snapshot.runtimeIssue = { kind: "view", message }
+      this.#reportError(message)
+      return
+    }
+    try {
+      const actual = await this.#pi.restore({ cwd: this.#cwd, model, view, records: this.#records })
+      this.#snapshot.currentModel = actual
+      delete this.#snapshot.runtimeIssue
+      this.#clearError()
+      await this.#tryRememberSessionDefaults(actual, viewId)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      this.#snapshot.runtimeIssue = {
+        kind: error instanceof PiModelRuntimeError ? "model" : "runtime",
+        message,
+      }
+      this.#reportError(message)
+    }
   }
 
   #turnStartIndex(turnId: string): number {
@@ -474,6 +527,10 @@ export class AizenCore implements CorePort {
     ]
   }
 
+  /**
+   * 删除所选轮次及其后的对话，但保留用户执行回退时正在使用的模型和视图。
+   * 因此 rewind 是对话内容回退，不会恢复所选轮次当时的模型设置。
+   */
   async #rewind(turnId: string): Promise<void> {
     const sessionId = this.#snapshot.currentSessionId
     if (!sessionId) throw new Error("请先新建或恢复会话")
@@ -519,13 +576,26 @@ export class AizenCore implements CorePort {
     this.#reportStoreWarnings()
   }
 
+  /**
+   * 在任何模型调用前完成 runtime 检查和 turn_started 落盘；一旦落盘，
+   * 无论模型成功、失败或中止都负责补齐 turn_finished 并恢复空闲状态。
+   */
   async #sendPrompt(text: string): Promise<void> {
     const sessionId = this.#snapshot.currentSessionId
     const viewId = this.#snapshot.currentViewId
     if (!sessionId || viewId === undefined) throw new Error("请先新建或恢复会话")
     if (!text.trim()) throw new Error("消息不能为空")
     if (this.#writeError) throw new Error(`会话持久化异常，请重新打开会话：${this.#writeError.message}`)
-    if (!this.#runtimeReady) throw new Error("当前视图已失效，请先使用 /view 切换视图")
+    // 必须在写入 turn_started 前拒绝发送，否则重新选择模型后会留下一个未实际发送的失败轮次。
+    if (this.#snapshot.runtimeIssue) {
+      const code =
+        this.#snapshot.runtimeIssue.kind === "model"
+          ? "MODEL_SELECTION_REQUIRED"
+          : this.#snapshot.runtimeIssue.kind === "view"
+            ? "VIEW_SELECTION_REQUIRED"
+            : "RUNTIME_NOT_READY"
+      throw new CoreCommandError(code, this.#snapshot.runtimeIssue.message)
+    }
     const view = await this.#resolveView(viewId)
     await this.#pi.refreshView(view)
     const turnId = crypto.randomUUID()
@@ -612,25 +682,38 @@ export class AizenCore implements CorePort {
     }
   }
 
+  /** 切换视图会用现有历史重建 runtime，因此也能修复视图失效状态。 */
   async #setView(viewId: ViewId): Promise<void> {
     const sessionId = this.#snapshot.currentSessionId
     if (!sessionId) throw new Error("请先新建或恢复会话")
+    const previousModel = this.#snapshot.currentModel
+    const previousViewId = this.#snapshot.currentViewId
+    const previousIssue = this.#snapshot.runtimeIssue
+    if (!previousModel || previousViewId === undefined) throw new Error("当前会话缺少运行设置")
     const view = await this.#resolveView(viewId)
-    const model = this.#snapshot.currentModel
-    if (!model) throw new Error("当前会话没有模型")
-    const actual = await this.#pi.restore({ cwd: this.#cwd, model, view, records: this.#records })
+    const actual = await this.#pi.restore({ cwd: this.#cwd, model: previousModel, view, records: this.#records })
     const record: SessionRecord = {
       kind: "view_changed",
       recordId: crypto.randomUUID(),
       at: new Date().toISOString(),
       viewId,
     }
-    await this.#store.append(sessionId, record)
+    try {
+      await this.#store.append(sessionId, record)
+    } catch (error) {
+      const rollbackError = await this.#restoreRuntimeAfterPersistenceFailure(
+        previousModel,
+        previousViewId,
+        previousIssue,
+      )
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(rollbackError ? `${message}；恢复原运行设置失败：${rollbackError.message}` : message)
+    }
     this.#records.push(record)
     this.#snapshot.currentViewId = viewId
     this.#snapshot.currentModel = actual
-    this.#runtimeReady = true
-    await this.#rememberSessionDefaults(actual, viewId)
+    delete this.#snapshot.runtimeIssue
+    await this.#tryRememberSessionDefaults(actual, viewId)
   }
 
   async #resolveView(viewId: ViewId) {
@@ -640,21 +723,66 @@ export class AizenCore implements CorePort {
     return { viewId, directory: view.directory }
   }
 
+  /**
+   * pi 内存会话可用时直接切换模型；不可用时必须从完整历史重新创建，
+   * 使发送时弹出的模型选择无需用户先重新打开会话。
+   */
   async #setModel(model: ModelReference): Promise<void> {
     const sessionId = this.#snapshot.currentSessionId
     if (!sessionId) throw new Error("请先新建或恢复会话")
-    const actual = await this.#pi.setModel(model)
+    const previousModel = this.#snapshot.currentModel
+    const previousViewId = this.#snapshot.currentViewId
+    const previousIssue = this.#snapshot.runtimeIssue
+    if (!previousModel || previousViewId === undefined) throw new Error("当前会话缺少运行设置")
+    let actual: ModelReference
+    if (this.#snapshot.runtimeIssue) {
+      const view = await this.#resolveView(previousViewId)
+      actual = await this.#pi.restore({ cwd: this.#cwd, model, view, records: this.#records })
+    } else actual = await this.#pi.setModel(model)
     const record: SessionRecord = {
       kind: "model_changed",
       recordId: crypto.randomUUID(),
       at: new Date().toISOString(),
       model: sessionModel(actual),
     }
-    await this.#store.append(sessionId, record)
+    try {
+      await this.#store.append(sessionId, record)
+    } catch (error) {
+      const rollbackError = await this.#restoreRuntimeAfterPersistenceFailure(
+        previousModel,
+        previousViewId,
+        previousIssue,
+      )
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(rollbackError ? `${message}；恢复原运行设置失败：${rollbackError.message}` : message)
+    }
     this.#records.push(record)
     this.#snapshot.currentModel = actual
+    delete this.#snapshot.runtimeIssue
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
-    await this.#rememberSessionDefaults(actual, this.#snapshot.currentViewId ?? null)
+    await this.#tryRememberSessionDefaults(actual, this.#snapshot.currentViewId ?? null)
+  }
+
+  /**
+   * 模型或视图已经切到 pi、但会话记录写入失败时，以磁盘仍保存的旧设置为真值重建 runtime。
+   * 若旧设置本来就失效，则恢复原 runtimeIssue 并继续禁止发送，不能让未落盘的新 runtime 被误用。
+   */
+  async #restoreRuntimeAfterPersistenceFailure(
+    model: ModelReference,
+    viewId: ViewId,
+    previousIssue: CoreSnapshot["runtimeIssue"],
+  ): Promise<Error | undefined> {
+    try {
+      const view = await this.#resolveView(viewId)
+      await this.#pi.restore({ cwd: this.#cwd, model, view, records: this.#records })
+      if (previousIssue) this.#snapshot.runtimeIssue = previousIssue
+      else delete this.#snapshot.runtimeIssue
+      return undefined
+    } catch (error) {
+      const actual = error instanceof Error ? error : new Error(String(error))
+      this.#snapshot.runtimeIssue = previousIssue ?? { kind: "runtime", message: actual.message }
+      return actual
+    }
   }
 
   #handlePiEvent(event: PiPortEvent): void {

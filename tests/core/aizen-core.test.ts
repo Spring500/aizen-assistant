@@ -5,7 +5,14 @@ import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
-import type { PiPort, PiPortEvent, PiSessionTitleInput } from "../../packages/core/pi-port.ts"
+import {
+  PiModelRuntimeError,
+  type PiPort,
+  type PiCreateInput,
+  type PiPortEvent,
+  type PiRestoreInput,
+  type PiSessionTitleInput,
+} from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
@@ -16,15 +23,15 @@ const directories: string[] = []
 class FakePi implements PiPort {
   listeners = new Set<(event: PiPortEvent) => void>()
   prompts: unknown[] = []
-  create = async () => model
-  restore = async () => model
+  create = async (_input: PiCreateInput) => model
+  restore = async (_input: PiRestoreInput) => model
   refreshView = async () => {}
   switchView = async () => model
   generateSessionTitle = async (_input: PiSessionTitleInput) => "测试标题"
   abort = async () => {}
   listModels = async () => [{ ...model, name: "测试模型", available: true }]
   reloadModelConfig = async () => {}
-  setModel = async () => model
+  setModel = async (_model: ModelReference) => model
   listAuthProviders = async () => []
   loginApiKey = async () => {}
   answerAuthPrompt = () => {}
@@ -99,6 +106,27 @@ class CreateFailingFakePi extends FakePi {
   }
 }
 
+class RecoverableModelFakePi extends FakePi {
+  invalid = true
+  restoreCalls: Array<{ model: ModelReference; recordCount: number }> = []
+
+  override restore = async (input: PiRestoreInput) => {
+    this.restoreCalls.push({ model: input.model, recordCount: input.records.length })
+    if (this.invalid)
+      throw new PiModelRuntimeError(`模型 ${input.model.providerId}/${input.model.modelId} 未配置思考档位`)
+    return input.model
+  }
+}
+
+class ReloadingModelFakePi extends FakePi {
+  restoreCalls: PiRestoreInput[] = []
+  override create = async (input: PiCreateInput) => input.model
+  override restore = async (input: PiRestoreInput) => {
+    this.restoreCalls.push(input)
+    return input.model
+  }
+}
+
 class DisposeFailingFakePi extends FakePi {
   abortCalls = 0
   disposeCalls = 0
@@ -119,6 +147,37 @@ class TurnFinishedFailingStore extends SessionStore {
   override append(sessionId: string, record: Parameters<SessionStore["append"]>[1]): Promise<void> {
     if (record.kind === "turn_finished") return Promise.reject(new Error("轮次结尾不可写"))
     return super.append(sessionId, record)
+  }
+}
+
+class SettingRecordFailingStore extends SessionStore {
+  failKind: "model_changed" | "view_changed" | undefined
+
+  override append(sessionId: string, record: Parameters<SessionStore["append"]>[1]): Promise<void> {
+    if (record.kind === this.failKind) return Promise.reject(new Error("设置记录不可写"))
+    return super.append(sessionId, record)
+  }
+}
+
+class RuntimeStateFakePi extends FakePi {
+  activeModel: ModelReference | undefined
+  activeViewId: string | null | undefined
+
+  override create = async (input: PiCreateInput) => {
+    this.activeModel = input.model
+    this.activeViewId = input.view.viewId
+    return input.model
+  }
+
+  override restore = async (input: PiRestoreInput) => {
+    this.activeModel = input.model
+    this.activeViewId = input.view.viewId
+    return input.model
+  }
+
+  override setModel = async (next: ModelReference) => {
+    this.activeModel = next
+    return next
   }
 }
 
@@ -237,7 +296,7 @@ describe("核心编排", () => {
   test("模型配置变更重载运行时并保护当前模型", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
-    const pi = new FakePi()
+    const pi = new RuntimeStateFakePi()
     const config = new ModelConfigStore(join(root, "models.json"))
     const core = new AizenCore({
       cwd: "E:\\project",
@@ -287,6 +346,66 @@ describe("核心编排", () => {
       ok: false,
       error: { code: "COMMAND_FAILED", message: "不能删除当前会话正在使用的模型，请先切换模型", severity: "error" },
     })
+    await core.dispose()
+  })
+
+  test("空闲时允许编辑当前模型并使用完整历史重新激活", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new ReloadingModelFakePi()
+    const config = new ModelConfigStore(join(root, "models.json"))
+    const core = new AizenCore({
+      cwd: "E:\\project",
+      store: new SessionStore(join(root, "sessions")),
+      pi,
+      modelConfigStore: config,
+    })
+    await core.dispatch({ type: "load_model_config" })
+    let revision = core.getSnapshot().modelConfig?.revision ?? ""
+    await core.dispatch({
+      type: "save_provider",
+      revision,
+      provider: {
+        id: "company",
+        name: "公司网关",
+        baseUrl: "https://example.com/v1",
+        api: "openai-completions",
+        authHeader: true,
+      },
+      create: true,
+    })
+    revision = core.getSnapshot().modelConfig?.revision ?? ""
+    const editableModel = {
+      id: "model-a",
+      name: "模型 A",
+      input: ["text" as const],
+      contextWindow: 128000,
+      maxTokens: 16000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    }
+    await core.dispatch({
+      type: "save_model",
+      revision,
+      providerId: "company",
+      model: editableModel,
+      create: true,
+    })
+    const companyModel = { providerId: "company", modelId: "model-a", api: "openai-completions" }
+    await core.dispatch({ type: "create_session", model: companyModel, viewId: null })
+    await core.dispatch({ type: "send_prompt", text: "已有历史" })
+
+    revision = core.getSnapshot().modelConfig?.revision ?? ""
+    expect(
+      await core.dispatch({
+        type: "save_model",
+        revision,
+        providerId: "company",
+        model: { ...editableModel, contextWindow: 256000 },
+      }),
+    ).toEqual({ ok: true })
+    expect(core.getSnapshot().runtimeIssue).toBeUndefined()
+    expect(pi.restoreCalls.at(-1)?.model).toEqual(companyModel)
+    expect(JSON.stringify(pi.restoreCalls.at(-1)?.records)).toContain("已有历史")
     await core.dispose()
   })
 
@@ -534,17 +653,100 @@ describe("核心编排", () => {
     await restored.dispose()
   })
 
+  test("模型配置失效时仍可打开和回退，重新选模型后继续发送", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const original = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
+    await original.dispatch({ type: "create_session", model, viewId: null })
+    const sessionId = original.getSnapshot().currentSessionId ?? ""
+    await original.dispatch({ type: "send_prompt", text: "第一轮" })
+    await original.dispatch({ type: "send_prompt", text: "第二轮" })
+    await original.dispose()
+
+    const pi = new RecoverableModelFakePi()
+    const core = new AizenCore({ cwd: "E:\\project", store, pi })
+    expect(await core.dispatch({ type: "open_session", sessionId })).toEqual({ ok: true })
+    expect(core.getSnapshot().runtimeIssue).toEqual({
+      kind: "model",
+      message: "模型 test/model 未配置思考档位",
+    })
+    expect(JSON.stringify(core.getSnapshot().transcript)).toContain("第二轮")
+
+    const recordsBeforeSend = (await store.read(sessionId)).records.length
+    expect(await core.dispatch({ type: "send_prompt", text: "不能丢失的草稿" })).toEqual({
+      ok: false,
+      error: {
+        code: "MODEL_SELECTION_REQUIRED",
+        message: "模型 test/model 未配置思考档位",
+        severity: "error",
+      },
+    })
+    expect((await store.read(sessionId)).records).toHaveLength(recordsBeforeSend)
+
+    const secondTurn = core
+      .getSnapshot()
+      .transcript.find(
+        (entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第二轮")),
+      )
+    if (!secondTurn) throw new Error("缺少第二轮")
+    expect(await core.dispatch({ type: "rewind", turnId: secondTurn.turnId })).toEqual({ ok: true })
+    expect(JSON.stringify((await store.read(sessionId)).records)).not.toContain("第二轮")
+    expect(core.getSnapshot().runtimeIssue?.kind).toBe("model")
+
+    pi.invalid = false
+    const replacement = { ...model, modelId: "replacement", thinkingLevel: "high" }
+    expect(await core.dispatch({ type: "set_model", model: replacement })).toEqual({ ok: true })
+    expect(core.getSnapshot().runtimeIssue).toBeUndefined()
+    expect(pi.restoreCalls.at(-1)).toMatchObject({ model: replacement })
+    expect(await core.dispatch({ type: "send_prompt", text: "修复后发送" })).toEqual({ ok: true })
+    expect(JSON.stringify((await store.read(sessionId)).records)).toContain("修复后发送")
+    await core.dispose()
+  })
+
+  test("模型或视图记录写入失败时恢复磁盘对应的运行设置", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SettingRecordFailingStore(root)
+    const pi = new RuntimeStateFakePi()
+    const core = new AizenCore({ cwd: "E:\\project", store, pi })
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    const sessionId = core.getSnapshot().currentSessionId ?? ""
+
+    store.failKind = "model_changed"
+    const replacement = { ...model, modelId: "replacement", thinkingLevel: "high" }
+    expect(await core.dispatch({ type: "set_model", model: replacement })).toEqual({
+      ok: false,
+      error: { code: "COMMAND_FAILED", message: "设置记录不可写", severity: "error" },
+    })
+    expect(core.getSnapshot().currentModel).toMatchObject(model)
+    expect(pi.activeModel).toEqual(model)
+
+    store.failKind = "view_changed"
+    expect(await core.dispatch({ type: "set_view", viewId: "other-view" })).toEqual({
+      ok: false,
+      error: { code: "COMMAND_FAILED", message: "设置记录不可写", severity: "error" },
+    })
+    expect(core.getSnapshot().currentViewId).toBeNull()
+    expect(pi.activeViewId).toBeNull()
+    expect((await store.read(sessionId)).records.filter((record) => record.kind === "model_changed")).toHaveLength(1)
+    expect((await store.read(sessionId)).records.filter((record) => record.kind === "view_changed")).toHaveLength(1)
+    await core.dispose()
+  })
+
   test("回退删除所选轮次及之后内容并保留当前设置", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
     const store = new SessionStore(root)
-    const pi = new FakePi()
+    const pi = new RuntimeStateFakePi()
     const core = new AizenCore({ cwd: "E:\\project", store, pi })
 
     await core.dispatch({ type: "create_session", model, viewId: null })
     const sessionId = core.getSnapshot().currentSessionId ?? ""
     await core.dispatch({ type: "rename_session", sessionId, name: "需求讨论" })
     await core.dispatch({ type: "send_prompt", text: "第一轮" })
+    const replacement = { ...model, modelId: "replacement", thinkingLevel: "high" }
+    await core.dispatch({ type: "set_model", model: replacement })
     await core.dispatch({ type: "send_prompt", text: "第二轮" })
     const secondTurn = core
       .getSnapshot()
@@ -558,14 +760,16 @@ describe("核心编排", () => {
     expect(JSON.stringify(loaded.records)).toContain("第一轮")
     expect(JSON.stringify(loaded.records)).not.toContain("第二轮")
     expect(core.getSnapshot().currentSessionName).toBe("需求讨论")
-    expect(core.getSnapshot().currentModel).toMatchObject(model)
+    // rewind 只删除对话记录，用户执行回退时正在使用的模型会继续用于下一轮。
+    expect(core.getSnapshot().currentModel).toMatchObject(replacement)
     expect(core.getSnapshot().currentViewId).toBeNull()
     await core.dispose()
 
-    const reopened = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
+    const reopened = new AizenCore({ cwd: "E:\\project", store, pi: new RuntimeStateFakePi() })
     expect(await reopened.dispatch({ type: "open_session", sessionId })).toEqual({ ok: true })
     expect(JSON.stringify(reopened.getSnapshot().transcript)).not.toContain("第二轮")
     expect(reopened.getSnapshot().currentSessionName).toBe("需求讨论")
+    expect(reopened.getSnapshot().currentModel).toMatchObject(replacement)
     await reopened.dispose()
   })
 

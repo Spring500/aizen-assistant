@@ -37,6 +37,7 @@ import type {
   PiSessionTitleInput,
   ViewRuntimeInput,
 } from "../core/pi-port.ts"
+import { PiModelRuntimeError } from "../core/pi-port.ts"
 import type { ModelReference, SessionRecord } from "../core/session-format.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
 import { generateSessionTitle } from "./session-title-generator.ts"
@@ -50,8 +51,12 @@ const piThinkingLevels = ["minimal", "low", "medium", "high", "xhigh", "max"] as
 
 type RuntimeThinkingConfig = ModelThinkingConfig | null | undefined
 
+/**
+ * 为当前内存会话复制模型配置，避免重新读取 models.json 时改动正在使用的对象。
+ * 请求开始后，pi 会把该对象、思考档位、消息和工具保存在本次请求使用的内存状态中。
+ */
 function runtimeModel(model: Model<Api>, config: RuntimeThinkingConfig, baseUrl?: string): Model<Api> {
-  const actualModel = baseUrl === undefined ? model : { ...model, baseUrl }
+  const actualModel = { ...model, ...(baseUrl === undefined ? {} : { baseUrl }) }
   if (config === undefined) return actualModel
   if (config === null) {
     const { thinkingLevelMap: _thinkingLevelMap, ...plainModel } = actualModel
@@ -203,6 +208,7 @@ export class PiSessionRuntime implements PiPort {
   #modelBaseUrls = new Map<string, string>()
   #modelConfigError: Error | undefined
   #session: AgentSession | undefined
+  #activePrompt: Promise<void> | undefined
   #unsubscribe: (() => void) | undefined
   #unsubscribeAgent: (() => void) | undefined
   #authAbortController: AbortController | undefined
@@ -235,23 +241,42 @@ export class PiSessionRuntime implements PiPort {
     await this.#modelRuntime.setRuntimeApiKey(providerId, apiKey)
   }
 
+  /**
+   * 测试和分发探针使用的运行时地址覆盖。空闲时同步当前 session；
+   * 生成期间只保存给下次创建内存会话使用，不能改动正在请求的模型对象。
+   */
   setModelBaseUrl(providerId: string, modelId: string, baseUrl: string): void {
     const model = this.#modelRuntime.getModel(providerId, modelId)
     if (!model) throw new Error(`找不到模型：${providerId}/${modelId}`)
-    model.baseUrl = baseUrl
+    this.#modelBaseUrls.set(`${providerId}\0${modelId}`, baseUrl)
+    const current = this.#session?.model
+    if (!this.#activePrompt && this.#session?.isIdle && current?.provider === providerId && current.id === modelId)
+      current.baseUrl = baseUrl
   }
 
+  /**
+   * 新建或恢复 pi 内存会话。先验证当前模型、档位和视图，再释放旧 session，
+   * 避免模型缺失、档位失效和视图失效这类可修复错误先破坏旧 runtime。
+   */
   async #start(input: PiCreateInput, records: SessionRecord[]): Promise<ModelRuntimeInfo> {
-    await this.#disposeSession()
+    if (this.#activePrompt || (this.#session && !this.#session.isIdle))
+      throw new Error("生成或执行工具期间不能重建会话")
     const sourceModel = this.#modelRuntime.getModel(input.model.providerId, input.model.modelId)
-    if (!sourceModel) throw new Error(`找不到模型：${input.model.providerId}/${input.model.modelId}`)
+    if (!sourceModel) throw new PiModelRuntimeError(`找不到模型：${input.model.providerId}/${input.model.modelId}`)
     const modelKey = `${sourceModel.provider}\0${sourceModel.id}`
     const thinkingConfig = this.#thinkingConfigs.get(modelKey)
     const model = runtimeModel(sourceModel, thinkingConfig, this.#modelBaseUrls.get(modelKey))
+    let thinkingLevel: ThinkingLevel
+    try {
+      thinkingLevel = internalThinkingLevel(model, input.model.thinkingLevel, thinkingConfig)
+    } catch (error) {
+      throw new PiModelRuntimeError(error instanceof Error ? error.message : String(error))
+    }
     const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: false } })
     const initialLoader = createViewLoader(input.cwd, input.view, settingsManager)
     await initialLoader.reload()
     this.#validateViewLoader(initialLoader, input.view.viewId)
+    await this.#disposeSession()
     const resourceLoader = new MutableViewLoader(initialLoader)
     this.#viewLoader = resourceLoader
     this.#settingsManager = settingsManager
@@ -262,7 +287,7 @@ export class PiSessionRuntime implements PiPort {
       cwd: input.cwd,
       modelRuntime: this.#modelRuntime,
       model,
-      thinkingLevel: internalThinkingLevel(model, input.model.thinkingLevel, thinkingConfig),
+      thinkingLevel,
       tools: ["read", "bash", "edit", "write"],
       customTools: auditedTools(input.cwd),
       resourceLoader,
@@ -352,9 +377,10 @@ export class PiSessionRuntime implements PiPort {
     return this.#start(input, input.records)
   }
 
+  /** 视图会改变系统提示词和工具集合，只能在没有活动请求时原子替换。 */
   async refreshView(view: ViewRuntimeInput): Promise<void> {
     const session = this.#requireSession()
-    if (!session.isIdle) throw new Error("生成或执行工具期间不能刷新视图")
+    if (this.#activePrompt || !session.isIdle) throw new Error("生成或执行工具期间不能刷新视图")
     if (!this.#settingsManager || !this.#viewLoader || !this.#cwd) throw new Error("视图加载器尚未初始化")
     const loader = createViewLoader(this.#cwd, view, this.#settingsManager)
     await loader.reload()
@@ -371,29 +397,42 @@ export class PiSessionRuntime implements PiPort {
     return modelReference(model, session.thinkingLevel, this.#thinkingConfigs.get(`${model.provider}\0${model.id}`))
   }
 
+  /**
+   * 将当轮输入临时合并到 pi 上下文，并用 #activePrompt 覆盖完整工具循环。
+   * useLater=false 的临时输入在请求结束后移除，不得累积到下一轮。
+   */
   async prompt(input: PiPromptInput): Promise<void> {
     const session = this.#requireSession()
-    if (!session.isIdle) throw new Error("当前会话仍在运行")
-    this.#contentStarts.clear()
-    this.#contentTimings.clear()
-    this.#toolStarts.clear()
-    this.#toolTimings.clear()
-    const mapped = turnInputToPi(input.items, Date.now())
-    const allMessages = mapped.map((item) => item.message)
-    const persistentMessages = mapped.filter((item) => item.persistent).map((item) => item.message)
-    const temporaryMessages = new Set(mapped.filter((item) => !item.persistent).map((item) => item.message))
-    const before = session.agent.state.messages
-    for (const message of persistentMessages) {
-      const entryId = session.sessionManager.appendMessage(message)
-      this.#registerEntry(input.recordId, entryId)
-    }
-    session.agent.state.messages = [...before, ...allMessages]
+    if (this.#activePrompt || !session.isIdle) throw new Error("当前会话仍在运行")
+    // AgentSession.isIdle 不覆盖 adapter 直接调用 agent.continue() 的生命周期，必须由 adapter 自己持有请求锁。
+    const running = (async () => {
+      this.#contentStarts.clear()
+      this.#contentTimings.clear()
+      this.#toolStarts.clear()
+      this.#toolTimings.clear()
+      const mapped = turnInputToPi(input.items, Date.now())
+      const allMessages = mapped.map((item) => item.message)
+      const persistentMessages = mapped.filter((item) => item.persistent).map((item) => item.message)
+      const temporaryMessages = new Set(mapped.filter((item) => !item.persistent).map((item) => item.message))
+      const before = session.agent.state.messages
+      for (const message of persistentMessages) {
+        const entryId = session.sessionManager.appendMessage(message)
+        this.#registerEntry(input.recordId, entryId)
+      }
+      session.agent.state.messages = [...before, ...allMessages]
+      try {
+        await session.agent.continue()
+      } finally {
+        session.agent.state.messages = session.agent.state.messages.filter(
+          (message) => message.role !== "user" || !temporaryMessages.has(message),
+        )
+      }
+    })()
+    this.#activePrompt = running
     try {
-      await session.agent.continue()
+      await running
     } finally {
-      session.agent.state.messages = session.agent.state.messages.filter(
-        (message) => message.role !== "user" || !temporaryMessages.has(message),
-      )
+      if (this.#activePrompt === running) this.#activePrompt = undefined
     }
   }
 
@@ -405,11 +444,17 @@ export class PiSessionRuntime implements PiPort {
     return generateSessionTitle(this.#modelRuntime, model, input.firstUserMessage, input.signal)
   }
 
-  abort(): Promise<void> {
-    return this.#requireSession().abort()
+  /** 中止 pi Agent 的真实活动请求，并等待 adapter 的清理 finally 完成后再返回。 */
+  async abort(): Promise<void> {
+    const session = this.#requireSession()
+    session.agent.abort()
+    await this.#activePrompt
   }
 
+  /** 模型配置只允许在 session 空闲时重载，保证一个完整工具循环使用同一份运行参数。 */
   async reloadModelConfig(): Promise<void> {
+    if (this.#activePrompt || (this.#session && !this.#session.isIdle))
+      throw new Error("生成或执行工具期间不能重新加载模型配置")
     await this.#modelRuntime.reloadConfig()
     const configError = this.#modelRuntime.getError()
     if (configError) throw new Error(`models.json 配置错误：${configError}`)
@@ -456,16 +501,23 @@ export class PiSessionRuntime implements PiPort {
     })
   }
 
+  /** 在写入 pi session 前完成模型和思考档位校验，失败时保留原模型。 */
   async setModel(reference: ModelReference): Promise<ModelRuntimeInfo> {
     const session = this.#requireSession()
-    if (!session.isIdle) throw new Error("生成或执行工具期间不能切换模型")
+    if (this.#activePrompt || !session.isIdle) throw new Error("生成或执行工具期间不能切换模型")
     const sourceModel = this.#modelRuntime.getModel(reference.providerId, reference.modelId)
-    if (!sourceModel) throw new Error(`找不到模型：${reference.providerId}/${reference.modelId}`)
+    if (!sourceModel) throw new PiModelRuntimeError(`找不到模型：${reference.providerId}/${reference.modelId}`)
     const modelKey = `${sourceModel.provider}\0${sourceModel.id}`
     const thinkingConfig = this.#thinkingConfigs.get(modelKey)
     const model = runtimeModel(sourceModel, thinkingConfig, this.#modelBaseUrls.get(modelKey))
+    let thinkingLevel: ThinkingLevel
+    try {
+      thinkingLevel = internalThinkingLevel(model, reference.thinkingLevel, thinkingConfig)
+    } catch (error) {
+      throw new PiModelRuntimeError(error instanceof Error ? error.message : String(error))
+    }
     await session.setModel(model)
-    session.setThinkingLevel(internalThinkingLevel(model, reference.thinkingLevel, thinkingConfig))
+    session.setThinkingLevel(thinkingLevel)
     return modelReference(model, session.thinkingLevel, thinkingConfig)
   }
 
@@ -519,6 +571,7 @@ export class PiSessionRuntime implements PiPort {
     return () => this.#listeners.delete(listener)
   }
 
+  /** 释放前等待活动请求完成清理，避免事件订阅和临时上下文被半途拆除。 */
   async dispose(): Promise<void> {
     await this.#disposeSession()
   }
@@ -532,13 +585,17 @@ export class PiSessionRuntime implements PiPort {
     return this.#session
   }
 
+  /** 内部 session 替换也遵守活动请求生命周期；正常入口会在调用前拒绝运行中替换。 */
   async #disposeSession(): Promise<void> {
     this.#unsubscribe?.()
     this.#unsubscribe = undefined
     this.#unsubscribeAgent?.()
     this.#unsubscribeAgent = undefined
     if (this.#session) {
-      if (!this.#session.isIdle) await this.#session.abort()
+      if (this.#activePrompt) {
+        this.#session.agent.abort()
+        await this.#activePrompt
+      } else if (!this.#session.isIdle) await this.#session.abort()
       this.#session.dispose()
     }
     this.#session = undefined
@@ -558,6 +615,10 @@ export class PiSessionRuntime implements PiPort {
     if (!this.#recordEntries.has(recordId)) this.#recordEntries.set(recordId, entryId)
   }
 
+  /**
+   * 历史 model_changed 只保留“这里曾切换模型”的记录，不按当前 models.json
+   * 校验其中的旧思考档位。只有下一次实际发送所用的模型和档位由 #start 严格校验。
+   */
   #restoreEntries(sessionManager: SessionManager, records: SessionRecord[]): void {
     const finishedTurns = new Set(
       records.filter((record) => record.kind === "turn_finished").map((record) => record.turnId),
@@ -565,20 +626,9 @@ export class PiSessionRuntime implements PiPort {
     for (const record of records) {
       if ((record.kind === "turn_started" || record.kind === "message") && !finishedTurns.has(record.turnId)) continue
       if (record.kind === "model_changed") {
-        const sourceModel = this.#modelRuntime.getModel(record.model.providerId, record.model.modelId)
-        if (!sourceModel) throw new Error(`找不到模型：${record.model.providerId}/${record.model.modelId}`)
-        const modelKey = `${sourceModel.provider}\0${sourceModel.id}`
-        const thinkingConfig = this.#thinkingConfigs.get(modelKey)
-        const model = runtimeModel(sourceModel, thinkingConfig, this.#modelBaseUrls.get(modelKey))
         this.#registerEntry(
           record.recordId,
           sessionManager.appendModelChange(record.model.providerId, record.model.modelId),
-        )
-        this.#registerEntry(
-          record.recordId,
-          sessionManager.appendThinkingLevelChange(
-            internalThinkingLevel(model, record.model.thinkingLevel, thinkingConfig),
-          ),
         )
       } else if (record.kind === "turn_started") {
         for (const mapped of turnInputToPi(
