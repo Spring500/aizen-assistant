@@ -3,6 +3,10 @@ import { parse } from "yaml"
 
 const sha = /^[0-9a-f]{40}$/
 
+type Workflow = {
+  jobs: Record<string, { steps: Array<{ uses?: string; run?: string }> }>
+}
+
 for (const path of [".github/workflows/ci.yml", ".github/workflows/pr-title.yml"]) {
   test(`${path} 的第三方 action 固定完整 SHA`, async () => {
     const workflow = parse(await Bun.file(path).text()) as {
@@ -17,3 +21,10 @@ for (const path of [".github/workflows/ci.yml", ".github/workflows/pr-title.yml"
     }
   })
 }
+
+test("PR 标题检查不安装项目依赖", async () => {
+  const workflow = parse(await Bun.file(".github/workflows/pr-title.yml").text()) as Workflow
+  const commands = workflow.jobs.validate?.steps.flatMap((step) => step.run ?? []) ?? []
+
+  expect(commands.some((command) => command.includes("bun install"))).toBe(false)
+})
