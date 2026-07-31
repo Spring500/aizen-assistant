@@ -254,6 +254,19 @@ describe("认证与模型", () => {
       })
       expect(requests).toHaveLength(1)
       expect(requests[0]?.reasoning_effort).toBe("标准")
+      const tools = requests[0]?.tools as Array<{
+        function?: { name?: string; parameters?: Record<string, unknown> }
+      }>
+      expect(tools).toHaveLength(4)
+      for (const tool of tools) {
+        expect(tool.function?.parameters?.type).toBe("object")
+        expect(tool.function?.parameters?.properties).toHaveProperty("declaredIntent")
+        expect(tool.function?.parameters?.required).toContain("declaredIntent")
+        expect(tool.function?.parameters).not.toHaveProperty("allOf")
+      }
+      const read = tools.find((tool) => tool.function?.name === "read")
+      expect(read?.function?.parameters?.properties).toHaveProperty("path")
+      expect(read?.function?.parameters?.required).toContain("path")
     } finally {
       await runtime.dispose()
       server.stop(true)

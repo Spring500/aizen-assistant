@@ -180,18 +180,16 @@ function toolResultText(result: unknown): string {
 }
 
 function auditedTools(cwd: string): ToolDefinition[] {
-  const intent = Type.Object({
-    declaredIntent: Type.String({
-      minLength: 1,
-      maxLength: 50,
-      description: "用不超过 50 个字符的一句话说明本次工具调用的目的，供用户阅读和审计",
-    }),
+  const declaredIntent = Type.String({
+    minLength: 1,
+    maxLength: 50,
+    description: "用不超过 50 个字符的一句话说明本次工具调用的目的，供用户阅读和审计",
   })
   return [createReadTool(cwd), createBashTool(cwd), createEditTool(cwd), createWriteTool(cwd)].map((tool) => ({
     name: tool.name,
     label: tool.label,
     description: tool.description,
-    parameters: Type.Intersect([tool.parameters, intent]),
+    parameters: Type.Object({ ...tool.parameters.properties, declaredIntent }),
     ...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
     async execute(callId, params, signal, onUpdate) {
       const { declaredIntent: _declaredIntent, ...actualParams } = params as Record<string, unknown>
