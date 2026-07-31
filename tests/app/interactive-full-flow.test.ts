@@ -20,4 +20,6 @@ test("真实完整 TUI 交互场景", async () => {
   await runScenario("invalid-model")
   await runScenario("no-views")
   await runScenario("throwing-create")
+  await runScenario("recover-prompt")
+  await runScenario("recover-view-prompt")
 }, 60000)

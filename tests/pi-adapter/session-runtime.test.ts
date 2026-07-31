@@ -41,6 +41,68 @@ async function captureRequest(
 }
 
 describe("pi 内存会话", () => {
+  test("请求运行期间拒绝重建会话和重载模型配置", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const mock = await startMockServer()
+    runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+    await runtime.create({ cwd: directory, model, view: { viewId: null } })
+    const prompt = runtime.prompt({
+      recordId: "running-record",
+      turnId: "running-turn",
+      viewId: null,
+      items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "运行中" }] }],
+    })
+    const pending = await mock.take()
+
+    await expect(runtime.restore({ cwd: directory, model, view: { viewId: null }, records: [] })).rejects.toThrow(
+      "生成或执行工具期间不能重建会话",
+    )
+    await expect(runtime.reloadModelConfig()).rejects.toThrow("生成或执行工具期间不能重新加载模型配置")
+    pending.respond({ type: "text", text: "完成" })
+    await prompt
+    mock.stop()
+    await runtime.dispose()
+  })
+
+  test("历史中的失效模型不阻止使用当前有效模型恢复", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const records: SessionRecord[] = [
+      {
+        kind: "model_changed",
+        recordId: "old-model",
+        at: "2026-07-23T09:00:00.000Z",
+        model: { providerId: "deleted", modelId: "old-model", api: "openai-completions", thinkingLevel: "旧档位" },
+      },
+      {
+        kind: "turn_started",
+        recordId: "turn",
+        turnId: "turn",
+        at: "2026-07-23T10:00:00.000Z",
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "历史消息" }] }],
+      },
+      {
+        kind: "turn_finished",
+        recordId: "finished",
+        turnId: "turn",
+        at: "2026-07-23T10:00:01.000Z",
+        outcome: "completed",
+      },
+    ]
+
+    await expect(runtime.restore({ cwd: directory, model, view: { viewId: null }, records })).resolves.toBeDefined()
+    expect(await captureRequest(runtime, model)).toContain("历史消息")
+    await runtime.dispose()
+  })
+
   test("恢复时排除仅当轮输入并保留助手和工具结果", async () => {
     const { directory, runtime } = await makeRuntime()
     const models = await runtime.listModels()
