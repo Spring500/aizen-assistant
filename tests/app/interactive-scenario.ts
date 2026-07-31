@@ -121,9 +121,7 @@ async function invalidModel(): Promise<void> {
   })
   const running = runInteractiveApp({ cwd: root, dataDirectory: root, testing: { renderer: setup.renderer, core } })
   try {
-    await Bun.sleep(20)
-    await setup.renderOnce()
-    assertIncludes(setup.captureCharFrame(), "会话设置 · 新建会话")
+    await waitForText(setup, "会话设置 · 新建会话")
     await pressEnter(setup)
     await Bun.sleep(20)
     await setup.renderOnce()
