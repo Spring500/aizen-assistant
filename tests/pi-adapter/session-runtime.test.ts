@@ -68,6 +68,43 @@ describe("pi 内存会话", () => {
     await runtime.dispose()
   })
 
+  test("审计工具向模型发送根级对象参数", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const mock = await startMockServer("完成")
+    try {
+      runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+      await runtime.create({ cwd: directory, model, view: { viewId: null } })
+      await runtime.prompt({
+        recordId: "schema-record",
+        turnId: "schema-turn",
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "检查工具参数" }] }],
+      })
+
+      const request = (await mock.requests())[0]
+      expect(request?.tools).toHaveLength(4)
+      for (const item of request?.tools ?? []) {
+        const tool = item as { input_schema?: Record<string, unknown> }
+        expect(tool.input_schema?.type).toBe("object")
+        expect(tool.input_schema?.properties).toHaveProperty("declaredIntent")
+        expect(tool.input_schema?.required).toContain("declaredIntent")
+        expect(tool.input_schema).not.toHaveProperty("allOf")
+      }
+      const read = (
+        request?.tools as Array<{ name?: string; input_schema?: Record<string, unknown> }> | undefined
+      )?.find((tool) => tool.name === "read")
+      expect(read?.input_schema?.properties).toHaveProperty("path")
+      expect(read?.input_schema?.required).toContain("path")
+    } finally {
+      mock.stop()
+      await runtime.dispose()
+    }
+  })
+
   test("历史中的失效模型不阻止使用当前有效模型恢复", async () => {
     const { directory, runtime } = await makeRuntime()
     const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
