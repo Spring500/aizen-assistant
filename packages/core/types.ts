@@ -86,7 +86,12 @@ export type CoreCommand =
   | { type: "set_model"; model: ModelReference }
   | { type: "set_view"; viewId: ViewId }
   | { type: "set_permission_mode"; permissionMode: PermissionMode }
-  | { type: "answer_permission_request"; requestId: string; decision: "approve" | "deny" }
+  | {
+      type: "answer_permission_request"
+      requestId: string
+      decision: "approve" | "deny"
+      reason?: string
+    }
   | { type: "create_view"; name: string; id?: string }
   | { type: "update_view"; viewId: string; name?: string; path?: string }
   | { type: "ensure_view_file"; viewId: string; name: "SYSTEM.md" | "AGENTS.md" }

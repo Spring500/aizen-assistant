@@ -261,7 +261,7 @@ export class AizenCore implements CorePort {
           await this.#setPermissionMode(command.permissionMode)
           break
         case "answer_permission_request":
-          this.#answerPermissionRequest(command.requestId, command.decision)
+          this.#answerPermissionRequest(command.requestId, command.decision, command.reason)
           break
         case "create_view":
           if (!this.#views) throw new Error("未配置视图存储")
@@ -923,14 +923,19 @@ export class AizenCore implements CorePort {
     })
   }
 
-  #answerPermissionRequest(requestId: string, decision: "approve" | "deny"): void {
+  #answerPermissionRequest(requestId: string, decision: "approve" | "deny", reason?: string): void {
     const pending = this.#pendingPermissionAnswers.get(requestId)
     if (!pending) throw new Error("当前没有等待答复的工具权限请求")
     this.#pendingPermissionAnswers.delete(requestId)
     this.#snapshot.pendingPermissionRequests = (this.#snapshot.pendingPermissionRequests ?? []).filter(
       (request) => request.requestId !== requestId,
     )
-    pending.resolve(decision === "approve" ? { type: "approve" } : { type: "deny" })
+    const normalizedReason = reason?.trim()
+    pending.resolve(
+      decision === "approve"
+        ? { type: "approve" }
+        : { type: "deny", ...(normalizedReason ? { reason: normalizedReason } : {}) },
+    )
   }
 
   #cancelPendingPermissions(message: string): void {

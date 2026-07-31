@@ -167,9 +167,18 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     permissionReview = createPermissionReview(
       overlays,
       requests,
-      (requestId, decision) => {
+      (requestId, answer) => {
+        if (answer.decision === "abort") {
+          void core.dispatch({ type: "abort" })
+          return
+        }
         void core
-          .dispatch({ type: "answer_permission_request", requestId, decision })
+          .dispatch({
+            type: "answer_permission_request",
+            requestId,
+            decision: answer.decision,
+            ...(answer.decision === "deny" && answer.reason ? { reason: answer.reason } : {}),
+          })
           .then(() => openPermissionReview())
       },
       interactionController.signal,

@@ -23,6 +23,7 @@ function setup(decision: ToolPermissionDecision, aiType: "allow" | "deny" | "nee
   const registry = new ToolPermissionRegistry()
   registry.register({ toolName: "demo", validate: async () => decision })
   const humanCalls: unknown[] = []
+  let humanDecision: { type: "approve" } | { type: "deny"; reason?: string } = { type: "approve" }
   const aiRequests: unknown[] = []
   const ai: AiPermissionReviewer = {
     review: async (request) => {
@@ -37,13 +38,16 @@ function setup(decision: ToolPermissionDecision, aiType: "allow" | "deny" | "nee
   const human: HumanPermissionReviewer = {
     review: async (request) => {
       humanCalls.push(request)
-      return { type: "approve" }
+      return humanDecision
     },
   }
   return {
     manager: new ToolPermissionManager({ registry, aiReviewer: ai, humanReviewer: human }),
     humanCalls,
     aiRequests,
+    setHumanDecision(decision: typeof humanDecision) {
+      humanDecision = decision
+    },
   }
 }
 
@@ -86,6 +90,15 @@ describe("ToolPermissionManager", () => {
     expect(setupResult.aiRequests).toMatchObject([
       { payload: { content: "[敏感内容已隐藏]", apiKey: "[敏感内容已隐藏]", path: "file.ts" } },
     ])
+  })
+
+  test("人工无理由拒绝使用明确英文格式", async () => {
+    const result = setup({ type: "needHumanReview", assessment })
+    result.setHumanDecision({ type: "deny" })
+    expect(await result.manager.authorize(base)).toMatchObject({
+      type: "deny",
+      reason: "Operation denied: User denied permission without providing a reason.",
+    })
   })
 
   test("确认拒绝模式把AI拒绝交给人工", async () => {

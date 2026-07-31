@@ -40,7 +40,11 @@ export class ToolPermissionManager {
   /** 对一条已通过工具 Schema 校验的调用执行完整权限流程。 */
   async authorize(request: ToolPermissionRequest, signal?: AbortSignal): Promise<ToolAuthorization> {
     await this.#record({ type: "permissionRequested", request, at: this.#timestamp() })
-    if (signal?.aborted) return this.#finish(request, { type: "aborted", reason: "工具调用已中止" })
+    if (signal?.aborted)
+      return this.#finish(request, {
+        type: "aborted",
+        reason: "Operation aborted: User aborted the turn before execution started.",
+      })
     if (request.mode === "unrestricted") {
       return this.#finish(request, {
         type: "allow",
@@ -169,15 +173,24 @@ export class ToolPermissionManager {
         })
       return this.#finish(request, {
         type: "deny",
-        reason: humanDecision.reason ?? "用户拒绝了工具调用",
+        reason: humanDecision.reason
+          ? `Operation denied: User denied permission. Reason: ${humanDecision.reason}`
+          : "Operation denied: User denied permission without providing a reason.",
         assessment,
         source: "human",
       })
     } catch (caught) {
-      if (signal?.aborted) return this.#finish(request, { type: "aborted", reason: "工具调用已中止" })
+      if (signal?.aborted)
+        return this.#finish(request, {
+          type: "aborted",
+          reason: "Operation aborted: User aborted the turn while permission review was pending.",
+        })
       return this.#finish(request, {
         type: "deny",
-        reason: caught instanceof Error ? caught.message : String(caught),
+        reason:
+          caught instanceof Error && caught.message === "人工审核超时"
+            ? "Operation denied: Permission review timed out after 10 minutes."
+            : `Operation denied: Permission review failed. Reason: ${caught instanceof Error ? caught.message : String(caught)}`,
         assessment,
         source: "system",
       })

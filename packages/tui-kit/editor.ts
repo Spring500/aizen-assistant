@@ -31,7 +31,7 @@ export type ChatEditor = {
   error: TextRenderable
   setSessionTitle(session: { name: string; sessionId: string } | undefined): void
   setInputText(content: string): void
-  setStatus(content: string): void
+  setStatus(content: string | StyledText): void
   setShortcuts(content: string): void
   setError(content: string): void
   setBusy(busy: boolean): void

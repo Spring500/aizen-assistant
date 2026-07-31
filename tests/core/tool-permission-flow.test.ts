@@ -84,6 +84,30 @@ test("Core允许第三方工具注入同一验证器接口", async () => {
   await core.dispose()
 })
 
+test("Core将用户拒绝理由传给Agent权限结果", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aizen-permission-reason-"))
+  directories.push(root)
+  const pi = new PermissionPi()
+  const core = new AizenCore({ cwd: root, store: new SessionStore(join(root, "sessions")), pi })
+  await core.dispatch({ type: "create_session", model, viewId: null, permissionMode: "hybrid" })
+  const sending = core.dispatch({ type: "send_prompt", text: "执行" })
+  for (let attempt = 0; attempt < 50 && !core.getSnapshot().pendingPermissionRequests?.length; attempt++)
+    await Bun.sleep(2)
+  const request = core.getSnapshot().pendingPermissionRequests?.[0]
+  await core.dispatch({
+    type: "answer_permission_request",
+    requestId: request?.requestId ?? "",
+    decision: "deny",
+    reason: "不要修改依赖",
+  })
+  await sending
+  expect(pi.authorization).toMatchObject({
+    type: "deny",
+    reason: "Operation denied: User denied permission. Reason: 不要修改依赖",
+  })
+  await core.dispose()
+})
+
 test("Core发布人工审批并只接受一次答复", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-permission-flow-"))
   directories.push(root)

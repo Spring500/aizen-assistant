@@ -2,6 +2,7 @@ import type { HumanReviewRequest } from "../../packages/core/tool-permissions/ty
 import type { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
 import {
   createPermissionReviewView,
+  type PermissionReviewAnswer,
   type PermissionReviewController,
 } from "../../packages/tui-kit/permission-review-view.ts"
 
@@ -11,7 +12,7 @@ export type { PermissionReviewController }
 export function createPermissionReview(
   overlays: OverlayManager,
   requests: HumanReviewRequest[],
-  answer: (requestId: string, decision: "approve" | "deny") => void,
+  answer: (requestId: string, answer: PermissionReviewAnswer) => void,
   signal?: AbortSignal,
 ): PermissionReviewController {
   return createPermissionReviewView(overlays, requests, answer, signal)

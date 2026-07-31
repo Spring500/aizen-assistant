@@ -167,7 +167,7 @@ test("真实 pi 链路将权限拒绝结果返回模型", async () => {
     const second = await mock.take({ modelId: option.modelId })
     const messages = JSON.stringify(second.messages)
     expect(messages).toContain("permission-call")
-    expect(messages).toContain("工具调用被拒绝")
+    expect(messages).toContain("Operation denied: User denied permission without providing a reason.")
     second.respond({ type: "text", text: "已停止操作" })
     expect(await sending).toEqual({ ok: true })
     expect(

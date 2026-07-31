@@ -363,7 +363,11 @@ export class PiSessionRuntime implements PiPort {
           )
           if (authorization.type === "allow") return authorization
           if (authorization.type === "aborted") throw new Error(authorization.reason)
-          throw new Error(`工具调用被拒绝（${authorization.source}）：${authorization.reason}`)
+          throw new Error(
+            authorization.reason.startsWith("Operation denied:")
+              ? authorization.reason
+              : `Operation denied: ${authorization.source} rejected the tool call. Reason: ${authorization.reason}`,
+          )
         },
         () => this.#activePrompt,
         this.#permissionExecutionHandler,

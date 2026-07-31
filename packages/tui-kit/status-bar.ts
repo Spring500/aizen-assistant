@@ -1,4 +1,7 @@
+import { createTextAttributes, parseColor, StyledText, type TextChunk } from "@opentui/core"
 import type { CoreSnapshot, CoreStatus } from "../core/types.ts"
+import type { PermissionMode } from "../core/tool-permissions/types.ts"
+import { systemColors } from "./theme.ts"
 
 export type ShortcutContext = {
   status: CoreStatus
@@ -6,7 +9,7 @@ export type ShortcutContext = {
 }
 
 export type StatusBarViewModel = {
-  session: string
+  session: string | StyledText
   shortcuts: string
 }
 
@@ -20,13 +23,37 @@ function contextText(snapshot: CoreSnapshot): string {
   return total ? `${formatNumber(used)}/${formatNumber(total)}` : `${formatNumber(used)}/未知`
 }
 
-export function sessionStatusText(snapshot: CoreSnapshot): string {
+const permissionModeView: Record<PermissionMode, { label: string; color: string }> = {
+  unrestricted: { label: "完全开放", color: systemColors.statusError },
+  hybrid: { label: "自动+人工", color: systemColors.sessionStatus },
+  hybridConfirmDenials: { label: "自动+人工确认拒绝", color: systemColors.statusIdle },
+  aiOnly: { label: "仅自动审核", color: systemColors.statusRunning },
+}
+
+export function sessionStatusText(snapshot: CoreSnapshot): string | StyledText {
   const model = snapshot.currentModel
     ? `${snapshot.currentModel.providerId}/${snapshot.currentModel.modelId}`
     : "未选择模型"
   const view = snapshot.currentViewId ?? "未选择视图"
-  const review = snapshot.permissionReviewError ? " | 工具审核模型：异常" : ""
-  return `模型：${model} | 视图：${view} | 上下文：${contextText(snapshot)}${review}`
+  const mode = permissionModeView[snapshot.currentPermissionMode ?? "hybrid"]
+  const chunks: TextChunk[] = [
+    { __isChunk: true, text: `模型：${model} | 视图：${view} | 权限：`, fg: parseColor(systemColors.secondary) },
+    {
+      __isChunk: true,
+      text: mode.label,
+      fg: parseColor(mode.color),
+      attributes: createTextAttributes({ bold: true }),
+    },
+    { __isChunk: true, text: ` | 上下文：${contextText(snapshot)}`, fg: parseColor(systemColors.secondary) },
+  ]
+  if (snapshot.permissionReviewError)
+    chunks.push({
+      __isChunk: true,
+      text: " | 工具审核模型：异常",
+      fg: parseColor(systemColors.statusError),
+      attributes: createTextAttributes({ bold: true }),
+    })
+  return new StyledText(chunks)
 }
 
 export function shortcutText(context: ShortcutContext): string {
