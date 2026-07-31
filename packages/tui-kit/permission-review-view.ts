@@ -2,6 +2,7 @@ import { TextRenderable } from "@opentui/core"
 import type { HumanReviewRequest } from "../core/tool-permissions/types.ts"
 import { selectEditableItem } from "./editable-selector.ts"
 import type { OverlayManager } from "./overlay-manager.ts"
+import { permissionParameterPreview } from "./permission-review-preview.ts"
 import { systemColors } from "./theme.ts"
 
 function evidence(request: HumanReviewRequest): { title: string; content: string } {
@@ -28,6 +29,7 @@ const riskColors = {
 async function showEvidence(
   overlays: OverlayManager,
   request: HumanReviewRequest,
+  onViewedToEnd: () => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const full = evidence(request)
@@ -35,11 +37,24 @@ async function showEvidence(
     let settled = false
     let offset = 0
     const pageSize = 16
-    const lines = full.content.split("\n")
+    const wrapWidth = Math.max(20, overlays.renderer.terminalWidth - 2)
+    const lines = full.content.split("\n").flatMap((line) => {
+      if (!line) return [""]
+      const visual: string[] = []
+      let current = ""
+      for (const character of line) {
+        if (Bun.stringWidth(current + character) > wrapWidth) {
+          visual.push(current)
+          current = character
+        } else current += character
+      }
+      visual.push(current)
+      return visual
+    })
     const handle = overlays.open({
       id: `permission-evidence-${request.requestId}`,
       title: full.title,
-      description: "内容按终端宽度折行；显示位置以原始行计数",
+      description: "内容按终端宽度折行；显示位置以视觉行计数",
       contentHeight: pageSize,
       actions: [],
       ...(signal ? { signal } : {}),
@@ -57,9 +72,10 @@ async function showEvidence(
     handle.content.add(text)
     const render = () => {
       offset = Math.max(0, Math.min(offset, Math.max(0, lines.length - pageSize)))
+      if (offset + pageSize >= lines.length) onViewedToEnd()
       text.content = lines.slice(offset, offset + pageSize).join("\n")
       handle.setDescription(
-        `原始行 ${Math.min(offset + 1, Math.max(1, lines.length))}-${Math.min(offset + pageSize, lines.length)} / ${lines.length}`,
+        `视觉行 ${Math.min(offset + 1, Math.max(1, lines.length))}-${Math.min(offset + pageSize, lines.length)} / ${lines.length}`,
       )
     }
     const finish = () => {
@@ -116,6 +132,7 @@ export function createPermissionReviewView(
   let queue = requests
   let current = 0
   const denyDrafts = new Map<string, string>()
+  const viewedEvidence = new Set<string>()
   let closed = false
   let controller: AbortController | undefined
 
@@ -126,6 +143,8 @@ export function createPermissionReviewView(
     if (!request) return
     controller = new AbortController()
     const abort = () => controller?.abort()
+    const preview = permissionParameterPreview(request, overlays.renderer.terminalWidth)
+    const approvalBlocked = preview.truncated && !viewedEvidence.has(request.requestId)
     signal?.addEventListener("abort", abort, { once: true })
     void selectEditableItem<"approve" | "deny" | "details">(
       overlays,
@@ -133,9 +152,13 @@ export function createPermissionReviewView(
       () => [
         {
           name: "通过",
-          description: `风险：${riskLabels[request.assessment.risk]} · ${request.assessment.reason}`,
+          description: approvalBlocked
+            ? "参数预览有省略；请先打开完整内容并滚动到末尾"
+            : `风险：${riskLabels[request.assessment.risk]} · ${request.assessment.reason}`,
           value: "approve",
           tone: "success",
+          disabled: approvalBlocked,
+          disabledReason: "参数预览有省略；请先打开完整内容并滚动到末尾",
         },
         {
           id: `deny-${request.requestId}`,
@@ -172,6 +195,7 @@ export function createPermissionReviewView(
             bold: request.assessment.risk === "high" || request.assessment.risk === "critical",
           },
         ],
+        headerLines: preview.lines,
         signal: controller.signal,
       },
     ).then(async (selection) => {
@@ -182,7 +206,7 @@ export function createPermissionReviewView(
         return
       }
       if (selection === "details") {
-        await showEvidence(overlays, request)
+        await showEvidence(overlays, request, () => viewedEvidence.add(request.requestId))
         open()
         return
       }

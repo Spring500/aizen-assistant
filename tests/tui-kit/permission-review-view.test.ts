@@ -84,6 +84,44 @@ test("拒绝理由草稿在切换选项后保留", async () => {
   controller.close()
 })
 
+test("长命令完整阅览前禁用通过", async () => {
+  const setup = await createTestRenderer({ width: 48, height: 28 })
+  renderers.push(setup)
+  const overlays = new OverlayManager(setup.renderer)
+  const answers: Array<{ id: string; answer: PermissionReviewAnswer }> = []
+  const long = request("long", "bash")
+  long.arguments = { command: `echo HEAD ${"middle ".repeat(100)} echo TAIL` }
+  const controller = createPermissionReviewView(overlays, [long], (id, answer) => answers.push({ id, answer }))
+  await setup.renderOnce()
+  const frame = setup.captureCharFrame()
+  expect(frame).toContain("省略")
+  expect(frame).toContain("请先打开完整内容")
+  setup.renderer.keyInput.emit("keypress", key("\r"))
+  expect(answers).toEqual([])
+  controller.close()
+})
+
+test("长命令滚动到详情末尾后允许通过", async () => {
+  const setup = await createTestRenderer({ width: 48, height: 28 })
+  renderers.push(setup)
+  const overlays = new OverlayManager(setup.renderer)
+  const answers: Array<{ id: string; answer: PermissionReviewAnswer }> = []
+  const long = request("unlock", "bash")
+  long.arguments = { command: `echo HEAD ${"middle ".repeat(200)} echo TAIL` }
+  const controller = createPermissionReviewView(overlays, [long], (id, answer) => answers.push({ id, answer }))
+  setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
+  setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
+  setup.renderer.keyInput.emit("keypress", key("\r"))
+  await Bun.sleep(1)
+  for (let index = 0; index < 20; index++) setup.renderer.keyInput.emit("keypress", key("\x1b[6~"))
+  setup.renderer.keyInput.emit("keypress", key("\r"))
+  await Bun.sleep(1)
+  setup.renderer.keyInput.emit("keypress", key("\r"))
+  await Bun.sleep(1)
+  expect(answers).toEqual([{ id: "unlock", answer: { decision: "approve" } }])
+  controller.close()
+})
+
 test("审批页Esc请求中止本轮", async () => {
   const { setup, answers, controller } = await setupReview()
   setup.renderer.keyInput.emit("keypress", key("\x1b"))

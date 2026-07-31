@@ -48,6 +48,7 @@ export type EditableHeaderSegment = {
 export type EditableSelectorOptions = {
   title: string
   header?: EditableHeaderSegment[]
+  headerLines?: string[]
   signal?: AbortSignal
 }
 
@@ -112,7 +113,7 @@ export function selectEditableItem<T>(
     let editing: EditingState<T> | undefined
     const drafts = new Map<string, EditableDraft>()
     let items = getItems()
-    const headerRows = options.header ? 1 : 0
+    const headerRows = (options.header ? 1 : 0) + (options.headerLines?.length ?? 0)
     const handle = overlays.open<T>({
       id,
       title: options.title,
@@ -134,6 +135,22 @@ export function selectEditableItem<T>(
           wrapMode: "none",
           truncate: true,
           content: headerContent(options.header),
+        }),
+      )
+    }
+    for (const [index, line] of (options.headerLines ?? []).entries()) {
+      handle.content.add(
+        new TextRenderable(overlays.renderer, {
+          id: `${id}-header-line-${index}`,
+          position: "absolute",
+          top: (options.header ? 1 : 0) + index,
+          left: 0,
+          right: 0,
+          height: 1,
+          wrapMode: "none",
+          truncate: true,
+          fg: systemColors.secondary,
+          content: line,
         }),
       )
     }
