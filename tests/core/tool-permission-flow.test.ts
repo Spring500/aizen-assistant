@@ -20,12 +20,15 @@ class PermissionPi implements PiPort {
   handler: PiPermissionHandler | undefined
   listeners = new Set<(event: PiPortEvent) => void>()
   authorization: ToolAuthorization | undefined
+  abortController: AbortController | undefined
   create = async () => model
   restore = async () => model
   refreshView = async () => {}
   switchView = async () => model
   generateSessionTitle = async () => "标题"
-  abort = async () => {}
+  abort = async () => {
+    this.abortController?.abort()
+  }
   listModels = async () => [{ ...model, name: "模型", available: true }]
   reloadModelConfig = async () => {}
   setModel = async () => model
@@ -45,6 +48,8 @@ class PermissionPi implements PiPort {
     return () => this.listeners.delete(listener)
   }
   async prompt(input: PiPromptInput) {
+    const controller = new AbortController()
+    this.abortController = controller
     const request: ToolPermissionRequest = {
       sessionId: input.sessionId ?? "",
       turnId: input.turnId,
@@ -55,7 +60,8 @@ class PermissionPi implements PiPort {
       cwd: process.cwd(),
       mode: input.permissionMode ?? "hybrid",
     }
-    this.authorization = await this.handler?.(request)
+    this.authorization = await this.handler?.(request, controller.signal)
+    this.abortController = undefined
   }
 }
 
@@ -111,6 +117,26 @@ test("Core将用户拒绝理由传给Agent权限结果", async () => {
     type: "deny",
     reason: "Operation denied: User denied permission. Reason: 不要修改依赖",
   })
+  await core.dispose()
+})
+
+test("Core在人工审批未提交时中止调用并清空待审项", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aizen-permission-abort-"))
+  directories.push(root)
+  const pi = new PermissionPi()
+  const core = new AizenCore({ cwd: root, store: new SessionStore(join(root, "sessions")), pi })
+  await core.dispatch({ type: "create_session", model, viewId: null, permissionMode: "hybrid" })
+  const sending = core.dispatch({ type: "send_prompt", text: "执行" })
+  for (let attempt = 0; attempt < 50 && !core.getSnapshot().pendingPermissionRequests?.length; attempt++)
+    await Bun.sleep(2)
+  expect(core.getSnapshot().pendingPermissionRequests).toHaveLength(1)
+  expect(await core.dispatch({ type: "abort" })).toEqual({ ok: true })
+  expect(await sending).toEqual({ ok: true })
+  expect(pi.authorization).toMatchObject({
+    type: "aborted",
+    reason: "Operation aborted: User aborted the turn while permission review was pending.",
+  })
+  expect(core.getSnapshot().pendingPermissionRequests).toEqual([])
   await core.dispose()
 })
 

@@ -260,10 +260,10 @@ export class AizenCore implements CorePort {
         case "abort":
           if (this.#snapshot.status === "running") {
             this.#abortRequested = true
-            this.#cancelPendingPermissions("本轮已经中止")
             this.#snapshot.status = "aborting"
             this.#notify()
             await this.#pi.abort()
+            this.#cancelPendingPermissions("本轮已经中止")
           }
           break
         case "set_view":
