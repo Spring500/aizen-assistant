@@ -165,8 +165,8 @@ export function createPermissionReviewView(
     if (!request) return
     controller = new AbortController()
     const abort = () => controller?.abort()
-    const preview = permissionParameterPreview(request, overlays.renderer.terminalWidth)
-    const approvalBlocked = preview.truncated && !viewedEvidence.has(request.requestId)
+    const preview = () => permissionParameterPreview(request, overlays.renderer.terminalWidth, 3)
+    const approvalBlocked = preview().truncated && !viewedEvidence.has(request.requestId)
     const existing = decisions.get(request.requestId)
     signal?.addEventListener("abort", abort, { once: true })
     void selectEditableItem<"approve" | "deny" | "details">(
@@ -218,7 +218,8 @@ export function createPermissionReviewView(
             bold: request.assessment.risk === "high" || request.assessment.risk === "critical",
           },
         ],
-        headerLines: preview.lines,
+        headerLinesForWidth: (width) => permissionParameterPreview(request, width, 3).lines,
+        headerHeight: 3,
         navigate,
         signal: controller.signal,
       },

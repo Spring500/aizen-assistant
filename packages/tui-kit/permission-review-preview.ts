@@ -3,6 +3,7 @@ import type { HumanReviewRequest } from "../core/tool-permissions/types.ts"
 export type PermissionParameterPreview = {
   lines: string[]
   truncated: boolean
+  fullText: string
 }
 
 function normalize(value: string): string {
@@ -16,34 +17,37 @@ function normalize(value: string): string {
       return character
     })
     .join("")
-    .replace(/ +/g, " ")
+    .replace(/\s+/gu, " ")
     .trim()
 }
 
-function headTail(value: string, maximum: number): { value: string; truncated: boolean } {
+function headTail(value: string, maximumCells: number): { value: string; truncated: boolean } {
+  if (Bun.stringWidth(value) <= maximumCells) return { value, truncated: false }
   const characters = Array.from(value)
-  if (characters.length <= maximum) return { value, truncated: false }
-  const markerSpace = Math.max(20, maximum - 24)
-  const headLength = Math.ceil(markerSpace / 2)
-  const tailLength = Math.floor(markerSpace / 2)
-  const omitted = characters.length - headLength - tailLength
-  return {
-    value: `${characters.slice(0, headLength).join("")}…[省略 ${omitted} 个字符]…${characters.slice(-tailLength).join("")}`,
-    truncated: true,
+  let headLength = Math.ceil(characters.length / 2)
+  let tailLength = characters.length - headLength
+  while (headLength + tailLength > 0) {
+    const omitted = characters.length - headLength - tailLength
+    const marker = `…[省略 ${omitted} 个字符]…`
+    const candidate = `${characters.slice(0, headLength).join("")}${marker}${characters.slice(-tailLength).join("")}`
+    if (Bun.stringWidth(candidate) <= maximumCells) return { value: candidate, truncated: true }
+    if (headLength > tailLength) headLength -= 1
+    else tailLength -= 1
   }
+  const marker = `…[省略 ${characters.length} 个字符]…`
+  return { value: marker, truncated: true }
 }
 
 function wrap(value: string, width: number, maximumLines: number): string[] {
   const lines: string[] = []
   let current = ""
   for (const character of value) {
-    if (Bun.stringWidth(current + character) > width) {
+    if (current && Bun.stringWidth(current + character) > width) {
       lines.push(current)
       current = character
-      if (lines.length === maximumLines) break
     } else current += character
   }
-  if (lines.length < maximumLines && (current || lines.length === 0)) lines.push(current)
+  if (current || lines.length === 0) lines.push(current)
   return lines.slice(0, maximumLines)
 }
 
@@ -71,14 +75,19 @@ function summary(request: HumanReviewRequest): string {
   return `参数: ${normalize(JSON.stringify(request.arguments))}`
 }
 
-/** 按当前终端宽度生成最多三行的头尾参数预览。 */
+/** 按当前终端宽度和指定高度生成真正自动换行的头尾参数预览。 */
 export function permissionParameterPreview(
   request: HumanReviewRequest,
   terminalWidth: number,
+  maximumLines = 3,
 ): PermissionParameterPreview {
   const width = Math.max(20, terminalWidth - 2)
-  const full = summary(request)
-  const maximumCells = width * 3
-  const shortened = headTail(full, maximumCells)
-  return { lines: wrap(shortened.value, width, 3), truncated: shortened.truncated }
+  const height = Math.max(1, maximumLines)
+  const fullText = summary(request)
+  const shortened = headTail(fullText, width * height)
+  return {
+    lines: wrap(shortened.value, width, height),
+    truncated: shortened.truncated,
+    fullText,
+  }
 }

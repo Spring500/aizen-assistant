@@ -49,6 +49,9 @@ export type EditableSelectorOptions = {
   title: string
   header?: EditableHeaderSegment[]
   headerLines?: string[]
+  /** 按当前终端宽度动态生成 Header，resize 后会重新计算。 */
+  headerLinesForWidth?: (width: number) => string[]
+  headerHeight?: number
   signal?: AbortSignal
   /** 左右方向键切换同一流程中的相邻页面。 */
   navigate?: (direction: "previous" | "next") => void
@@ -115,7 +118,10 @@ export function selectEditableItem<T>(
     let editing: EditingState<T> | undefined
     const drafts = new Map<string, EditableDraft>()
     let items = getItems()
-    const headerRows = (options.header ? 1 : 0) + (options.headerLines?.length ?? 0)
+    const headerLineCount = options.headerLinesForWidth
+      ? Math.max(1, options.headerHeight ?? 3)
+      : (options.headerLines?.length ?? 0)
+    const headerRows = (options.header ? 1 : 0) + headerLineCount
     const handle = overlays.open<T>({
       id,
       title: options.title,
@@ -140,22 +146,25 @@ export function selectEditableItem<T>(
         }),
       )
     }
-    for (const [index, line] of (options.headerLines ?? []).entries()) {
-      handle.content.add(
-        new TextRenderable(overlays.renderer, {
-          id: `${id}-header-line-${index}`,
-          position: "absolute",
-          top: (options.header ? 1 : 0) + index,
-          left: 0,
-          right: 0,
-          height: 1,
-          wrapMode: "none",
-          truncate: true,
-          fg: systemColors.secondary,
-          content: line,
-        }),
-      )
-    }
+    const headerLines = options.headerLinesForWidth
+      ? options.headerLinesForWidth(overlays.renderer.terminalWidth)
+      : (options.headerLines ?? [])
+    const headerRenderables = Array.from({ length: headerLineCount }, (_, index) => {
+      const line = new TextRenderable(overlays.renderer, {
+        id: `${id}-header-line-${index}`,
+        position: "absolute",
+        top: (options.header ? 1 : 0) + index,
+        left: 0,
+        right: 0,
+        height: 1,
+        wrapMode: "none",
+        truncate: true,
+        fg: systemColors.secondary,
+        content: headerLines[index] ?? "",
+      })
+      handle.content.add(line)
+      return line
+    })
     const rows = Array.from(
       { length: maximumRows },
       (_, index) =>
@@ -401,6 +410,10 @@ export function selectEditableItem<T>(
       finish(undefined, true)
     }
     const onResize = () => {
+      if (options.headerLinesForWidth) {
+        const lines = options.headerLinesForWidth(overlays.renderer.terminalWidth)
+        for (const [index, renderable] of headerRenderables.entries()) renderable.content = lines[index] ?? ""
+      }
       render()
     }
     overlays.renderer.on(CliRenderEvents.RESIZE, onResize)

@@ -102,6 +102,21 @@ test("左右键切换工具页并保留拒绝理由草稿", async () => {
   controller.close()
 })
 
+test("审批参数 Header 在 resize 后重新计算换行与省略", async () => {
+  const long = request("resize", "bash")
+  long.arguments = { command: `echo HEAD ${"middle ".repeat(20)}echo TAIL` }
+  const { setup, controller } = await setupReview([long])
+  setup.renderer.resize(44, 28)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).toContain("省略")
+  setup.renderer.resize(180, 28)
+  await setup.renderOnce()
+  const wide = setup.captureCharFrame()
+  expect(wide).toContain("HEAD")
+  expect(wide).toContain("TAIL")
+  controller.close()
+})
+
 test("长命令完整阅览前禁用通过", async () => {
   const setup = await createTestRenderer({ width: 48, height: 28 })
   renderers.push(setup)

@@ -35,6 +35,17 @@ test("长命令最多三行且保留头尾并显示省略字数", () => {
   expect(preview.lines.join(" ")).toContain("TAIL")
 })
 
+test("预览高度可配置且 resize 后按新宽度重新计算", () => {
+  const value = request(`echo HEAD ${"middle ".repeat(18)}echo TAIL`)
+  const narrow = permissionParameterPreview(value, 40, 2)
+  const wide = permissionParameterPreview(value, 120, 3)
+  expect(narrow.lines.length).toBeLessThanOrEqual(2)
+  expect(narrow.truncated).toBe(true)
+  expect(wide.lines.length).toBeLessThanOrEqual(3)
+  expect(wide.lines.join("")).toContain("TAIL")
+  expect(wide.fullText).toContain("HEAD")
+})
+
 test("宽终端可完整显示同一命令", () => {
   const preview = permissionParameterPreview(request("echo ".repeat(30)), 240)
   expect(preview.truncated).toBe(false)
