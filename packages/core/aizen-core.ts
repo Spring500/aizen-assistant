@@ -29,7 +29,7 @@ import {
 } from "./types.ts"
 import { ToolPermissionManager } from "./tool-permissions/manager.ts"
 import { ToolPermissionRegistry } from "./tool-permissions/registry.ts"
-import { sanitizeReviewPayload } from "./tool-permissions/sanitizer.ts"
+import { sanitizePermissionAuditPayload } from "./tool-permissions/sanitizer.ts"
 import type {
   HumanReviewBatchDecision,
   HumanReviewBatchRequest,
@@ -1164,7 +1164,7 @@ export class AizenCore implements CorePort {
       turnId,
       at: event.at,
       toolCallId,
-      event: sanitizeReviewPayload(JSON.parse(JSON.stringify(event))),
+      event: sanitizePermissionAuditPayload(JSON.parse(JSON.stringify(event)), request?.sensitiveFields),
     }
     await this.#appendRecord(sessionId, record)
   }
@@ -1179,7 +1179,7 @@ export class AizenCore implements CorePort {
       turnId,
       at: event.at,
       toolCallId: event.request.toolCallId,
-      event: JSON.parse(JSON.stringify(event)),
+      event: sanitizePermissionAuditPayload(JSON.parse(JSON.stringify(event)), event.request.sensitiveFields),
     })
   }
 

@@ -41,6 +41,8 @@ export type ToolPermissionRequest = {
   cwd: string
   mode: PermissionMode
   environment?: JsonValue
+  /** 第三方验证器声明的额外敏感字段，仅用于 AI 和本地记录脱敏。 */
+  sensitiveFields?: string[]
 }
 
 export type ToolPermissionBatchRequest = {

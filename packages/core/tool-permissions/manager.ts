@@ -141,6 +141,8 @@ export class ToolPermissionManager {
 
     const validator = this.#registry.get(request.toolName)
     if (!validator) return this.#humanOrDeny(request, undefined, "该工具没有权限验证器")
+    const sensitiveFields = validator.sensitiveFields?.filter((field): field is string => typeof field === "string")
+    if (sensitiveFields && sensitiveFields.length > 0) request.sensitiveFields = sensitiveFields
 
     let decision: ToolPermissionDecision
     try {

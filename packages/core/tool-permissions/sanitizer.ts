@@ -3,7 +3,7 @@ import type { JsonValue } from "../session-format.ts"
 const defaultSensitiveKey =
   /(token|password|passwd|secret|api[_-]?key|private[_-]?key|authorization|cookie|credential)/i
 const hiddenPayloadKey =
-  /(token|password|passwd|secret|api[_-]?key|private[_-]?key|authorization|cookie|credential|content|body)/i
+  /(token|password|passwd|secret|api[_-]?key|private[_-]?key|authorization|cookie|credential|content|body|details|patch|oldText|newText|evidence)/i
 const maximumStringBytes = 4096
 const maximumPayloadBytes = 16384
 
@@ -33,6 +33,11 @@ export function sanitizeReviewPayload(value: JsonValue, extra: SensitiveFieldMat
   const text = JSON.stringify(sanitized)
   if (Buffer.byteLength(text) <= maximumPayloadBytes) return sanitized
   return { truncated: true, preview: truncate(text.slice(0, maximumStringBytes)) }
+}
+
+/** 为本地权限记录生成脱敏、截断且不含完整审核材料的副本。 */
+export function sanitizePermissionAuditPayload(value: JsonValue, extra: SensitiveFieldMatcher[] = []): JsonValue {
+  return sanitizeReviewPayload(value, extra)
 }
 
 export type SensitiveFieldMatcher = RegExp | string
