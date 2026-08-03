@@ -12,7 +12,7 @@ export type { PermissionReviewController }
 export function createPermissionReview(
   overlays: OverlayManager,
   requests: HumanReviewRequest[],
-  answer: (requestId: string, answer: PermissionReviewAnswer) => void,
+  answer: (answer: PermissionReviewAnswer) => void,
   signal?: AbortSignal,
 ): PermissionReviewController {
   return createPermissionReviewView(overlays, requests, answer, signal)

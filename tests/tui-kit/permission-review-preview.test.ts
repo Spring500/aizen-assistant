@@ -5,6 +5,7 @@ import { permissionParameterPreview } from "../../packages/tui-kit/permission-re
 function request(command: string): HumanReviewRequest {
   return {
     requestId: "request",
+    batchId: "batch",
     sessionId: "session",
     turnId: "turn",
     toolCallId: "call",

@@ -167,17 +167,20 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     permissionReview = createPermissionReview(
       overlays,
       requests,
-      (requestId, answer) => {
+      (answer) => {
         if (answer.decision === "abort") {
           void core.dispatch({ type: "abort" })
           return
         }
         void core
           .dispatch({
-            type: "answer_permission_request",
-            requestId,
-            decision: answer.decision,
-            ...(answer.decision === "deny" && answer.reason ? { reason: answer.reason } : {}),
+            type: "answer_permission_batch",
+            batchId: answer.batchId,
+            answers: answer.answers.map((item) => ({
+              requestId: item.requestId,
+              type: item.decision,
+              ...(item.decision === "deny" && item.reason ? { reason: item.reason } : {}),
+            })),
           })
           .then(() => openPermissionReview())
       },

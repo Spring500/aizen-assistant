@@ -25,8 +25,8 @@ import { ToolPermissionManager } from "./tool-permissions/manager.ts"
 import { ToolPermissionRegistry } from "./tool-permissions/registry.ts"
 import { sanitizeReviewPayload } from "./tool-permissions/sanitizer.ts"
 import type {
-  HumanReviewDecision,
-  HumanReviewRequest,
+  HumanReviewBatchDecision,
+  HumanReviewBatchRequest,
   PermissionAuditEvent,
   PermissionMode,
   ToolPermissionValidator,
@@ -77,7 +77,7 @@ export class AizenCore implements CorePort {
   readonly #permissionManager: ToolPermissionManager | undefined
   readonly #pendingPermissionAnswers = new Map<
     string,
-    { resolve: (decision: HumanReviewDecision) => void; reject: (error: Error) => void }
+    { resolve: (decision: HumanReviewBatchDecision) => void; reject: (error: Error) => void }
   >()
   #snapshot: CoreSnapshot
   #records: SessionRecord[] = []
@@ -119,6 +119,17 @@ export class AizenCore implements CorePort {
     this.#permissionValidators = options.permissionValidators ?? []
     this.#unsubscribePi = this.#pi.subscribe((event) => this.#handlePiEvent(event))
     this.#permissionManager = this.#createPermissionManager()
+    this.#pi.setPermissionBatchHandler?.((batch, signal) => {
+      if (!this.#permissionManager)
+        return Promise.resolve({
+          batchId: batch.batchId,
+          authorizations: batch.calls.map((request) => ({
+            toolCallId: request.toolCallId,
+            authorization: { type: "deny" as const, reason: "权限管理器不可用", source: "system" as const },
+          })),
+        })
+      return this.#permissionManager.authorizeBatch(batch, signal)
+    })
     this.#pi.setPermissionHandler?.((request, signal) => {
       if (!this.#permissionManager)
         return Promise.resolve({ type: "deny", reason: "权限管理器不可用", source: "system" })
@@ -144,6 +155,7 @@ export class AizenCore implements CorePort {
       if (
         command.type !== "abort" &&
         command.type !== "answer_auth_prompt" &&
+        command.type !== "answer_permission_batch" &&
         command.type !== "answer_permission_request" &&
         command.type !== "cancel_auth" &&
         this.#snapshot.status !== "idle"
@@ -260,9 +272,23 @@ export class AizenCore implements CorePort {
         case "set_permission_mode":
           await this.#setPermissionMode(command.permissionMode)
           break
-        case "answer_permission_request":
-          this.#answerPermissionRequest(command.requestId, command.decision, command.reason)
+        case "answer_permission_batch":
+          this.#answerPermissionBatch(command.batchId, command.answers)
           break
+        case "answer_permission_request": {
+          const request = (this.#snapshot.pendingPermissionRequests ?? []).find(
+            (item) => item.requestId === command.requestId,
+          )
+          if (!request) throw new Error("当前没有等待答复的工具权限请求")
+          this.#answerPermissionBatch(request.batchId, [
+            {
+              requestId: request.requestId,
+              type: command.decision,
+              ...(command.decision === "deny" && command.reason ? { reason: command.reason } : {}),
+            },
+          ])
+          break
+        }
         case "create_view":
           if (!this.#views) throw new Error("未配置视图存储")
           await this.#views.create({ name: command.name, ...(command.id === undefined ? {} : { id: command.id }) })
@@ -895,18 +921,18 @@ export class AizenCore implements CorePort {
     })
   }
 
-  #requestPermissionAnswer(request: HumanReviewRequest, signal?: AbortSignal): Promise<HumanReviewDecision> {
+  #requestPermissionAnswer(batch: HumanReviewBatchRequest, signal?: AbortSignal): Promise<HumanReviewBatchDecision> {
     return new Promise((resolve, reject) => {
       const onAbort = () => {
-        this.#pendingPermissionAnswers.delete(request.requestId)
+        this.#pendingPermissionAnswers.delete(batch.batchId)
         this.#snapshot.pendingPermissionRequests = (this.#snapshot.pendingPermissionRequests ?? []).filter(
-          (item) => item.requestId !== request.requestId,
+          (item) => item.batchId !== batch.batchId,
         )
         this.#notify()
         reject(signal?.reason instanceof Error ? signal.reason : new Error("权限审核已取消"))
       }
       signal?.addEventListener("abort", onAbort, { once: true })
-      this.#pendingPermissionAnswers.set(request.requestId, {
+      this.#pendingPermissionAnswers.set(batch.batchId, {
         resolve: (decision) => {
           signal?.removeEventListener("abort", onAbort)
           resolve(decision)
@@ -916,26 +942,38 @@ export class AizenCore implements CorePort {
           reject(error)
         },
       })
-      this.#snapshot.pendingPermissionRequests = [...(this.#snapshot.pendingPermissionRequests ?? []), request]
-      for (const listener of this.#listeners)
-        listener({ type: "permission_request", request: structuredClone(request) })
+      this.#snapshot.pendingPermissionRequests = [
+        ...(this.#snapshot.pendingPermissionRequests ?? []).filter((item) => item.batchId !== batch.batchId),
+        ...batch.requests,
+      ]
+      for (const request of batch.requests) {
+        for (const listener of this.#listeners)
+          listener({ type: "permission_request", request: structuredClone(request) })
+      }
       this.#notify()
     })
   }
 
-  #answerPermissionRequest(requestId: string, decision: "approve" | "deny", reason?: string): void {
-    const pending = this.#pendingPermissionAnswers.get(requestId)
-    if (!pending) throw new Error("当前没有等待答复的工具权限请求")
-    this.#pendingPermissionAnswers.delete(requestId)
+  #answerPermissionBatch(batchId: string, answers: HumanReviewBatchDecision["answers"]): void {
+    const pending = this.#pendingPermissionAnswers.get(batchId)
+    if (!pending) throw new Error("当前没有等待答复的工具权限批次")
+    const requests = (this.#snapshot.pendingPermissionRequests ?? []).filter((request) => request.batchId === batchId)
+    const answerIds = new Set(answers.map((answer) => answer.requestId))
+    if (answers.length !== requests.length || requests.some((request) => !answerIds.has(request.requestId)))
+      throw new Error("必须一次答复权限批次中的全部请求")
+    this.#pendingPermissionAnswers.delete(batchId)
     this.#snapshot.pendingPermissionRequests = (this.#snapshot.pendingPermissionRequests ?? []).filter(
-      (request) => request.requestId !== requestId,
+      (request) => request.batchId !== batchId,
     )
-    const normalizedReason = reason?.trim()
-    pending.resolve(
-      decision === "approve"
-        ? { type: "approve" }
-        : { type: "deny", ...(normalizedReason ? { reason: normalizedReason } : {}) },
-    )
+    pending.resolve({
+      batchId,
+      answers: answers.map((answer) => {
+        const reason = answer.type === "deny" ? answer.reason?.trim() : undefined
+        return answer.type === "approve"
+          ? answer
+          : { requestId: answer.requestId, type: "deny" as const, ...(reason ? { reason } : {}) }
+      }),
+    })
   }
 
   #cancelPendingPermissions(message: string): void {
@@ -955,12 +993,18 @@ export class AizenCore implements CorePort {
     const sessionId = this.#snapshot.currentSessionId
     const turnId = this.#currentTurnId
     if (!sessionId || !turnId) return
+    const request = "request" in event ? event.request : undefined
+    const batch = "batch" in event ? event.batch : undefined
+    const toolCallId =
+      request?.toolCallId ??
+      (batch && "calls" in batch ? batch.calls[0]?.toolCallId : batch?.authorizations[0]?.toolCallId) ??
+      "batch"
     const record: SessionRecord = {
       kind: "tool_permission",
       recordId: crypto.randomUUID(),
       turnId,
       at: event.at,
-      toolCallId: event.request.toolCallId,
+      toolCallId,
       event: sanitizeReviewPayload(JSON.parse(JSON.stringify(event))),
     }
     await this.#appendRecord(sessionId, record)

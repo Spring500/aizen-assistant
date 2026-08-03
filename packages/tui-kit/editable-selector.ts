@@ -50,6 +50,8 @@ export type EditableSelectorOptions = {
   header?: EditableHeaderSegment[]
   headerLines?: string[]
   signal?: AbortSignal
+  /** 左右方向键切换同一流程中的相邻页面。 */
+  navigate?: (direction: "previous" | "next") => void
 }
 
 type EditingState<T> = {
@@ -392,12 +394,22 @@ export function selectEditableItem<T>(
         { id: "cancel", key: { name: "escape" }, label: "Esc 返回", run: () => finish(undefined) },
       ])
     }
+    function navigate(direction: "previous" | "next") {
+      if (!options.navigate) return
+      captureDraft()
+      options.navigate(direction)
+      finish(undefined, true)
+    }
     const onResize = () => {
       render()
     }
     overlays.renderer.on(CliRenderEvents.RESIZE, onResize)
     handle.setInput({
       keypress: (key) => {
+        if (options.navigate && !editing && (key.name === "left" || key.name === "right")) {
+          navigate(key.name === "left" ? "previous" : "next")
+          return
+        }
         if (editing) routeEditingKey(key)
         else if (key.name === "escape") finish(undefined)
       },

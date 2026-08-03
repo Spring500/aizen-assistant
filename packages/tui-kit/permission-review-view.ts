@@ -37,20 +37,23 @@ async function showEvidence(
     let settled = false
     let offset = 0
     const pageSize = 16
-    const wrapWidth = Math.max(20, overlays.renderer.terminalWidth - 2)
-    const lines = full.content.split("\n").flatMap((line) => {
-      if (!line) return [""]
-      const visual: string[] = []
-      let current = ""
-      for (const character of line) {
-        if (Bun.stringWidth(current + character) > wrapWidth) {
-          visual.push(current)
-          current = character
-        } else current += character
-      }
-      visual.push(current)
-      return visual
-    })
+    const linesForWidth = () => {
+      const wrapWidth = Math.max(20, overlays.renderer.terminalWidth - 2)
+      return full.content.split("\n").flatMap((line) => {
+        if (!line) return [""]
+        const visual: string[] = []
+        let current = ""
+        for (const character of line) {
+          if (Bun.stringWidth(current + character) > wrapWidth) {
+            visual.push(current)
+            current = character
+          } else current += character
+        }
+        visual.push(current)
+        return visual
+      })
+    }
+    let lines = linesForWidth()
     const handle = overlays.open({
       id: `permission-evidence-${request.requestId}`,
       title: full.title,
@@ -71,6 +74,7 @@ async function showEvidence(
     })
     handle.content.add(text)
     const render = () => {
+      lines = linesForWidth()
       offset = Math.max(0, Math.min(offset, Math.max(0, lines.length - pageSize)))
       if (offset + pageSize >= lines.length) onViewedToEnd()
       text.content = lines.slice(offset, offset + pageSize).join("\n")
@@ -113,45 +117,64 @@ async function showEvidence(
 }
 
 export type PermissionReviewAnswer =
-  | { decision: "approve" }
-  | { decision: "deny"; reason?: string }
-  | { decision: "abort" }
+  | {
+      decision: "submit"
+      batchId: string
+      answers: Array<{ requestId: string; decision: "approve" | "deny"; reason?: string }>
+    }
+  | { decision: "abort"; batchId: string }
 
 export type PermissionReviewController = {
   update(requests: HumanReviewRequest[]): void
   close(): void
 }
 
-/** 打开工具审核摘要，并以可编辑选择菜单提交通过、拒绝或查看完整内容。 */
+type DraftDecision = { decision: "approve" } | { decision: "deny"; reason?: string }
+
+/** 打开工具批次审核页；逐项决定后只在汇总页一次提交。 */
 export function createPermissionReviewView(
   overlays: OverlayManager,
   requests: HumanReviewRequest[],
-  answer: (requestId: string, answer: PermissionReviewAnswer) => void,
+  answer: (answer: PermissionReviewAnswer) => void,
   signal?: AbortSignal,
 ): PermissionReviewController {
   let queue = requests
   let current = 0
+  const decisions = new Map<string, DraftDecision>()
   const denyDrafts = new Map<string, string>()
   const viewedEvidence = new Set<string>()
   let closed = false
   let controller: AbortController | undefined
+  let navigationPending = false
+
+  const navigate = (direction: "previous" | "next") => {
+    if (queue.length === 0) return
+    const last = queue.length
+    current = Math.max(0, Math.min(last, current + (direction === "previous" ? -1 : 1)))
+    navigationPending = true
+  }
 
   const open = () => {
     if (closed || queue.length === 0) return
-    current = Math.min(current, queue.length - 1)
+    current = Math.max(0, Math.min(current, queue.length))
+    if (current === queue.length) {
+      openSummary()
+      return
+    }
     const request = queue[current]
     if (!request) return
     controller = new AbortController()
     const abort = () => controller?.abort()
     const preview = permissionParameterPreview(request, overlays.renderer.terminalWidth)
     const approvalBlocked = preview.truncated && !viewedEvidence.has(request.requestId)
+    const existing = decisions.get(request.requestId)
     signal?.addEventListener("abort", abort, { once: true })
     void selectEditableItem<"approve" | "deny" | "details">(
       overlays,
       `permission-review-${request.requestId}`,
       () => [
         {
-          name: "通过",
+          name: `${existing?.decision === "approve" ? "✓ " : ""}通过`,
           description: approvalBlocked
             ? "参数预览有省略；请先打开完整内容并滚动到末尾"
             : `风险：${riskLabels[request.assessment.risk]} · ${request.assessment.reason}`,
@@ -162,12 +185,12 @@ export function createPermissionReviewView(
         },
         {
           id: `deny-${request.requestId}`,
-          name: `拒绝  ${denyDrafts.get(request.requestId) ?? ""}`,
+          name: `${existing?.decision === "deny" ? "✗ " : ""}拒绝理由  ${denyDrafts.get(request.requestId) ?? ""}`,
           description: "拒绝理由可选；留空时 Agent 会得知用户未提供理由",
           value: "deny",
           tone: "danger",
           edit: {
-            label: "拒绝  ",
+            label: "拒绝理由  ",
             value: denyDrafts.get(request.requestId) ?? "",
             placeholder: "可选拒绝理由",
             draft: (value) => denyDrafts.set(request.requestId, value),
@@ -186,7 +209,7 @@ export function createPermissionReviewView(
         },
       ],
       {
-        title: `工具权限审核 · 请求 ${current + 1}/${queue.length}`,
+        title: `工具权限审核 · 工具 ${current + 1}/${queue.length}`,
         header: [
           { text: `${request.toolName} · ${request.declaredIntent} · `, dim: true },
           {
@@ -196,13 +219,19 @@ export function createPermissionReviewView(
           },
         ],
         headerLines: preview.lines,
+        navigate,
         signal: controller.signal,
       },
     ).then(async (selection) => {
       signal?.removeEventListener("abort", abort)
       if (closed) return
+      if (navigationPending) {
+        navigationPending = false
+        queueMicrotask(open)
+        return
+      }
       if (!selection) {
-        answer(request.requestId, { decision: "abort" })
+        answer({ decision: "abort", batchId: request.batchId })
         return
       }
       if (selection === "details") {
@@ -210,30 +239,86 @@ export function createPermissionReviewView(
         open()
         return
       }
-      if (selection === "approve") answer(request.requestId, { decision: "approve" })
+      if (selection === "approve") decisions.set(request.requestId, { decision: "approve" })
       else {
         const reason = denyDrafts.get(request.requestId)?.trim()
-        answer(request.requestId, { decision: "deny", ...(reason ? { reason } : {}) })
+        decisions.set(request.requestId, { decision: "deny", ...(reason ? { reason } : {}) })
       }
+      current = Math.min(queue.length, current + 1)
+      open()
+    })
+  }
+
+  const openSummary = () => {
+    const batchId = queue[0]?.batchId
+    if (!batchId) return
+    controller = new AbortController()
+    const abort = () => controller?.abort()
+    signal?.addEventListener("abort", abort, { once: true })
+    const complete = queue.every((request) => decisions.has(request.requestId))
+    const summaryLines = queue.flatMap((request, index) => {
+      const decision = decisions.get(request.requestId)
+      const preview = permissionParameterPreview(request, overlays.renderer.terminalWidth).lines
+      return [
+        `${decision?.decision === "approve" ? "✓" : decision?.decision === "deny" ? "✗" : "○"} ${index + 1}. ${request.toolName} · ${decision?.decision === "approve" ? "通过" : decision?.decision === "deny" ? "拒绝" : "未决定"}`,
+        ...preview,
+      ]
+    })
+    void selectEditableItem<"submit" | "return">(
+      overlays,
+      `permission-summary-${batchId}`,
+      () => [
+        {
+          name: "确认提交",
+          description: complete ? "提交后各工具才会分别继续执行或返回拒绝" : "仍有工具没有决定",
+          value: "submit",
+          tone: "success",
+          disabled: !complete,
+          disabledReason: "所有工具都有决定后才能提交",
+        },
+        { name: "返回修改", description: "返回最后一个工具页修改决定", value: "return", tone: "primary" },
+      ],
+      {
+        title: `工具权限审核 · 汇总 ${queue.length} 项`,
+        headerLines: summaryLines,
+        navigate,
+        signal: controller.signal,
+      },
+    ).then((selection) => {
+      signal?.removeEventListener("abort", abort)
+      if (closed) return
+      if (navigationPending) {
+        navigationPending = false
+        queueMicrotask(open)
+        return
+      }
+      if (!selection) {
+        answer({ decision: "abort", batchId })
+        return
+      }
+      if (selection === "return") {
+        current = Math.max(0, queue.length - 1)
+        open()
+        return
+      }
+      answer({
+        decision: "submit",
+        batchId,
+        answers: queue.map((request) => {
+          const decision = decisions.get(request.requestId)
+          if (!decision) throw new Error("权限批次存在未决定项")
+          return { requestId: request.requestId, ...decision }
+        }),
+      })
     })
   }
 
   open()
   return {
     update(requests) {
-      const currentId = queue[current]?.requestId
-      queue = requests
-      if (queue.length === 0) {
-        controller?.abort()
-        return
-      }
-      const next = currentId ? queue.findIndex((request) => request.requestId === currentId) : -1
-      if (next >= 0) current = next
-      else {
-        current = Math.min(current, queue.length - 1)
-        controller?.abort()
-        queueMicrotask(open)
-      }
+      const batchId = queue[0]?.batchId
+      queue = batchId ? requests.filter((request) => request.batchId === batchId) : requests
+      if (queue.length === 0) controller?.abort()
     },
     close() {
       closed = true

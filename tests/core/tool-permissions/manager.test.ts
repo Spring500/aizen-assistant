@@ -38,7 +38,10 @@ function setup(decision: ToolPermissionDecision, aiType: "allow" | "deny" | "nee
   const human: HumanPermissionReviewer = {
     review: async (request) => {
       humanCalls.push(request)
-      return humanDecision
+      return {
+        batchId: request.batchId,
+        answers: request.requests.map((item) => ({ requestId: item.requestId, ...humanDecision })),
+      }
     },
   }
   return {
@@ -59,7 +62,12 @@ describe("ToolPermissionManager", () => {
     const manager = new ToolPermissionManager({
       registry,
       aiReviewer: { review: async () => ({ type: "deny", reason: "不应调用" }) },
-      humanReviewer: { review: async () => ({ type: "deny" }) },
+      humanReviewer: {
+        review: async (request) => ({
+          batchId: request.batchId,
+          answers: request.requests.map((item) => ({ requestId: item.requestId, type: "deny" as const })),
+        }),
+      },
     })
     expect(await manager.authorize({ ...base, mode: "unrestricted" })).toMatchObject({ type: "allow", source: "mode" })
   })
@@ -110,6 +118,45 @@ describe("ToolPermissionManager", () => {
       type: "allow",
       source: "human",
     })
+  })
+
+  test("批次只把最终需要人工判断的调用交给用户并统一提交", async () => {
+    const registry = new ToolPermissionRegistry()
+    registry.register({
+      toolName: "automatic",
+      validate: async () => ({ type: "allow", assessment }),
+    })
+    registry.register({
+      toolName: "manual",
+      validate: async () => ({ type: "needHumanReview", assessment }),
+    })
+    const humanCalls: Array<{ requests: Array<{ toolName: string; requestId: string }>; batchId: string }> = []
+    const manager = new ToolPermissionManager({
+      registry,
+      aiReviewer: { review: async () => ({ type: "allow", reason: "不应调用" }) },
+      humanReviewer: {
+        review: async (request) => {
+          humanCalls.push(request)
+          return {
+            batchId: request.batchId,
+            answers: request.requests.map((item) => ({ requestId: item.requestId, type: "deny" as const })),
+          }
+        },
+      },
+    })
+    const result = await manager.authorizeBatch({
+      batchId: "batch",
+      calls: [
+        { ...base, toolCallId: "automatic", toolName: "automatic" },
+        { ...base, toolCallId: "manual", toolName: "manual" },
+      ],
+    })
+    expect(humanCalls).toHaveLength(1)
+    expect(humanCalls[0]?.requests.map((request) => request.toolName)).toEqual(["manual"])
+    expect(result.authorizations).toMatchObject([
+      { toolCallId: "automatic", authorization: { type: "allow", source: "validator" } },
+      { toolCallId: "manual", authorization: { type: "deny", source: "human" } },
+    ])
   })
 
   test("纯AI模式拒绝所有人工分支", async () => {

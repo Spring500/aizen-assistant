@@ -87,6 +87,11 @@ export type CoreCommand =
   | { type: "set_view"; viewId: ViewId }
   | { type: "set_permission_mode"; permissionMode: PermissionMode }
   | {
+      type: "answer_permission_batch"
+      batchId: string
+      answers: Array<{ requestId: string; type: "approve" | "deny"; reason?: string }>
+    }
+  | {
       type: "answer_permission_request"
       requestId: string
       decision: "approve" | "deny"

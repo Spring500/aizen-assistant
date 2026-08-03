@@ -179,6 +179,64 @@ test("真实 pi 链路将权限拒绝结果返回模型", async () => {
   }
 }, 30000)
 
+test("真实 pi 链路统一提交同一消息中的多工具人工审批", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aizen-integration-batch-"))
+  directories.push(root)
+  const mock = await startMockServer()
+  try {
+    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+    await pi.setRuntimeApiKey("anthropic", "test-key")
+    const models = await pi.listModels()
+    const option = models.find((item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6")
+    if (!option) throw new Error("缺少集成测试模型")
+    pi.setModelBaseUrl(option.providerId, option.modelId, mock.url)
+    const core = new AizenCore({ cwd: root, store: new SessionStore(join(root, "sessions")), pi })
+    await core.dispatch({ type: "create_session", model: option, viewId: null, permissionMode: "hybrid" })
+    const sending = core.dispatch({ type: "send_prompt", text: "执行两个需要确认的命令" })
+    const first = await mock.take({ modelId: option.modelId })
+    first.respond({
+      type: "tool_calls",
+      calls: [
+        {
+          name: "bash",
+          arguments: { command: "echo $HOME", declaredIntent: "显示主目录" },
+          callId: "batch-call-one",
+        },
+        {
+          name: "bash",
+          arguments: { command: "echo $PATH", declaredIntent: "显示搜索路径" },
+          callId: "batch-call-two",
+        },
+      ],
+    })
+    for (let attempt = 0; attempt < 100 && core.getSnapshot().pendingPermissionRequests?.length !== 2; attempt++)
+      await Bun.sleep(2)
+    const pending = core.getSnapshot().pendingPermissionRequests ?? []
+    expect(pending.map((request) => request.toolCallId)).toEqual(["batch-call-one", "batch-call-two"])
+    expect(new Set(pending.map((request) => request.batchId)).size).toBe(1)
+    expect(
+      await core.dispatch({
+        type: "answer_permission_batch",
+        batchId: pending[0]?.batchId ?? "",
+        answers: [
+          { requestId: pending[0]?.requestId ?? "", type: "approve" },
+          { requestId: pending[1]?.requestId ?? "", type: "deny", reason: "无需展示搜索路径" },
+        ],
+      }),
+    ).toEqual({ ok: true })
+    const second = await mock.take({ modelId: option.modelId })
+    const messages = JSON.stringify(second.messages)
+    expect(messages).toContain("batch-call-one")
+    expect(messages).toContain("batch-call-two")
+    expect(messages).toContain("Operation denied: User denied permission. Reason: 无需展示搜索路径")
+    second.respond({ type: "text", text: "批次处理完成" })
+    expect(await sending).toEqual({ ok: true })
+    await core.dispose()
+  } finally {
+    mock.stop()
+  }
+}, 30000)
+
 test("真实 pi 链路并行完成主回复和工具式自动命名", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-"))
   directories.push(root)

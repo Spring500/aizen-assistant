@@ -33,6 +33,7 @@ import type {
   PiCreateInput,
   PiPort,
   PiPortEvent,
+  PiPermissionBatchHandler,
   PiPermissionExecutionHandler,
   PiPermissionHandler,
   PiPromptInput,
@@ -41,7 +42,7 @@ import type {
   ViewRuntimeInput,
 } from "../core/pi-port.ts"
 import type { JsonValue, ModelReference, SessionRecord } from "../core/session-format.ts"
-import type { ToolAuthorization } from "../core/tool-permissions/types.ts"
+import type { ToolAuthorization, ToolPermissionRequest } from "../core/tool-permissions/types.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
 import { PiPermissionReviewer } from "./permission-reviewer.ts"
 import { generateSessionTitle } from "./session-title-generator.ts"
@@ -54,6 +55,20 @@ export type PiSessionRuntimeOptions = {
 const piThinkingLevels = ["minimal", "low", "medium", "high", "xhigh", "max"] as const
 
 type RuntimeThinkingConfig = ModelThinkingConfig | null | undefined
+
+type PermissionBatchState = {
+  batchId: string
+  requests: Map<string, ToolPermissionRequest>
+  pending: Map<
+    string,
+    {
+      resolve: (authorization: ToolAuthorization) => void
+      reject: (error: Error) => void
+    }
+  >
+  signal?: AbortSignal
+  dispatchQueued: boolean
+}
 
 function runtimeModel(model: Model<Api>, config: RuntimeThinkingConfig, baseUrl?: string): Model<Api> {
   const actualModel = baseUrl === undefined ? model : { ...model, baseUrl }
@@ -192,6 +207,13 @@ function auditedTools(
     declaredIntent: string
     signal?: AbortSignal
   }) => Promise<Extract<ToolAuthorization, { type: "allow" }>>,
+  register: (input: {
+    callId: string
+    name: string
+    arguments: JsonValue
+    declaredIntent: string
+    signal?: AbortSignal
+  }) => void,
   activePrompt: () => PiPromptInput | undefined,
   recordExecution: PiPermissionExecutionHandler | undefined,
 ): ToolDefinition[] {
@@ -210,13 +232,15 @@ function auditedTools(
     ...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
     async execute(callId, params, signal, onUpdate) {
       const { declaredIntent, ...actualParams } = params as Record<string, unknown> & { declaredIntent: string }
-      const authorization = await authorize({
+      const call = {
         callId,
         name: tool.name,
         arguments: jsonValue(actualParams),
         declaredIntent,
         ...(signal ? { signal } : {}),
-      })
+      }
+      register(call)
+      const authorization = await authorize(call)
       const prompt = activePrompt()
       const request = prompt?.sessionId
         ? {
@@ -271,7 +295,9 @@ export class PiSessionRuntime implements PiPort {
   #thinkingConfigs = new Map<string, ModelThinkingConfig | null>()
   #modelBaseUrls = new Map<string, string>()
   #modelConfigError: Error | undefined
+  #permissionBatchHandler: PiPermissionBatchHandler | undefined
   #permissionHandler: PiPermissionHandler | undefined
+  #permissionBatch: PermissionBatchState | undefined
   #permissionExecutionHandler: PiPermissionExecutionHandler | undefined
   #activePrompt: PiPromptInput | undefined
   #session: AgentSession | undefined
@@ -288,6 +314,7 @@ export class PiSessionRuntime implements PiPort {
   #contentTimings = new Map<number, { startedAt: number; finishedAt: number }>()
   #toolStarts = new Map<string, number>()
   #toolTimings = new Map<string, { startedAt: number; finishedAt: number }>()
+  #toolBatchSequence = 0
 
   private constructor(modelRuntime: ModelRuntime, modelsPath: string | null) {
     this.#modelRuntime = modelRuntime
@@ -340,35 +367,32 @@ export class PiSessionRuntime implements PiPort {
         input.cwd,
         async (call) => {
           const prompt = this.#activePrompt
-          if (!prompt?.sessionId || !this.#permissionHandler) throw new Error("工具权限处理器尚未初始化")
-          const authorization = await this.#permissionHandler(
-            {
-              sessionId: prompt.sessionId,
-              turnId: prompt.turnId,
-              toolCallId: call.callId,
-              toolName: call.name,
-              arguments: call.arguments,
-              declaredIntent: call.declaredIntent,
-              cwd: input.cwd,
-              mode: prompt.permissionMode ?? "hybrid",
-              ...(call.name === "bash"
-                ? {
-                    environment: {
-                      shell: this.#shellKind(),
-                    },
-                  }
-                : {}),
-            },
-            call.signal,
-          )
-          if (authorization.type === "allow") return authorization
-          if (authorization.type === "aborted") throw new Error(authorization.reason)
-          throw new Error(
-            authorization.reason.startsWith("Operation denied:")
-              ? authorization.reason
-              : `Operation denied: ${authorization.source} rejected the tool call. Reason: ${authorization.reason}`,
+          if (!prompt?.sessionId) throw new Error("工具权限处理器尚未初始化")
+          const request: ToolPermissionRequest = {
+            sessionId: prompt.sessionId,
+            turnId: prompt.turnId,
+            toolCallId: call.callId,
+            toolName: call.name,
+            arguments: call.arguments,
+            declaredIntent: call.declaredIntent,
+            cwd: input.cwd,
+            mode: prompt.permissionMode ?? "hybrid",
+            ...(call.name === "bash" ? { environment: { shell: this.#shellKind() } } : {}),
+          }
+          if (!this.#permissionBatchHandler) {
+            if (!this.#permissionHandler) throw new Error("工具权限处理器尚未初始化")
+            return this.#requireAllowed(await this.#permissionHandler(request, call.signal))
+          }
+          const batch = this.#permissionBatch
+          if (!batch) throw new Error("工具权限批次尚未开始收集")
+          batch.requests.set(call.callId, request)
+          return this.#requireAllowed(
+            await new Promise<ToolAuthorization>((resolve, reject) => {
+              batch.pending.set(call.callId, { resolve, reject })
+            }),
           )
         },
+        (call) => this.#registerPermissionCall(input.cwd, call),
         () => this.#activePrompt,
         this.#permissionExecutionHandler,
       ),
@@ -506,8 +530,77 @@ export class PiSessionRuntime implements PiPort {
     }
   }
 
+  setPermissionBatchHandler(handler: PiPermissionBatchHandler | undefined): void {
+    this.#permissionBatchHandler = handler
+  }
+
   setPermissionHandler(handler: PiPermissionHandler | undefined): void {
     this.#permissionHandler = handler
+  }
+
+  #requireAllowed(authorization: ToolAuthorization): Extract<ToolAuthorization, { type: "allow" }> {
+    if (authorization.type === "allow") return authorization
+    if (authorization.type === "aborted") throw new Error(authorization.reason)
+    throw new Error(
+      authorization.reason.startsWith("Operation denied:")
+        ? authorization.reason
+        : `Operation denied: ${authorization.source} rejected the tool call. Reason: ${authorization.reason}`,
+    )
+  }
+
+  #registerPermissionCall(
+    cwd: string,
+    call: { callId: string; name: string; arguments: JsonValue; declaredIntent: string; signal?: AbortSignal },
+  ): void {
+    const prompt = this.#activePrompt
+    let batch = this.#permissionBatch
+    if (!prompt?.sessionId) return
+    if (!batch) {
+      this.#toolBatchSequence += 1
+      batch = {
+        batchId: `${prompt.turnId}:${this.#toolBatchSequence}`,
+        requests: new Map(),
+        pending: new Map(),
+        ...(call.signal ? { signal: call.signal } : {}),
+        dispatchQueued: false,
+      }
+      this.#permissionBatch = batch
+    }
+    batch.requests.set(call.callId, {
+      sessionId: prompt.sessionId,
+      turnId: prompt.turnId,
+      toolCallId: call.callId,
+      toolName: call.name,
+      arguments: call.arguments,
+      declaredIntent: call.declaredIntent,
+      cwd,
+      mode: prompt.permissionMode ?? "hybrid",
+      ...(call.name === "bash" ? { environment: { shell: this.#shellKind() } } : {}),
+    })
+    if (batch.dispatchQueued) return
+    batch.dispatchQueued = true
+    queueMicrotask(() => void this.#dispatchPermissionBatch(batch))
+  }
+
+  async #dispatchPermissionBatch(batch: PermissionBatchState): Promise<void> {
+    if (this.#permissionBatch !== batch || !this.#permissionBatchHandler || batch.requests.size === 0) return
+    try {
+      const result = await this.#permissionBatchHandler(
+        { batchId: batch.batchId, calls: [...batch.requests.values()] },
+        batch.signal,
+      )
+      const byCall = new Map(result.authorizations.map((item) => [item.toolCallId, item.authorization]))
+      for (const [callId, pending] of batch.pending) {
+        const authorization = byCall.get(callId)
+        if (authorization) pending.resolve(authorization)
+        else pending.reject(new Error(`权限批次缺少工具结果：${callId}`))
+      }
+    } catch (error) {
+      const actual = error instanceof Error ? error : new Error(String(error))
+      for (const pending of batch.pending.values()) pending.reject(actual)
+    } finally {
+      if (this.#permissionBatch === batch) this.#permissionBatch = undefined
+    }
   }
 
   setPermissionExecutionHandler(handler: PiPermissionExecutionHandler | undefined): void {
