@@ -151,7 +151,11 @@ export type PermissionReviewController = {
 
 type DraftDecision = { decision: "approve" } | { decision: "deny"; reason?: string }
 
-type SummaryResult = { type: "submit" } | { type: "return"; index: number } | { type: "abort" }
+type SummaryResult =
+  | { type: "submit" }
+  | { type: "return"; index: number }
+  | { type: "page"; index: number }
+  | { type: "abort" }
 
 async function showPermissionSummary(
   overlays: OverlayManager,
@@ -162,15 +166,16 @@ async function showPermissionSummary(
 ): Promise<SummaryResult> {
   return new Promise((resolve) => {
     const pageSize = 16
+    const submitIndex = requests.length
     let settled = false
-    let selected = Math.max(0, Math.min(initialIndex, requests.length - 1))
+    let selected = Math.max(0, Math.min(initialIndex, submitIndex))
     let offset = 0
     let lineStarts: number[] = []
     let lines: string[] = []
     const handle = overlays.open({
       id: `permission-summary-${requests[0]?.batchId ?? "batch"}`,
       title: `工具权限审核 · 汇总 ${requests.length} 项`,
-      description: "←/→ 选择要返回修改的工具；Ctrl+Enter 确认提交",
+      description: "↑/↓ 选择工具或确认并提交；Enter 执行",
       contentHeight: pageSize,
       actions: [],
       ...(signal ? { signal } : {}),
@@ -203,20 +208,25 @@ async function showPermissionSummary(
         if (decision?.decision === "deny") result.push(`    拒绝理由：${decision.reason ?? "未提供"}`)
         result.push("")
       }
+      lineStarts.push(result.length)
+      result.push(`${selected === submitIndex ? "▶" : " "} 确认并提交`)
       lines = result
     }
     const render = (ensureSelected = false) => {
       buildLines()
       if (ensureSelected) {
-        const start = lineStarts[selected] ?? 0
-        const next = lineStarts[selected + 1] ?? lines.length
+        const start = lineStarts[selected] ?? lines.length - 1
+        const next = selected === submitIndex ? lines.length : (lineStarts[selected + 1] ?? lines.length)
         if (start < offset) offset = start
         else if (next > offset + pageSize) offset = Math.max(start, next - pageSize)
       }
       offset = Math.max(0, Math.min(offset, Math.max(0, lines.length - pageSize)))
       content.content = lines.slice(offset, offset + pageSize).join("\n")
+      const undecided = requests.filter((request) => !decisions.has(request.requestId)).length
       handle.setDescription(
-        `已选择 ${selected + 1}/${requests.length}；←/→ 选择工具，Enter 返回修改，Ctrl+Enter 确认提交`,
+        undecided > 0
+          ? `还有 ${undecided} 项未决定；↑/↓ 选择，Enter 执行`
+          : `已选择 ${selected + 1}/${submitIndex + 1}；↑/↓ 选择，Enter 执行`,
       )
     }
     const finish = (result: SummaryResult) => {
@@ -230,37 +240,45 @@ async function showPermissionSummary(
     overlays.renderer.on(CliRenderEvents.RESIZE, onResize)
     handle.setActions([
       {
-        id: "tool",
-        key: { name: "left" },
-        alternateKeys: [{ name: "right" }],
-        label: "←/→ 选择工具",
+        id: "move",
+        key: { name: "up" },
+        alternateKeys: [{ name: "down" }],
+        label: "↑/↓ 选择",
         run: (key) => {
-          selected = Math.max(0, Math.min(requests.length - 1, selected + (key.name === "left" ? -1 : 1)))
+          selected = Math.max(0, Math.min(submitIndex, selected + (key.name === "up" ? -1 : 1)))
           render(true)
         },
       },
       {
-        id: "scroll",
-        key: { name: "up" },
-        alternateKeys: [{ name: "down" }, { name: "pageup" }, { name: "pagedown" }],
-        label: "↑↓ 滚动",
-        run: (key) => {
-          const delta = key.name === "up" ? -1 : key.name === "down" ? 1 : key.name === "pageup" ? -pageSize : pageSize
-          offset += delta
-          render()
+        id: "select",
+        key: { name: "return" },
+        label: "Enter 执行",
+        run: () => {
+          if (selected < submitIndex) {
+            finish({ type: "return", index: selected })
+            return
+          }
+          const undecided = requests.filter((request) => !decisions.has(request.requestId)).length
+          if (undecided > 0) {
+            handle.setError(`还有 ${undecided} 项未决定，请完成全部审核后再提交`)
+            return
+          }
+          finish({ type: "submit" })
         },
       },
       {
-        id: "return",
-        key: { name: "return" },
-        label: "Enter 返回修改",
-        run: () => finish({ type: "return", index: selected }),
+        id: "previous",
+        key: { name: "left" },
+        label: "← 上一页",
+        run: () => finish({ type: "page", index: requests.length - 1 }),
       },
       {
-        id: "submit",
-        key: { name: "return", ctrl: true },
-        label: "Ctrl+Enter 确认提交",
-        run: () => finish({ type: "submit" }),
+        id: "next",
+        key: { name: "right" },
+        label: "→ 下一页",
+        enabled: false,
+        disabledReason: "汇总页已经是最后一页",
+        run: () => {},
       },
       { id: "cancel", key: { name: "escape" }, label: "Esc 中止", run: () => finish({ type: "abort" }) },
     ])
@@ -350,7 +368,7 @@ export function createPermissionReviewView(
           value: "deny",
           tone: "danger",
           edit: {
-            label: "拒绝理由  ",
+            label: `${existing?.decision === "deny" ? "✗ " : ""}拒绝理由  `,
             value: denyDrafts.get(request.requestId) ?? "",
             placeholder: "可选拒绝理由",
             draft: (value) => denyDrafts.set(request.requestId, value),
@@ -413,6 +431,16 @@ export function createPermissionReviewView(
         const reason = denyDrafts.get(request.requestId)?.trim()
         decisions.set(request.requestId, { decision: "deny", ...(reason ? { reason } : {}) })
       }
+      if (queue.length === 1) {
+        const decision = decisions.get(request.requestId)
+        if (!decision) throw new Error("单工具审批没有生成决定")
+        answer({
+          decision: "submit",
+          batchId: request.batchId,
+          answers: [{ requestId: request.requestId, ...decision }],
+        })
+        return
+      }
       current = Math.min(queue.length, current + 1)
       open()
     })
@@ -421,11 +449,6 @@ export function createPermissionReviewView(
   const openSummary = () => {
     const batchId = queue[0]?.batchId
     if (!batchId) return
-    if (!queue.every((request) => decisions.has(request.requestId))) {
-      current = queue.findIndex((request) => !decisions.has(request.requestId))
-      open()
-      return
-    }
     controller = new AbortController()
     const abort = () => controller?.abort()
     signal?.addEventListener("abort", abort, { once: true })
@@ -437,7 +460,7 @@ export function createPermissionReviewView(
           answer({ decision: "abort", batchId })
           return
         }
-        if (result.type === "return") {
+        if (result.type === "return" || result.type === "page") {
           current = result.index
           open()
           return

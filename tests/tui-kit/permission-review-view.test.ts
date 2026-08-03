@@ -13,10 +13,10 @@ afterEach(() => {
   for (const renderer of renderers.splice(0)) renderer.renderer.destroy()
 })
 
-function key(value: string, modifiers: { ctrl?: boolean } = {}): KeyEvent {
+function key(value: string): KeyEvent {
   const parsed = parseKeypress(value)
   if (!parsed) throw new Error("按键无效")
-  return new KeyEvent({ ...parsed, ...modifiers })
+  return new KeyEvent(parsed)
 }
 
 function request(id: string, toolName: string): HumanReviewRequest {
@@ -55,7 +55,7 @@ async function setupReview(requests = [request("one", "bash")]) {
   return { setup, answers, controller }
 }
 
-test("审批页逐项决定后进入汇总并统一提交", async () => {
+test("单工具审批决定后直接提交且不进入汇总", async () => {
   const { setup, answers, controller } = await setupReview()
   let frame = setup.captureCharFrame()
   expect(frame).toContain("工具权限审核 · 工具 1/1")
@@ -70,13 +70,6 @@ test("审批页逐项决定后进入汇总并统一提交", async () => {
   expect(frame).toContain("拒绝理由  不允许修改依赖")
   setup.renderer.keyInput.emit("keypress", key("\r"))
   await Bun.sleep(1)
-  await setup.renderOnce()
-  expect(answers).toEqual([])
-  const summaryFrame = setup.captureCharFrame()
-  expect(summaryFrame).toContain("工具权限审核 · 汇总 1 项")
-  expect(summaryFrame).toContain("拒绝理由：不允许修改依赖")
-  setup.renderer.keyInput.emit("keypress", key("\x0d", { ctrl: true }))
-  await Bun.sleep(1)
   expect(answers).toEqual([
     {
       decision: "submit",
@@ -84,22 +77,48 @@ test("审批页逐项决定后进入汇总并统一提交", async () => {
       answers: [{ requestId: "one", decision: "deny", reason: "不允许修改依赖" }],
     },
   ])
+  expect(setup.captureCharFrame()).not.toContain("工具权限审核 · 汇总")
   controller.close()
 })
 
-test("汇总页可选择具体工具返回修改", async () => {
+test("汇总页用上下选择工具和确认并提交", async () => {
   const { setup, answers, controller } = await setupReview([request("one", "bash"), request("two", "write")])
   setup.renderer.keyInput.emit("keypress", key("\r"))
   await Bun.sleep(1)
   setup.renderer.keyInput.emit("keypress", key("\r"))
   await Bun.sleep(1)
   await setup.renderOnce()
-  expect(setup.captureCharFrame()).toContain("工具权限审核 · 汇总 2 项")
-  setup.renderer.keyInput.emit("keypress", key("\x1b[D"))
+  const frame = setup.captureCharFrame()
+  expect(frame).toContain("工具权限审核 · 汇总 2 项")
+  expect(frame).toContain("确认并提交")
+  expect(frame).not.toContain("Ctrl+Enter")
+  expect(frame).not.toContain("PgUp")
+
+  setup.renderer.keyInput.emit("keypress", key("\x1b[A"))
   setup.renderer.keyInput.emit("keypress", key("\r"))
   await Bun.sleep(1)
   await setup.renderOnce()
   expect(setup.captureCharFrame()).toContain("工具权限审核 · 工具 1/2")
+  expect(answers).toEqual([])
+  controller.close()
+})
+
+test("汇总页在有未决定项时可见并阻止提交", async () => {
+  const { setup, answers, controller } = await setupReview([request("one", "bash"), request("two", "write")])
+  setup.renderer.keyInput.emit("keypress", key("\x1b[C"))
+  await Bun.sleep(1)
+  setup.renderer.keyInput.emit("keypress", key("\x1b[C"))
+  await Bun.sleep(1)
+  await setup.renderOnce()
+  let frame = setup.captureCharFrame()
+  expect(frame).toContain("工具权限审核 · 汇总 2 项")
+  expect(frame).toContain("○ 未决定")
+  setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
+  setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
+  setup.renderer.keyInput.emit("keypress", key("\r"))
+  await setup.renderOnce()
+  frame = setup.captureCharFrame()
+  expect(frame).toContain("还有 2 项未决定，请完成全部审核后再提交")
   expect(answers).toEqual([])
   controller.close()
 })
@@ -119,6 +138,26 @@ test("左右键切换工具页并保留拒绝理由草稿", async () => {
   await Bun.sleep(1)
   await setup.renderOnce()
   expect(setup.captureCharFrame()).toContain("拒绝理由  保留草稿")
+  controller.close()
+})
+
+test("已决定的勾叉在选中和编辑时持续显示", async () => {
+  const { setup, controller } = await setupReview([request("one", "bash"), request("two", "write")])
+  setup.renderer.keyInput.emit("keypress", key("\r"))
+  await Bun.sleep(1)
+  setup.renderer.keyInput.emit("keypress", key("\x1b[D"))
+  await Bun.sleep(1)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).toContain("✓ 通过")
+  setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
+  setup.renderer.keyInput.emit("keypress", key("拒绝草稿"))
+  setup.renderer.keyInput.emit("keypress", key("\r"))
+  await Bun.sleep(1)
+  setup.renderer.keyInput.emit("keypress", key("\x1b[D"))
+  await Bun.sleep(1)
+  setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).toContain("✗ 拒绝理由")
   controller.close()
 })
 
@@ -220,7 +259,7 @@ test("长命令完整阅览前禁用通过", async () => {
   controller.close()
 })
 
-test("长命令滚动到详情末尾后允许通过并在汇总提交", async () => {
+test("长命令滚动到详情末尾后允许通过并直接提交", async () => {
   const setup = await createTestRenderer({ width: 48, height: 28 })
   renderers.push(setup)
   const overlays = new OverlayManager(setup.renderer)
@@ -238,8 +277,6 @@ test("长命令滚动到详情末尾后允许通过并在汇总提交", async ()
   setup.renderer.keyInput.emit("keypress", key("\r"))
   await Bun.sleep(1)
   setup.renderer.keyInput.emit("keypress", key("\r"))
-  await Bun.sleep(1)
-  setup.renderer.keyInput.emit("keypress", key("\x0d", { ctrl: true }))
   await Bun.sleep(1)
   expect(answers).toEqual([
     { decision: "submit", batchId: "batch", answers: [{ requestId: "unlock", decision: "approve" }] },
