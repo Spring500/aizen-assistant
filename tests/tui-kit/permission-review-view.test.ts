@@ -116,6 +116,26 @@ test("审批页展示判定原因和结构化 findings", async () => {
   controller.close()
 })
 
+test("edit 完整详情使用 unified diff 专用页面", async () => {
+  const value = request("edit-diff", "edit")
+  value.assessment.details = {
+    path: "source.ts",
+    edits: [{ oldText: "const oldValue = 1", newText: "const newValue = 2" }],
+    patch: "--- source.ts\t原文件\n+++ source.ts\t预览\n@@ -1,1 +1,1 @@\n-const oldValue = 1\n+const newValue = 2\n",
+  }
+  const { setup, controller } = await setupReview([value])
+  setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
+  setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
+  setup.renderer.keyInput.emit("keypress", key("\r"))
+  await Bun.sleep(1)
+  await setup.renderOnce()
+  const frame = setup.captureCharFrame()
+  expect(frame).toContain("编辑预览：")
+  expect(frame).toContain("const oldValue = 1")
+  expect(frame).toContain("const newValue = 2")
+  controller.close()
+})
+
 test("审批参数 Header 在 resize 后重新计算换行与省略", async () => {
   const long = request("resize", "bash")
   long.arguments = { command: `echo HEAD ${"middle ".repeat(20)}echo TAIL` }

@@ -1,6 +1,7 @@
-import { lstat, realpath } from "node:fs/promises"
+import { lstat, readFile, realpath } from "node:fs/promises"
 import { dirname, extname, isAbsolute, relative, resolve, sep } from "node:path"
 import type { JsonValue } from "../../session-format.ts"
+import { previewExactEdits } from "../edit-preview.ts"
 import { containsSensitiveField } from "../sanitizer.ts"
 import type { ToolAssessment, ToolPermissionRequest, ToolPermissionValidator } from "../types.ts"
 
@@ -91,6 +92,40 @@ function executionSensitive(path: string): boolean {
   )
 }
 
+function edits(value: JsonValue): Array<{ oldText: string; newText: string }> | undefined {
+  if (!Array.isArray(value) || value.length === 0) return undefined
+  const result: Array<{ oldText: string; newText: string }> = []
+  for (const item of value) {
+    const source = object(item)
+    if (!source || typeof source.oldText !== "string" || typeof source.newText !== "string") return undefined
+    result.push({ oldText: source.oldText, newText: source.newText })
+  }
+  return result
+}
+
+async function editDetails(path: string, input: Record<string, JsonValue>): Promise<JsonValue> {
+  const replacements = input.edits === undefined ? undefined : edits(input.edits)
+  if (!replacements) return { path, edits: input.edits ?? [], previewError: "替换列表格式无效" }
+  try {
+    const content = await readFile(path, "utf8")
+    const preview = previewExactEdits(path, content, replacements)
+    return preview.ok
+      ? { path, edits: replacements, patch: preview.patch }
+      : {
+          path,
+          edits: replacements,
+          previewError: preview.reason,
+          ...(preview.failedEditIndex === undefined ? {} : { failedEditIndex: preview.failedEditIndex }),
+        }
+  } catch (error) {
+    return {
+      path,
+      edits: replacements,
+      previewError: `无法读取原文件：${error instanceof Error ? error.message : String(error)}`,
+    }
+  }
+}
+
 function details(toolName: string, path: string, input: Record<string, JsonValue>): JsonValue {
   if (toolName === "read") return { path, offset: input.offset ?? null, limit: input.limit ?? null }
   if (toolName === "write") return { path, content: input.content ?? "" }
@@ -158,14 +193,35 @@ export function createFileValidator(toolName: "read" | "write" | "edit"): ToolPe
       }
       const normalized = { ...input, path: resolved.target }
       const action = toolName === "read" ? "读取" : toolName === "write" ? "写入" : "编辑"
+      const localDetails =
+        toolName === "edit" ? await editDetails(resolved.target, input) : details(toolName, resolved.target, input)
       const analyzed = assessment(
         `${action} ${resolved.target}`,
         resolved.target,
         "low",
         "目标位于工作区内的普通文件",
         normalized,
-        details(toolName, resolved.target, input),
+        localDetails,
       )
+      if (
+        toolName === "edit" &&
+        localDetails &&
+        typeof localDetails === "object" &&
+        !Array.isArray(localDetails) &&
+        typeof localDetails.previewError === "string"
+      ) {
+        analyzed.risk = "high"
+        analyzed.reason = `无法可靠预演编辑：${localDetails.previewError}`
+        analyzed.findings = [
+          {
+            severity: "high",
+            category: "edit-preview",
+            summary: "无法生成可靠 diff",
+            evidence: localDetails.previewError,
+          },
+        ]
+        return { type: "needHumanReview", assessment: analyzed }
+      }
       const root = await realpath(request.cwd).catch(() => resolve(request.cwd))
       if (!inside(root, resolved.target) || sensitivePath(resolved.target)) {
         analyzed.risk = "high"

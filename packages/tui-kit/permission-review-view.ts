@@ -2,6 +2,7 @@ import { TextRenderable } from "@opentui/core"
 import type { HumanReviewRequest } from "../core/tool-permissions/types.ts"
 import { selectEditableItem } from "./editable-selector.ts"
 import type { OverlayManager } from "./overlay-manager.ts"
+import { showPermissionDiff } from "./permission-diff-view.ts"
 import { permissionParameterPreview } from "./permission-review-preview.ts"
 import { systemColors } from "./theme.ts"
 
@@ -32,6 +33,20 @@ async function showEvidence(
   onViewedToEnd: () => void,
   signal?: AbortSignal,
 ): Promise<void> {
+  const details = request.assessment.details
+  if (request.toolName === "edit" && details && typeof details === "object" && !Array.isArray(details)) {
+    const patch = typeof details.patch === "string" ? details.patch : undefined
+    const previewError = typeof details.previewError === "string" ? details.previewError : undefined
+    await showPermissionDiff(overlays, {
+      id: `permission-edit-diff-${request.requestId}`,
+      title: `编辑预览：${request.assessment.targets[0] ?? request.toolName}`,
+      ...(patch ? { patch } : {}),
+      ...(previewError ? { error: previewError } : {}),
+      ...(signal ? { signal } : {}),
+      onViewedToEnd,
+    })
+    return
+  }
   const full = evidence(request)
   await new Promise<void>((resolve) => {
     let settled = false

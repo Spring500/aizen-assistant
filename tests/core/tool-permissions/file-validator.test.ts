@@ -40,6 +40,34 @@ test("工作区内普通源码读写直接允许", async () => {
   ).toBe("allow")
 })
 
+test("edit 成功预演精确替换并生成 unified diff", async () => {
+  const root = await setup()
+  await writeFile(join(root, "source.ts"), "const oldValue = 1\nconst keep = true\n")
+  const result = await createFileValidator("edit").validate(
+    request(root, "edit", {
+      path: "source.ts",
+      edits: [{ oldText: "const oldValue = 1", newText: "const newValue = 2" }],
+    }),
+  )
+  expect(result.type).toBe("allow")
+  expect(JSON.stringify(result.assessment.details)).toContain("---")
+  expect(JSON.stringify(result.assessment.details)).toContain("+const newValue = 2")
+})
+
+test("edit 匹配失败转人工并说明失败替换块", async () => {
+  const root = await setup()
+  await writeFile(join(root, "source.ts"), "const value = 1\n")
+  const result = await createFileValidator("edit").validate(
+    request(root, "edit", {
+      path: "source.ts",
+      edits: [{ oldText: "const missing = 1", newText: "const value = 2" }],
+    }),
+  )
+  expect(result.type).toBe("needHumanReview")
+  expect(result.assessment.reason).toContain("没有匹配")
+  expect(result.assessment.findings).toMatchObject([{ category: "edit-preview" }])
+})
+
 test("依赖清单交给AI审核", async () => {
   const root = await setup()
   expect(
