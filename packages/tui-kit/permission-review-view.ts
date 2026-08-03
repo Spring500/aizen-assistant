@@ -5,6 +5,7 @@ import { selectEditableItem } from "./editable-selector.ts"
 import type { OverlayManager } from "./overlay-manager.ts"
 import { showPermissionDiff } from "./permission-diff-view.ts"
 import { permissionParameterPreview } from "./permission-review-preview.ts"
+import { createScrollableTextView } from "./scrollable-text-view.ts"
 import { systemColors } from "./theme.ts"
 
 function evidence(request: HumanReviewRequest): { title: string; content: string } {
@@ -55,56 +56,30 @@ async function showEvidence(
   if (findings) full.content = `${findings}\n\n${full.content}`
   await new Promise<void>((resolve) => {
     let settled = false
-    let offset = 0
     const pageSize = 16
-    const linesForWidth = () => {
-      const wrapWidth = Math.max(20, overlays.renderer.terminalWidth - 2)
-      return full.content.split("\n").flatMap((line) => {
-        if (!line) return [""]
-        const visual: string[] = []
-        let current = ""
-        for (const character of line) {
-          if (Bun.stringWidth(current + character) > wrapWidth) {
-            visual.push(current)
-            current = character
-          } else current += character
-        }
-        visual.push(current)
-        return visual
-      })
-    }
-    let lines = linesForWidth()
     const handle = overlays.open({
       id: `permission-evidence-${request.requestId}`,
       title: full.title,
-      description: "内容按终端宽度折行；显示位置以视觉行计数",
+      description: "内容按终端宽度自动换行；显示位置以视觉行计数",
       contentHeight: pageSize,
       actions: [],
       ...(signal ? { signal } : {}),
       onCancel: () => finish(),
     })
-    const text = new TextRenderable(overlays.renderer, {
+    const text = createScrollableTextView(overlays.renderer, {
       id: `permission-evidence-${request.requestId}-content`,
-      position: "absolute",
-      width: "100%",
-      height: "100%",
+      parent: handle.content,
+      content: full.content,
       wrapMode: "word",
       fg: systemColors.secondary,
-      content: "",
+      onViewedToEnd,
+      onStateChange: (state) =>
+        handle.setDescription(`视觉行 ${state.firstLine}-${state.lastLine} / ${state.totalLines}`),
     })
-    handle.content.add(text)
-    const render = () => {
-      lines = linesForWidth()
-      offset = Math.max(0, Math.min(offset, Math.max(0, lines.length - pageSize)))
-      if (offset + pageSize >= lines.length) onViewedToEnd()
-      text.content = lines.slice(offset, offset + pageSize).join("\n")
-      handle.setDescription(
-        `视觉行 ${Math.min(offset + 1, Math.max(1, lines.length))}-${Math.min(offset + pageSize, lines.length)} / ${lines.length}`,
-      )
-    }
     const finish = () => {
       if (settled) return
       settled = true
+      text.dispose()
       handle.close()
       resolve()
     }
@@ -114,25 +89,19 @@ async function showEvidence(
         key: { name: "up" },
         alternateKeys: [{ name: "down" }],
         label: "↑↓ 逐行",
-        run: (key) => {
-          offset += key.name === "up" ? -1 : 1
-          render()
-        },
+        run: (key) => text.scrollBy(key.name === "up" ? -1 : 1),
       },
       {
         id: "page",
         key: { name: "pageup" },
         alternateKeys: [{ name: "pagedown" }],
         label: "PgUp/PgDn 翻页",
-        run: (key) => {
-          offset += key.name === "pageup" ? -pageSize : pageSize
-          render()
-        },
+        run: (key) => text.scrollPage(key.name === "pageup" ? -1 : 1),
       },
       { id: "return", key: { name: "return" }, label: "Enter 返回", run: finish },
       { id: "cancel", key: { name: "escape" }, label: "Esc 返回", run: finish },
     ])
-    render()
+    text.refresh()
   })
 }
 

@@ -224,6 +224,28 @@ test("edit 完整详情使用 unified diff 专用页面", async () => {
   controller.close()
 })
 
+test("命令详情页 resize 后按新尺寸自动换行", async () => {
+  const value = request("detail-resize", "bash")
+  value.arguments = { command: `echo ${"detail-resize ".repeat(40)}` }
+  value.assessment.details = { command: `echo ${"detail-resize ".repeat(40)}` }
+  const { setup, controller } = await setupReview([value])
+  setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
+  setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
+  setup.renderer.keyInput.emit("keypress", key("\r"))
+  await Bun.sleep(1)
+  setup.resize(42, 28)
+  await setup.renderOnce()
+  const narrow = setup.captureCharFrame()
+  expect(narrow).toContain("视觉行 1-")
+  setup.resize(100, 28)
+  await setup.renderOnce()
+  await Bun.sleep(1)
+  const wide = setup.captureCharFrame()
+  expect(wide).toContain("视觉行 1-")
+  expect(wide).not.toBe(narrow)
+  controller.close()
+})
+
 test("审批参数 Header 在 resize 后重新计算换行与省略", async () => {
   const long = request("resize", "bash")
   long.arguments = { command: `echo HEAD ${"middle ".repeat(20)}echo TAIL` }
