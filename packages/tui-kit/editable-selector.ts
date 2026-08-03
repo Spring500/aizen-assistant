@@ -414,7 +414,7 @@ export function selectEditableItem<T>(
         const lines = options.headerLinesForWidth(overlays.renderer.terminalWidth)
         for (const [index, renderable] of headerRenderables.entries()) renderable.content = lines[index] ?? ""
       }
-      render()
+      updateItems()
     }
     overlays.renderer.on(CliRenderEvents.RESIZE, onResize)
     handle.setInput({

@@ -159,6 +159,7 @@ test("审批参数 Header 在 resize 后重新计算换行与省略", async () =
   const wide = setup.captureCharFrame()
   expect(wide).toContain("HEAD")
   expect(wide).toContain("TAIL")
+  expect(wide).not.toContain("请先打开完整内容")
   controller.close()
 })
 
