@@ -185,8 +185,11 @@ export class ToolPermissionManager {
           declaredIntent: request.declaredIntent,
           cwd: request.cwd,
           validatorDecision: "needAiReview",
-          assessment: sanitizeReviewPayload(decision.assessment) as typeof decision.assessment,
-          payload: sanitizeReviewPayload(decision.reviewPayload),
+          assessment: sanitizeReviewPayload(
+            decision.assessment,
+            validator.sensitiveFields,
+          ) as typeof decision.assessment,
+          payload: sanitizeReviewPayload(decision.reviewPayload, validator.sensitiveFields),
         },
         signal,
       )
@@ -262,22 +265,28 @@ export class ToolPermissionManager {
   ): Promise<Map<string, HumanReviewResolution>> {
     const created = this.#now()
     const expiresAt = new Date(created.getTime() + this.#humanReviewTimeoutMs).toISOString()
-    const requests: HumanReviewRequest[] = items.map((item) => ({
-      requestId: crypto.randomUUID(),
-      batchId,
-      sessionId: item.request.sessionId,
-      turnId: item.request.turnId,
-      toolCallId: item.request.toolCallId,
-      toolName: item.request.toolName,
-      declaredIntent: item.request.declaredIntent,
-      cwd: item.request.cwd,
-      arguments: item.request.arguments,
-      assessment: item.assessment,
-      ...(item.aiDecision ? { aiDecision: item.aiDecision } : {}),
-      ...(item.error ? { aiError: item.error } : {}),
-      createdAt: created.toISOString(),
-      expiresAt,
-    }))
+    const requests: HumanReviewRequest[] = items.map((item) => {
+      const sensitiveFields = this.#registry
+        .get(item.request.toolName)
+        ?.sensitiveFields?.filter((field): field is string => typeof field === "string")
+      return {
+        requestId: crypto.randomUUID(),
+        batchId,
+        sessionId: item.request.sessionId,
+        turnId: item.request.turnId,
+        toolCallId: item.request.toolCallId,
+        toolName: item.request.toolName,
+        declaredIntent: item.request.declaredIntent,
+        cwd: item.request.cwd,
+        arguments: item.request.arguments,
+        assessment: item.assessment,
+        ...(item.aiDecision ? { aiDecision: item.aiDecision } : {}),
+        ...(item.error ? { aiError: item.error } : {}),
+        ...(sensitiveFields && sensitiveFields.length > 0 ? { sensitiveFields } : {}),
+        createdAt: created.toISOString(),
+        expiresAt,
+      }
+    })
     const controller = new AbortController()
     const onAbort = () => controller.abort(signal?.reason)
     signal?.addEventListener("abort", onAbort, { once: true })

@@ -1,4 +1,5 @@
 import { TextRenderable } from "@opentui/core"
+import { sensitiveFieldPaths } from "../core/tool-permissions/sanitizer.ts"
 import type { HumanReviewRequest } from "../core/tool-permissions/types.ts"
 import { selectEditableItem } from "./editable-selector.ts"
 import type { OverlayManager } from "./overlay-manager.ts"
@@ -181,6 +182,9 @@ export function createPermissionReviewView(
     controller = new AbortController()
     const abort = () => controller?.abort()
     const preview = () => permissionParameterPreview(request, overlays.renderer.terminalWidth, 3)
+    const sensitivePaths = sensitiveFieldPaths(request.arguments, request.sensitiveFields)
+    const sensitiveLines =
+      sensitivePaths.length > 0 ? [`⚠ 敏感字段（本地原值未脱敏）：${sensitivePaths.join("、")}`] : []
     const findingLines = request.assessment.findings.flatMap((item) => [
       `[${riskLabels[item.severity]}] ${item.summary}`,
       `证据：${item.evidence}`,
@@ -239,10 +243,11 @@ export function createPermissionReviewView(
         ],
         headerLinesForWidth: (width) => [
           `判定原因：${request.assessment.reason}`,
+          ...sensitiveLines,
           ...findingLines,
           ...permissionParameterPreview(request, width, 3).lines,
         ],
-        headerHeight: 4 + findingLines.length,
+        headerHeight: 4 + sensitiveLines.length + findingLines.length,
         navigate,
         signal: controller.signal,
       },

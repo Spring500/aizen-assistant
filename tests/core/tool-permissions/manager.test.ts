@@ -100,6 +100,34 @@ describe("ToolPermissionManager", () => {
     ])
   })
 
+  test("第三方验证器额外敏感字段不会发送给AI", async () => {
+    const registry = new ToolPermissionRegistry()
+    registry.register({
+      toolName: "demo",
+      sensitiveFields: ["releaseCode"],
+      validate: async () => ({
+        type: "needAiReview",
+        assessment,
+        reviewPayload: { releaseCode: "REAL-SECRET", path: "release.json" },
+      }),
+    })
+    const requests: unknown[] = []
+    const manager = new ToolPermissionManager({
+      registry,
+      aiReviewer: {
+        review: async (request) => {
+          requests.push(request)
+          return { type: "allow", reason: "允许" }
+        },
+      },
+      humanReviewer: {
+        review: async (request) => ({ batchId: request.batchId, answers: [] }),
+      },
+    })
+    await manager.authorize(base)
+    expect(requests).toMatchObject([{ payload: { releaseCode: "[敏感内容已隐藏]", path: "release.json" } }])
+  })
+
   test("人工无理由拒绝使用明确英文格式", async () => {
     const result = setup({ type: "needHumanReview", assessment })
     result.setHumanDecision({ type: "deny" })

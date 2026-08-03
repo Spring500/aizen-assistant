@@ -116,6 +116,17 @@ test("审批页展示判定原因和结构化 findings", async () => {
   controller.close()
 })
 
+test("第三方敏感字段显示原值并醒目标记", async () => {
+  const value = request("sensitive", "deploy")
+  value.arguments = { releaseCode: "REAL-SECRET-VALUE", endpoint: "https://example.com" }
+  value.sensitiveFields = ["releaseCode"]
+  const { setup, controller } = await setupReview([value])
+  const frame = setup.captureCharFrame()
+  expect(frame).toContain("REAL-SECRET-VALUE")
+  expect(frame).toContain("敏感字段（本地原值未脱敏）：releaseCode")
+  controller.close()
+})
+
 test("edit 完整详情使用 unified diff 专用页面", async () => {
   const value = request("edit-diff", "edit")
   value.assessment.details = {

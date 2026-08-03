@@ -1,3 +1,4 @@
+import type { SensitiveFieldMatcher } from "./sanitizer.ts"
 import type { JsonValue } from "../session-format.ts"
 
 export const permissionModes = ["unrestricted", "hybrid", "hybridConfirmDenials", "aiOnly"] as const
@@ -49,6 +50,8 @@ export type ToolPermissionBatchRequest = {
 
 export type ToolPermissionValidator = {
   toolName: string
+  /** 声明该工具额外需要醒目标记和远程脱敏的敏感字段。 */
+  sensitiveFields?: SensitiveFieldMatcher[]
   validate(request: ToolPermissionRequest, signal?: AbortSignal): Promise<ToolPermissionDecision>
 }
 
@@ -78,7 +81,7 @@ export type HumanReviewRequest = {
   arguments: JsonValue
   assessment: ToolAssessment
   aiDecision?: AiReviewDecision
-  aiError?: string
+  sensitiveFields?: string[]
   createdAt: string
   expiresAt: string
 }

@@ -1,6 +1,7 @@
 import type { JsonValue } from "../session-format.ts"
 
-const sensitiveKey = /(token|password|passwd|secret|api[_-]?key|private[_-]?key|authorization|cookie|credential)/i
+const defaultSensitiveKey =
+  /(token|password|passwd|secret|api[_-]?key|private[_-]?key|authorization|cookie|credential)/i
 const hiddenPayloadKey =
   /(token|password|passwd|secret|api[_-]?key|private[_-]?key|authorization|cookie|credential|content|body)/i
 const maximumStringBytes = 4096
@@ -15,26 +16,58 @@ function truncate(value: string): string {
   return `${result}…[已截断]`
 }
 
-function sanitize(value: JsonValue, key?: string): JsonValue {
-  if (key && hiddenPayloadKey.test(key)) return "[敏感内容已隐藏]"
+function sanitize(value: JsonValue, key?: string, extra: SensitiveFieldMatcher[] = []): JsonValue {
+  if (key && (hiddenPayloadKey.test(key) || matchesSensitiveKey(key, extra))) return "[敏感内容已隐藏]"
   if (typeof value === "string") return truncate(value)
-  if (Array.isArray(value)) return value.map((item) => sanitize(item))
+  if (Array.isArray(value)) return value.map((item) => sanitize(item, undefined, extra))
   if (value && typeof value === "object")
-    return Object.fromEntries(Object.entries(value).map(([childKey, item]) => [childKey, sanitize(item, childKey)]))
+    return Object.fromEntries(
+      Object.entries(value).map(([childKey, item]) => [childKey, sanitize(item, childKey, extra)]),
+    )
   return value
 }
 
 /** 为远程 AI 审核生成有界且经过字段级脱敏的负载。 */
-export function sanitizeReviewPayload(value: JsonValue): JsonValue {
-  const sanitized = sanitize(value)
+export function sanitizeReviewPayload(value: JsonValue, extra: SensitiveFieldMatcher[] = []): JsonValue {
+  const sanitized = sanitize(value, undefined, extra)
   const text = JSON.stringify(sanitized)
   if (Buffer.byteLength(text) <= maximumPayloadBytes) return sanitized
   return { truncated: true, preview: truncate(text.slice(0, maximumStringBytes)) }
 }
 
+export type SensitiveFieldMatcher = RegExp | string
+
+function matchesSensitiveKey(key: string, extra: SensitiveFieldMatcher[] = []): boolean {
+  return (
+    defaultSensitiveKey.test(key) ||
+    extra.some((matcher) => {
+      if (typeof matcher === "string") return matcher.toLowerCase() === key.toLowerCase()
+      matcher.lastIndex = 0
+      return matcher.test(key)
+    })
+  )
+}
+
+/** 返回对象中所有敏感字段的点分路径，供本地界面醒目标记而不隐藏原值。 */
+export function sensitiveFieldPaths(value: JsonValue, extra: SensitiveFieldMatcher[] = []): string[] {
+  const result: string[] = []
+  const visit = (current: JsonValue, path: string) => {
+    if (Array.isArray(current)) {
+      for (const [index, item] of current.entries()) visit(item, path ? `${path}.${index}` : String(index))
+      return
+    }
+    if (!current || typeof current !== "object") return
+    for (const [key, child] of Object.entries(current)) {
+      const childPath = path ? `${path}.${key}` : key
+      if (matchesSensitiveKey(key, extra)) result.push(childPath)
+      visit(child, childPath)
+    }
+  }
+  visit(value, "")
+  return result
+}
+
 /** 判断对象字段是否明确包含不应发送给审核模型的敏感内容。 */
-export function containsSensitiveField(value: JsonValue): boolean {
-  if (Array.isArray(value)) return value.some(containsSensitiveField)
-  if (!value || typeof value !== "object") return false
-  return Object.entries(value).some(([key, child]) => sensitiveKey.test(key) || containsSensitiveField(child))
+export function containsSensitiveField(value: JsonValue, extra: SensitiveFieldMatcher[] = []): boolean {
+  return sensitiveFieldPaths(value, extra).length > 0
 }
