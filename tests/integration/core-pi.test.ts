@@ -296,7 +296,11 @@ test("真实 pi 链路执行项目自有联合注册工具", async () => {
     await core.dispatch({ type: "create_session", model: option, viewId: null, permissionMode: "hybrid" })
     const sending = core.dispatch({ type: "send_prompt", text: "调用注册工具" })
     const first = await mock.take({ modelId: option.modelId })
-    expect(JSON.stringify(first.tools)).toContain("registered_echo")
+    const registered = (first.tools as Array<{ name?: string; input_schema?: Record<string, unknown> }>).find(
+      (tool) => tool.name === "registered_echo",
+    )
+    expect(registered?.input_schema?.properties).toHaveProperty("declaredIntent")
+    expect(registered?.input_schema?.required).toContain("declaredIntent")
     first.respond({
       type: "tool_call",
       name: "registered_echo",

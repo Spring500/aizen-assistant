@@ -302,89 +302,111 @@ function registeredTools(
   activePrompt: () => PiPromptInput | undefined,
   recordExecution: PiPermissionExecutionHandler | undefined,
 ): ToolDefinition[] {
-  return registrations.map((registration) => ({
-    name: registration.descriptor.name,
-    label: registration.descriptor.label,
-    description: registration.descriptor.description,
-    parameters: registration.descriptor.parameters as never,
-    ...(registration.descriptor.executionMode ? { executionMode: registration.descriptor.executionMode } : {}),
-    async execute(callId, params, signal, onUpdate) {
-      const source = params as Record<string, unknown> & { declaredIntent?: string }
-      const declaredIntent = source.declaredIntent ?? `执行 ${registration.descriptor.name}`
-      const { declaredIntent: _declaredIntent, ...argumentsValue } = source
-      const call = {
-        callId,
-        name: registration.descriptor.name,
-        arguments: jsonValue(argumentsValue),
-        declaredIntent,
-        ...(signal ? { signal } : {}),
-      }
-      register(call)
-      const authorization = await authorize(call)
-      const prompt = activePrompt()
-      const request = prompt?.sessionId
-        ? {
-            sessionId: prompt.sessionId,
-            turnId: prompt.turnId,
-            toolCallId: callId,
-            toolName: registration.descriptor.name,
-            arguments: authorization.arguments,
-            declaredIntent,
-            cwd,
-            mode: prompt.permissionMode ?? "hybrid",
-          }
-        : undefined
-      if (request)
-        await recordExecution?.({
-          phase: "executionStarted",
-          request,
-          authorization,
-          at: new Date().toISOString(),
-        })
-      try {
-        const result = await registration.execute({
-          toolCallId: callId,
-          cwd,
-          arguments: authorization.arguments,
+  const declaredIntentSchema = Type.String({
+    minLength: 1,
+    maxLength: 50,
+    description: "用不超过 50 个字符的一句话说明本次工具调用的目的，供用户阅读和审计",
+  })
+  return registrations.map((registration) => {
+    const schema = registration.descriptor.parameters
+    if (!schema || typeof schema !== "object" || Array.isArray(schema) || schema.type !== "object")
+      throw new Error(`工具 ${registration.descriptor.name} 的参数 Schema 顶层必须是 object`)
+    const properties =
+      schema.properties && typeof schema.properties === "object" && !Array.isArray(schema.properties)
+        ? schema.properties
+        : {}
+    const required = Array.isArray(schema.required)
+      ? schema.required.filter((item): item is string => typeof item === "string")
+      : []
+    const parameters = {
+      ...schema,
+      properties: { ...properties, declaredIntent: declaredIntentSchema },
+      required: [...new Set([...required, "declaredIntent"])],
+    }
+    return {
+      name: registration.descriptor.name,
+      label: registration.descriptor.label,
+      description: registration.descriptor.description,
+      parameters: parameters as never,
+      ...(registration.descriptor.executionMode ? { executionMode: registration.descriptor.executionMode } : {}),
+      async execute(callId, params, signal, onUpdate) {
+        const source = params as Record<string, unknown> & { declaredIntent: string }
+        const declaredIntent = source.declaredIntent
+        const { declaredIntent: _declaredIntent, ...argumentsValue } = source
+        const call = {
+          callId,
+          name: registration.descriptor.name,
+          arguments: jsonValue(argumentsValue),
+          declaredIntent,
           ...(signal ? { signal } : {}),
-          ...(onUpdate
-            ? {
-                onUpdate: (update) =>
-                  onUpdate({
-                    content: update.content.map((item) =>
-                      item.type === "text"
-                        ? { type: "text" as const, text: item.text }
-                        : { type: "image" as const, data: item.data, mimeType: item.mimeType },
-                    ),
-                    details: update.details,
-                  } as never),
-              }
-            : {}),
-        })
+        }
+        register(call)
+        const authorization = await authorize(call)
+        const prompt = activePrompt()
+        const request = prompt?.sessionId
+          ? {
+              sessionId: prompt.sessionId,
+              turnId: prompt.turnId,
+              toolCallId: callId,
+              toolName: registration.descriptor.name,
+              arguments: authorization.arguments,
+              declaredIntent,
+              cwd,
+              mode: prompt.permissionMode ?? "hybrid",
+            }
+          : undefined
         if (request)
           await recordExecution?.({
-            phase: "executionFinished",
+            phase: "executionStarted",
             request,
             authorization,
-            isError: false,
             at: new Date().toISOString(),
           })
-        return result as never
-      } catch (error) {
-        const normalized = normalizeToolFailure(registration.descriptor.name, error, signal)
-        if (request)
-          await recordExecution?.({
-            phase: "executionFinished",
-            request,
-            authorization,
-            isError: true,
-            error: normalized.message,
-            at: new Date().toISOString(),
+        try {
+          const result = await registration.execute({
+            toolCallId: callId,
+            cwd,
+            arguments: authorization.arguments,
+            ...(signal ? { signal } : {}),
+            ...(onUpdate
+              ? {
+                  onUpdate: (update) =>
+                    onUpdate({
+                      content: update.content.map((item) =>
+                        item.type === "text"
+                          ? { type: "text" as const, text: item.text }
+                          : { type: "image" as const, data: item.data, mimeType: item.mimeType },
+                      ),
+                      details: update.details,
+                    } as never),
+                }
+              : {}),
           })
-        throw new Error(normalized.message)
-      }
-    },
-  }))
+          if (request)
+            await recordExecution?.({
+              phase: "executionFinished",
+              request,
+              authorization,
+              isError: false,
+              at: new Date().toISOString(),
+            })
+          return result as never
+        } catch (error) {
+          const normalized = normalizeToolFailure(registration.descriptor.name, error, signal)
+          if (request)
+            await recordExecution?.({
+              phase: "executionFinished",
+              request,
+              authorization,
+              isError: true,
+              error: normalized.message,
+              at: new Date().toISOString(),
+            })
+          throw new Error(normalized.message)
+        }
+      },
+    }
+  })
 }
 
 export class PiSessionRuntime implements PiPort {
