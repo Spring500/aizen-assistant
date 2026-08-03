@@ -95,11 +95,17 @@ test("恢复时把已开始但未结束的工具标记为需先检查而不自�
     toolCallId: "call",
     event: { recoveryChecks: ["检查目标文件内容"] },
   })
-  expect(
-    loaded.records.find(
-      (record) => record.kind === "message" && record.message.role === "tool" && record.message.callId === "call",
-    ),
-  ).toMatchObject({ message: { isError: true, details: { interrupted: true, executionStarted: true } } })
+  const interruptedResult = loaded.records.find(
+    (record) => record.kind === "message" && record.message.role === "tool" && record.message.callId === "call",
+  )
+  expect(interruptedResult).toMatchObject({
+    message: { isError: true, details: { interrupted: true, executionStarted: true } },
+  })
+  if (interruptedResult?.kind === "message" && interruptedResult.message.role === "tool")
+    expect(interruptedResult.message.parts[0]).toMatchObject({
+      kind: "text",
+      text: expect.stringContaining("Operation interrupted:"),
+    })
   expect(loaded.records.at(-1)).toMatchObject({ kind: "turn_finished", outcome: "failed" })
   expect(
     core

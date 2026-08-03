@@ -46,6 +46,7 @@ import type { ToolAuthorization, ToolPermissionRequest } from "../core/tool-perm
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
 import { PiPermissionReviewer } from "./permission-reviewer.ts"
 import { generateSessionTitle } from "./session-title-generator.ts"
+import { normalizeToolFailure } from "./tool-failure.ts"
 
 export type PiSessionRuntimeOptions = {
   authPath: string
@@ -273,16 +274,17 @@ function auditedTools(
           })
         return result
       } catch (error) {
+        const normalized = normalizeToolFailure(tool.name, error, signal)
         if (request)
           await recordExecution?.({
             phase: "executionFinished",
             request,
             authorization,
             isError: true,
-            error: error instanceof Error ? error.message : String(error),
+            error: normalized.message,
             at: new Date().toISOString(),
           })
-        throw error
+        throw new Error(normalized.message)
       }
     },
   }))

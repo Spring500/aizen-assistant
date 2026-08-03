@@ -596,8 +596,8 @@ export class AizenCore implements CorePort {
               {
                 kind: "text",
                 text: wasStarted
-                  ? "应用在该工具执行期间异常终止。操作可能未执行、部分执行或已完成；禁止直接重试，请先检查实际状态。"
-                  : "应用在执行该工具前异常终止；该调用没有开始执行。",
+                  ? "Operation interrupted: The application stopped after execution started. The operation may not have run, may have partially run, or may have completed. Verify the target state before attempting another change."
+                  : "Operation interrupted: The application stopped before execution started. The tool call did not run.",
               },
             ],
             isError: true,
