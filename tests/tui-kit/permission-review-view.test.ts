@@ -13,10 +13,10 @@ afterEach(() => {
   for (const renderer of renderers.splice(0)) renderer.renderer.destroy()
 })
 
-function key(value: string): KeyEvent {
+function key(value: string, modifiers: { ctrl?: boolean } = {}): KeyEvent {
   const parsed = parseKeypress(value)
   if (!parsed) throw new Error("按键无效")
-  return new KeyEvent(parsed)
+  return new KeyEvent({ ...parsed, ...modifiers })
 }
 
 function request(id: string, toolName: string): HumanReviewRequest {
@@ -72,8 +72,10 @@ test("审批页逐项决定后进入汇总并统一提交", async () => {
   await Bun.sleep(1)
   await setup.renderOnce()
   expect(answers).toEqual([])
-  expect(setup.captureCharFrame()).toContain("工具权限审核 · 汇总 1 项")
-  setup.renderer.keyInput.emit("keypress", key("\r"))
+  const summaryFrame = setup.captureCharFrame()
+  expect(summaryFrame).toContain("工具权限审核 · 汇总 1 项")
+  expect(summaryFrame).toContain("拒绝理由：不允许修改依赖")
+  setup.renderer.keyInput.emit("keypress", key("\x0d", { ctrl: true }))
   await Bun.sleep(1)
   expect(answers).toEqual([
     {
@@ -82,6 +84,23 @@ test("审批页逐项决定后进入汇总并统一提交", async () => {
       answers: [{ requestId: "one", decision: "deny", reason: "不允许修改依赖" }],
     },
   ])
+  controller.close()
+})
+
+test("汇总页可选择具体工具返回修改", async () => {
+  const { setup, answers, controller } = await setupReview([request("one", "bash"), request("two", "write")])
+  setup.renderer.keyInput.emit("keypress", key("\r"))
+  await Bun.sleep(1)
+  setup.renderer.keyInput.emit("keypress", key("\r"))
+  await Bun.sleep(1)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).toContain("工具权限审核 · 汇总 2 项")
+  setup.renderer.keyInput.emit("keypress", key("\x1b[D"))
+  setup.renderer.keyInput.emit("keypress", key("\r"))
+  await Bun.sleep(1)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).toContain("工具权限审核 · 工具 1/2")
+  expect(answers).toEqual([])
   controller.close()
 })
 
@@ -220,7 +239,7 @@ test("长命令滚动到详情末尾后允许通过并在汇总提交", async ()
   await Bun.sleep(1)
   setup.renderer.keyInput.emit("keypress", key("\r"))
   await Bun.sleep(1)
-  setup.renderer.keyInput.emit("keypress", key("\r"))
+  setup.renderer.keyInput.emit("keypress", key("\x0d", { ctrl: true }))
   await Bun.sleep(1)
   expect(answers).toEqual([
     { decision: "submit", batchId: "batch", answers: [{ requestId: "unlock", decision: "approve" }] },

@@ -1,4 +1,4 @@
-import { TextRenderable } from "@opentui/core"
+import { CliRenderEvents, TextRenderable } from "@opentui/core"
 import { sensitiveFieldPaths } from "../core/tool-permissions/sanitizer.ts"
 import type { HumanReviewRequest } from "../core/tool-permissions/types.ts"
 import { selectEditableItem } from "./editable-selector.ts"
@@ -150,6 +150,123 @@ export type PermissionReviewController = {
 }
 
 type DraftDecision = { decision: "approve" } | { decision: "deny"; reason?: string }
+
+type SummaryResult = { type: "submit" } | { type: "return"; index: number } | { type: "abort" }
+
+async function showPermissionSummary(
+  overlays: OverlayManager,
+  requests: HumanReviewRequest[],
+  decisions: Map<string, DraftDecision>,
+  initialIndex: number,
+  signal?: AbortSignal,
+): Promise<SummaryResult> {
+  return new Promise((resolve) => {
+    const pageSize = 16
+    let settled = false
+    let selected = Math.max(0, Math.min(initialIndex, requests.length - 1))
+    let offset = 0
+    let lineStarts: number[] = []
+    let lines: string[] = []
+    const handle = overlays.open({
+      id: `permission-summary-${requests[0]?.batchId ?? "batch"}`,
+      title: `工具权限审核 · 汇总 ${requests.length} 项`,
+      description: "←/→ 选择要返回修改的工具；Ctrl+Enter 确认提交",
+      contentHeight: pageSize,
+      actions: [],
+      ...(signal ? { signal } : {}),
+      onCancel: () => finish({ type: "abort" }),
+    })
+    const content = new TextRenderable(overlays.renderer, {
+      id: `permission-summary-${requests[0]?.batchId ?? "batch"}-content`,
+      position: "absolute",
+      width: "100%",
+      height: "100%",
+      wrapMode: "none",
+      truncate: true,
+      fg: systemColors.secondary,
+      content: "",
+    })
+    handle.content.add(content)
+
+    const buildLines = () => {
+      const result: string[] = []
+      lineStarts = []
+      for (const [index, request] of requests.entries()) {
+        lineStarts.push(result.length)
+        const decision = decisions.get(request.requestId)
+        const marker = index === selected ? "▶" : " "
+        const state =
+          decision?.decision === "approve" ? "✓ 通过" : decision?.decision === "deny" ? "✗ 拒绝" : "○ 未决定"
+        result.push(`${marker} ${index + 1}. ${request.toolName} · ${state}`)
+        for (const line of permissionParameterPreview(request, overlays.renderer.terminalWidth, 3).lines)
+          result.push(`    ${line}`)
+        if (decision?.decision === "deny") result.push(`    拒绝理由：${decision.reason ?? "未提供"}`)
+        result.push("")
+      }
+      lines = result
+    }
+    const render = (ensureSelected = false) => {
+      buildLines()
+      if (ensureSelected) {
+        const start = lineStarts[selected] ?? 0
+        const next = lineStarts[selected + 1] ?? lines.length
+        if (start < offset) offset = start
+        else if (next > offset + pageSize) offset = Math.max(start, next - pageSize)
+      }
+      offset = Math.max(0, Math.min(offset, Math.max(0, lines.length - pageSize)))
+      content.content = lines.slice(offset, offset + pageSize).join("\n")
+      handle.setDescription(
+        `已选择 ${selected + 1}/${requests.length}；←/→ 选择工具，Enter 返回修改，Ctrl+Enter 确认提交`,
+      )
+    }
+    const finish = (result: SummaryResult) => {
+      if (settled) return
+      settled = true
+      overlays.renderer.off(CliRenderEvents.RESIZE, onResize)
+      handle.close()
+      resolve(result)
+    }
+    const onResize = () => render(true)
+    overlays.renderer.on(CliRenderEvents.RESIZE, onResize)
+    handle.setActions([
+      {
+        id: "tool",
+        key: { name: "left" },
+        alternateKeys: [{ name: "right" }],
+        label: "←/→ 选择工具",
+        run: (key) => {
+          selected = Math.max(0, Math.min(requests.length - 1, selected + (key.name === "left" ? -1 : 1)))
+          render(true)
+        },
+      },
+      {
+        id: "scroll",
+        key: { name: "up" },
+        alternateKeys: [{ name: "down" }, { name: "pageup" }, { name: "pagedown" }],
+        label: "↑↓ 滚动",
+        run: (key) => {
+          const delta = key.name === "up" ? -1 : key.name === "down" ? 1 : key.name === "pageup" ? -pageSize : pageSize
+          offset += delta
+          render()
+        },
+      },
+      {
+        id: "return",
+        key: { name: "return" },
+        label: "Enter 返回修改",
+        run: () => finish({ type: "return", index: selected }),
+      },
+      {
+        id: "submit",
+        key: { name: "return", ctrl: true },
+        label: "Ctrl+Enter 确认提交",
+        run: () => finish({ type: "submit" }),
+      },
+      { id: "cancel", key: { name: "escape" }, label: "Esc 中止", run: () => finish({ type: "abort" }) },
+    ])
+    render(true)
+  })
+}
 
 /** 打开工具批次审核页；逐项决定后只在汇总页一次提交。 */
 export function createPermissionReviewView(
@@ -304,65 +421,38 @@ export function createPermissionReviewView(
   const openSummary = () => {
     const batchId = queue[0]?.batchId
     if (!batchId) return
+    if (!queue.every((request) => decisions.has(request.requestId))) {
+      current = queue.findIndex((request) => !decisions.has(request.requestId))
+      open()
+      return
+    }
     controller = new AbortController()
     const abort = () => controller?.abort()
     signal?.addEventListener("abort", abort, { once: true })
-    const complete = queue.every((request) => decisions.has(request.requestId))
-    const summaryLines = queue.flatMap((request, index) => {
-      const decision = decisions.get(request.requestId)
-      const preview = permissionParameterPreview(request, overlays.renderer.terminalWidth).lines
-      return [
-        `${decision?.decision === "approve" ? "✓" : decision?.decision === "deny" ? "✗" : "○"} ${index + 1}. ${request.toolName} · ${decision?.decision === "approve" ? "通过" : decision?.decision === "deny" ? "拒绝" : "未决定"}`,
-        ...preview,
-      ]
-    })
-    void selectEditableItem<"submit" | "return">(
-      overlays,
-      `permission-summary-${batchId}`,
-      () => [
-        {
-          name: "确认提交",
-          description: complete ? "提交后各工具才会分别继续执行或返回拒绝" : "仍有工具没有决定",
-          value: "submit",
-          tone: "success",
-          disabled: !complete,
-          disabledReason: "所有工具都有决定后才能提交",
-        },
-        { name: "返回修改", description: "返回最后一个工具页修改决定", value: "return", tone: "primary" },
-      ],
-      {
-        title: `工具权限审核 · 汇总 ${queue.length} 项`,
-        headerLines: summaryLines,
-        navigate,
-        signal: controller.signal,
+    void showPermissionSummary(overlays, queue, decisions, Math.max(0, queue.length - 1), controller.signal).then(
+      (result) => {
+        signal?.removeEventListener("abort", abort)
+        if (closed) return
+        if (result.type === "abort") {
+          answer({ decision: "abort", batchId })
+          return
+        }
+        if (result.type === "return") {
+          current = result.index
+          open()
+          return
+        }
+        answer({
+          decision: "submit",
+          batchId,
+          answers: queue.map((request) => {
+            const decision = decisions.get(request.requestId)
+            if (!decision) throw new Error("权限批次存在未决定项")
+            return { requestId: request.requestId, ...decision }
+          }),
+        })
       },
-    ).then((selection) => {
-      signal?.removeEventListener("abort", abort)
-      if (closed) return
-      if (navigationPending) {
-        navigationPending = false
-        queueMicrotask(open)
-        return
-      }
-      if (!selection) {
-        answer({ decision: "abort", batchId })
-        return
-      }
-      if (selection === "return") {
-        current = Math.max(0, queue.length - 1)
-        open()
-        return
-      }
-      answer({
-        decision: "submit",
-        batchId,
-        answers: queue.map((request) => {
-          const decision = decisions.get(request.requestId)
-          if (!decision) throw new Error("权限批次存在未决定项")
-          return { requestId: request.requestId, ...decision }
-        }),
-      })
-    })
+    )
   }
 
   open()
