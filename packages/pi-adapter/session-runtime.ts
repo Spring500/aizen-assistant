@@ -703,6 +703,11 @@ export class PiSessionRuntime implements PiPort {
   #requireAllowed(authorization: ToolAuthorization): Extract<ToolAuthorization, { type: "allow" }> {
     if (authorization.type === "allow") return authorization
     if (authorization.type === "aborted") throw new Error(authorization.reason)
+    if (
+      authorization.source === "validator" &&
+      authorization.assessment?.findings.some((item) => item.category === "edit-preview")
+    )
+      throw new Error(`Operation failed: ${authorization.reason}`)
     throw new Error(
       authorization.reason.startsWith("Operation denied:")
         ? authorization.reason

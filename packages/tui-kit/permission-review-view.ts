@@ -37,16 +37,16 @@ async function showEvidence(
   const details = request.assessment.details
   if (request.toolName === "edit" && details && typeof details === "object" && !Array.isArray(details)) {
     const patch = typeof details.patch === "string" ? details.patch : undefined
-    const previewError = typeof details.previewError === "string" ? details.previewError : undefined
-    await showPermissionDiff(overlays, {
-      id: `permission-edit-diff-${request.requestId}`,
-      title: `编辑预览：${request.assessment.targets[0] ?? request.toolName}`,
-      ...(patch ? { patch } : {}),
-      ...(previewError ? { error: previewError } : {}),
-      ...(signal ? { signal } : {}),
-      onViewedToEnd,
-    })
-    return
+    if (patch) {
+      await showPermissionDiff(overlays, {
+        id: `permission-edit-diff-${request.requestId}`,
+        title: `编辑预览：${request.assessment.targets[0] ?? request.toolName}`,
+        patch,
+        ...(signal ? { signal } : {}),
+        onViewedToEnd,
+      })
+      return
+    }
   }
   const full = evidence(request)
   const findings = request.assessment.findings

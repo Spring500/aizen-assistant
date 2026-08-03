@@ -54,7 +54,7 @@ test("edit 成功预演精确替换并生成 unified diff", async () => {
   expect(JSON.stringify(result.assessment.details)).toContain("+const newValue = 2")
 })
 
-test("edit 匹配失败转人工并说明失败替换块", async () => {
+test("edit 匹配失败直接返回无法执行", async () => {
   const root = await setup()
   await writeFile(join(root, "source.ts"), "const value = 1\n")
   const result = await createFileValidator("edit").validate(
@@ -63,7 +63,7 @@ test("edit 匹配失败转人工并说明失败替换块", async () => {
       edits: [{ oldText: "const missing = 1", newText: "const value = 2" }],
     }),
   )
-  expect(result.type).toBe("needHumanReview")
+  expect(result.type).toBe("deny")
   expect(result.assessment.reason).toContain("没有匹配")
   expect(result.assessment.findings).toMatchObject([{ category: "edit-preview" }])
 })

@@ -220,7 +220,7 @@ export function createFileValidator(toolName: "read" | "write" | "edit"): ToolPe
             evidence: localDetails.previewError,
           },
         ]
-        return { type: "needHumanReview", assessment: analyzed }
+        return { type: "deny", reason: analyzed.reason, assessment: analyzed }
       }
       const root = await realpath(request.cwd).catch(() => resolve(request.cwd))
       if (!inside(root, resolved.target) || sensitivePath(resolved.target)) {
