@@ -1,3 +1,4 @@
+import type { AizenToolRegistration } from "./tool-registry.ts"
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
 import type {
   AiPermissionReviewer,
@@ -115,6 +116,8 @@ export interface PiPort {
   prompt(input: PiPromptInput): Promise<void>
   /** 使用独立模型请求为首条用户消息生成经过校验的会话标题。 */
   generateSessionTitle(input: PiSessionTitleInput): Promise<string>
+  /** 设置经过联合注册的项目自有工具；adapter 负责转换到当前 Agent Loop。 */
+  setToolRegistrations?(registrations: AizenToolRegistration[]): void
   /** 设置核心提供的工具批次权限处理器。 */
   setPermissionBatchHandler?(handler: PiPermissionBatchHandler | undefined): void
   /** 设置核心提供的单工具权限处理器，仅供旧适配器兼容。 */

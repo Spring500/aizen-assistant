@@ -237,6 +237,82 @@ test("真实 pi 链路统一提交同一消息中的多工具人工审批", asyn
   }
 }, 30000)
 
+test("真实 pi 链路执行项目自有联合注册工具", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aizen-integration-registered-tool-"))
+  directories.push(root)
+  const mock = await startMockServer()
+  try {
+    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+    await pi.setRuntimeApiKey("anthropic", "test-key")
+    const models = await pi.listModels()
+    const option = models.find((item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6")
+    if (!option) throw new Error("缺少集成测试模型")
+    pi.setModelBaseUrl(option.providerId, option.modelId, mock.url)
+    const core = new AizenCore({
+      cwd: root,
+      store: new SessionStore(join(root, "sessions")),
+      pi,
+      toolRegistrations: [
+        {
+          kind: "inProcess",
+          descriptor: {
+            name: "registered_echo",
+            label: "registered_echo",
+            description: "返回输入文本",
+            parameters: {
+              type: "object",
+              properties: { text: { type: "string" }, declaredIntent: { type: "string" } },
+              required: ["text", "declaredIntent"],
+            },
+          },
+          validator: {
+            toolName: "registered_echo",
+            validate: async (request) => ({
+              type: "allow",
+              assessment: {
+                summary: "返回输入文本",
+                targets: [],
+                risk: "low",
+                reason: "无副作用",
+                findings: [],
+                normalizedArguments: request.arguments,
+              },
+            }),
+          },
+          execute: async ({ arguments: args }) => ({
+            content: [
+              {
+                type: "text",
+                text:
+                  args && typeof args === "object" && !Array.isArray(args) && typeof args.text === "string"
+                    ? args.text
+                    : "",
+              },
+            ],
+          }),
+        },
+      ],
+    })
+    await core.dispatch({ type: "create_session", model: option, viewId: null, permissionMode: "hybrid" })
+    const sending = core.dispatch({ type: "send_prompt", text: "调用注册工具" })
+    const first = await mock.take({ modelId: option.modelId })
+    expect(JSON.stringify(first.tools)).toContain("registered_echo")
+    first.respond({
+      type: "tool_call",
+      name: "registered_echo",
+      arguments: { text: "联合注册成功", declaredIntent: "回显测试文本" },
+      callId: "registered-call",
+    })
+    const second = await mock.take({ modelId: option.modelId })
+    expect(JSON.stringify(second.messages)).toContain("联合注册成功")
+    second.respond({ type: "text", text: "完成" })
+    expect(await sending).toEqual({ ok: true })
+    await core.dispose()
+  } finally {
+    mock.stop()
+  }
+}, 30000)
+
 test("真实 pi 链路并行完成主回复和工具式自动命名", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-"))
   directories.push(root)

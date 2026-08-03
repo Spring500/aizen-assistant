@@ -73,19 +73,29 @@ test("Core允许第三方工具注入同一验证器接口", async () => {
     cwd: root,
     store: new SessionStore(join(root, "sessions")),
     pi,
-    permissionValidators: [
+    toolRegistrations: [
       {
-        toolName: "unknown",
-        validate: async () => ({
-          type: "allow",
-          assessment: {
-            summary: "第三方工具",
-            targets: [],
-            risk: "low",
-            reason: "第三方固定规则允许",
-            findings: [],
-          },
-        }),
+        kind: "inProcess",
+        descriptor: {
+          name: "unknown",
+          label: "unknown",
+          description: "测试第三方工具",
+          parameters: { type: "object" },
+        },
+        validator: {
+          toolName: "unknown",
+          validate: async () => ({
+            type: "allow",
+            assessment: {
+              summary: "第三方工具",
+              targets: [],
+              risk: "low",
+              reason: "第三方固定规则允许",
+              findings: [],
+            },
+          }),
+        },
+        execute: async () => ({ content: [{ type: "text", text: "完成" }] }),
       },
     ],
   })

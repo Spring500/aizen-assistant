@@ -29,10 +29,10 @@ import type {
   HumanReviewBatchRequest,
   PermissionAuditEvent,
   PermissionMode,
-  ToolPermissionValidator,
 } from "./tool-permissions/types.ts"
 import { createBashValidator } from "./tool-permissions/validators/bash.ts"
 import { createFileValidator } from "./tool-permissions/validators/file.ts"
+import { validateToolRegistrations, type AizenToolRegistration } from "./tool-registry.ts"
 import type { ViewStore } from "./view-store.ts"
 
 export type ExtraMessageProvider = (input: {
@@ -51,7 +51,7 @@ export type AizenCoreOptions = {
   extraMessages?: ExtraMessageProvider
   modelConfigStore?: ModelConfigStore
   preferencesStore?: AppPreferencesStore
-  permissionValidators?: ToolPermissionValidator[]
+  toolRegistrations?: AizenToolRegistration[]
 }
 
 function sessionModel(model: ModelReference): ModelReference {
@@ -71,7 +71,7 @@ export class AizenCore implements CorePort {
   readonly #extraMessages: ExtraMessageProvider
   readonly #modelConfigStore: ModelConfigStore | undefined
   readonly #preferencesStore: AppPreferencesStore | undefined
-  readonly #permissionValidators: ToolPermissionValidator[]
+  readonly #toolRegistrations: AizenToolRegistration[]
   readonly #listeners = new Set<(event: CoreEvent) => void>()
   readonly #unsubscribePi: () => void
   readonly #permissionManager: ToolPermissionManager | undefined
@@ -116,9 +116,11 @@ export class AizenCore implements CorePort {
     this.#extraMessages = options.extraMessages ?? (async () => [])
     this.#modelConfigStore = options.modelConfigStore
     this.#preferencesStore = options.preferencesStore
-    this.#permissionValidators = options.permissionValidators ?? []
+    this.#toolRegistrations = options.toolRegistrations ?? []
+    validateToolRegistrations(this.#toolRegistrations)
     this.#unsubscribePi = this.#pi.subscribe((event) => this.#handlePiEvent(event))
     this.#permissionManager = this.#createPermissionManager()
+    this.#pi.setToolRegistrations?.(this.#toolRegistrations)
     this.#pi.setPermissionBatchHandler?.((batch, signal) => {
       if (!this.#permissionManager)
         return Promise.resolve({
@@ -906,7 +908,7 @@ export class AizenCore implements CorePort {
     registry.register(createFileValidator("read"))
     registry.register(createFileValidator("write"))
     registry.register(createFileValidator("edit"))
-    for (const validator of this.#permissionValidators) registry.register(validator)
+    for (const registration of this.#toolRegistrations) registry.register(registration.validator)
     return new ToolPermissionManager({
       registry,
       aiReviewer: {

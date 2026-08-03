@@ -41,6 +41,7 @@ import type {
   PiSessionTitleInput,
   ViewRuntimeInput,
 } from "../core/pi-port.ts"
+import type { AizenToolRegistration } from "../core/tool-registry.ts"
 import type { JsonValue, ModelReference, SessionRecord } from "../core/session-format.ts"
 import type { ToolAuthorization, ToolPermissionRequest } from "../core/tool-permissions/types.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
@@ -290,6 +291,99 @@ function auditedTools(
   }))
 }
 
+function registeredTools(
+  cwd: string,
+  registrations: AizenToolRegistration[],
+  authorize: Parameters<typeof auditedTools>[1],
+  register: Parameters<typeof auditedTools>[2],
+  activePrompt: () => PiPromptInput | undefined,
+  recordExecution: PiPermissionExecutionHandler | undefined,
+): ToolDefinition[] {
+  return registrations.map((registration) => ({
+    name: registration.descriptor.name,
+    label: registration.descriptor.label,
+    description: registration.descriptor.description,
+    parameters: registration.descriptor.parameters as never,
+    ...(registration.descriptor.executionMode ? { executionMode: registration.descriptor.executionMode } : {}),
+    async execute(callId, params, signal, onUpdate) {
+      const source = params as Record<string, unknown> & { declaredIntent?: string }
+      const declaredIntent = source.declaredIntent ?? `执行 ${registration.descriptor.name}`
+      const { declaredIntent: _declaredIntent, ...argumentsValue } = source
+      const call = {
+        callId,
+        name: registration.descriptor.name,
+        arguments: jsonValue(argumentsValue),
+        declaredIntent,
+        ...(signal ? { signal } : {}),
+      }
+      register(call)
+      const authorization = await authorize(call)
+      const prompt = activePrompt()
+      const request = prompt?.sessionId
+        ? {
+            sessionId: prompt.sessionId,
+            turnId: prompt.turnId,
+            toolCallId: callId,
+            toolName: registration.descriptor.name,
+            arguments: authorization.arguments,
+            declaredIntent,
+            cwd,
+            mode: prompt.permissionMode ?? "hybrid",
+          }
+        : undefined
+      if (request)
+        await recordExecution?.({
+          phase: "executionStarted",
+          request,
+          authorization,
+          at: new Date().toISOString(),
+        })
+      try {
+        const result = await registration.execute({
+          toolCallId: callId,
+          cwd,
+          arguments: authorization.arguments,
+          ...(signal ? { signal } : {}),
+          ...(onUpdate
+            ? {
+                onUpdate: (update) =>
+                  onUpdate({
+                    content: update.content.map((item) =>
+                      item.type === "text"
+                        ? { type: "text" as const, text: item.text }
+                        : { type: "image" as const, data: item.data, mimeType: item.mimeType },
+                    ),
+                    details: update.details,
+                  } as never),
+              }
+            : {}),
+        })
+        if (request)
+          await recordExecution?.({
+            phase: "executionFinished",
+            request,
+            authorization,
+            isError: false,
+            at: new Date().toISOString(),
+          })
+        return result as never
+      } catch (error) {
+        const normalized = normalizeToolFailure(registration.descriptor.name, error, signal)
+        if (request)
+          await recordExecution?.({
+            phase: "executionFinished",
+            request,
+            authorization,
+            isError: true,
+            error: normalized.message,
+            at: new Date().toISOString(),
+          })
+        throw new Error(normalized.message)
+      }
+    },
+  }))
+}
+
 export class PiSessionRuntime implements PiPort {
   readonly #modelRuntime: ModelRuntime
   readonly #modelsPath: string | null
@@ -298,6 +392,7 @@ export class PiSessionRuntime implements PiPort {
   #modelBaseUrls = new Map<string, string>()
   #modelConfigError: Error | undefined
   #permissionBatchHandler: PiPermissionBatchHandler | undefined
+  #toolRegistrations: AizenToolRegistration[] = []
   #permissionHandler: PiPermissionHandler | undefined
   #permissionBatch: PermissionBatchState | undefined
   #permissionExecutionHandler: PiPermissionExecutionHandler | undefined
@@ -359,45 +454,68 @@ export class PiSessionRuntime implements PiPort {
     this.#cwd = input.cwd
     const sessionManager = SessionManager.inMemory(input.cwd)
     this.#restoreEntries(sessionManager, records)
+    const authorizeTool = async (call: {
+      callId: string
+      name: string
+      arguments: JsonValue
+      declaredIntent: string
+      signal?: AbortSignal
+    }) => {
+      const prompt = this.#activePrompt
+      if (!prompt?.sessionId) throw new Error("工具权限处理器尚未初始化")
+      const request: ToolPermissionRequest = {
+        sessionId: prompt.sessionId,
+        turnId: prompt.turnId,
+        toolCallId: call.callId,
+        toolName: call.name,
+        arguments: call.arguments,
+        declaredIntent: call.declaredIntent,
+        cwd: input.cwd,
+        mode: prompt.permissionMode ?? "hybrid",
+        ...(call.name === "bash" ? { environment: { shell: this.#shellKind() } } : {}),
+      }
+      if (!this.#permissionBatchHandler) {
+        if (!this.#permissionHandler) throw new Error("工具权限处理器尚未初始化")
+        return this.#requireAllowed(await this.#permissionHandler(request, call.signal))
+      }
+      const batch = this.#permissionBatch
+      if (!batch) throw new Error("工具权限批次尚未开始收集")
+      batch.requests.set(call.callId, request)
+      return this.#requireAllowed(
+        await new Promise<ToolAuthorization>((resolve, reject) => {
+          batch.pending.set(call.callId, { resolve, reject })
+        }),
+      )
+    }
+    const registerTool = (call: {
+      callId: string
+      name: string
+      arguments: JsonValue
+      declaredIntent: string
+      signal?: AbortSignal
+    }) => this.#registerPermissionCall(input.cwd, call)
+    const builtInTools = auditedTools(
+      input.cwd,
+      authorizeTool,
+      registerTool,
+      () => this.#activePrompt,
+      this.#permissionExecutionHandler,
+    )
+    const customTools = registeredTools(
+      input.cwd,
+      this.#toolRegistrations,
+      authorizeTool,
+      registerTool,
+      () => this.#activePrompt,
+      this.#permissionExecutionHandler,
+    )
     const { session } = await createAgentSession({
       cwd: input.cwd,
       modelRuntime: this.#modelRuntime,
       model,
       thinkingLevel: internalThinkingLevel(model, input.model.thinkingLevel, thinkingConfig),
-      tools: ["read", "bash", "edit", "write"],
-      customTools: auditedTools(
-        input.cwd,
-        async (call) => {
-          const prompt = this.#activePrompt
-          if (!prompt?.sessionId) throw new Error("工具权限处理器尚未初始化")
-          const request: ToolPermissionRequest = {
-            sessionId: prompt.sessionId,
-            turnId: prompt.turnId,
-            toolCallId: call.callId,
-            toolName: call.name,
-            arguments: call.arguments,
-            declaredIntent: call.declaredIntent,
-            cwd: input.cwd,
-            mode: prompt.permissionMode ?? "hybrid",
-            ...(call.name === "bash" ? { environment: { shell: this.#shellKind() } } : {}),
-          }
-          if (!this.#permissionBatchHandler) {
-            if (!this.#permissionHandler) throw new Error("工具权限处理器尚未初始化")
-            return this.#requireAllowed(await this.#permissionHandler(request, call.signal))
-          }
-          const batch = this.#permissionBatch
-          if (!batch) throw new Error("工具权限批次尚未开始收集")
-          batch.requests.set(call.callId, request)
-          return this.#requireAllowed(
-            await new Promise<ToolAuthorization>((resolve, reject) => {
-              batch.pending.set(call.callId, { resolve, reject })
-            }),
-          )
-        },
-        (call) => this.#registerPermissionCall(input.cwd, call),
-        () => this.#activePrompt,
-        this.#permissionExecutionHandler,
-      ),
+      tools: [...builtInTools.map((tool) => tool.name), ...customTools.map((tool) => tool.name)],
+      customTools: [...builtInTools, ...customTools],
       resourceLoader,
       sessionManager,
       settingsManager,
@@ -530,6 +648,11 @@ export class PiSessionRuntime implements PiPort {
         (message) => message.role !== "user" || !temporaryMessages.has(message),
       )
     }
+  }
+
+  setToolRegistrations(registrations: AizenToolRegistration[]): void {
+    if (this.#session) throw new Error("会话运行时创建后不能替换工具注册")
+    this.#toolRegistrations = [...registrations]
   }
 
   setPermissionBatchHandler(handler: PiPermissionBatchHandler | undefined): void {
