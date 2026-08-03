@@ -5,11 +5,19 @@ export type PermissionMode = (typeof permissionModes)[number]
 
 export type PermissionRisk = "low" | "medium" | "high" | "critical"
 
+export type PermissionFinding = {
+  severity: "medium" | "high" | "critical"
+  category: string
+  summary: string
+  evidence: string
+}
+
 export type ToolAssessment = {
   summary: string
   targets: string[]
   risk: PermissionRisk
   reason: string
+  findings: PermissionFinding[]
   details?: JsonValue
   match?: JsonValue
   normalizedArguments?: JsonValue
@@ -53,6 +61,7 @@ export type AiReviewRequest = {
   toolName: string
   declaredIntent: string
   cwd: string
+  validatorDecision: "needAiReview"
   assessment: ToolAssessment
   payload: JsonValue
 }

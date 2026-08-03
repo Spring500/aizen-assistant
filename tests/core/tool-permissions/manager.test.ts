@@ -54,7 +54,7 @@ function setup(decision: ToolPermissionDecision, aiType: "allow" | "deny" | "nee
   }
 }
 
-const assessment = { summary: "动作", targets: [], risk: "low" as const, reason: "测试" }
+const assessment = { summary: "动作", targets: [], risk: "low" as const, reason: "测试", findings: [] }
 
 describe("ToolPermissionManager", () => {
   test("完全开放模式不调用验证器", async () => {

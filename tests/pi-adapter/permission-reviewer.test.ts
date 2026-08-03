@@ -22,11 +22,15 @@ const request = {
   toolName: "bash",
   declaredIntent: "下载公开说明",
   cwd: "/project",
+  validatorDecision: "needAiReview" as const,
   assessment: {
     summary: "curl https://example.com",
     targets: ["https://example.com"],
     risk: "medium" as const,
     reason: "网络请求",
+    findings: [
+      { severity: "medium" as const, category: "network", summary: "远程读取", evidence: "curl https://example.com" },
+    ],
   },
   payload: { command: "curl https://example.com" },
 }
@@ -38,6 +42,8 @@ test("审核请求只包含局部工具信息并解析结构化结论", async ()
   const serialized = JSON.stringify(captured.messages)
   expect(serialized).toContain("下载公开说明")
   expect(serialized).toContain("curl https://example.com")
+  expect(serialized).toContain("needAiReview")
+  expect(serialized).toContain("远程读取")
   expect(serialized).not.toContain("主对话历史")
   expect(JSON.stringify(captured.tools)).toContain("submit_permission_review")
   captured.respond({

@@ -35,6 +35,7 @@ function request(id: string, toolName: string): HumanReviewRequest {
       targets: ["file.ts"],
       risk: "medium",
       reason: "需要确认",
+      findings: [],
       details: toolName === "bash" ? { command: "npm install" } : { content: "完整正文" },
     },
     createdAt: new Date().toISOString(),
@@ -99,6 +100,19 @@ test("左右键切换工具页并保留拒绝理由草稿", async () => {
   await Bun.sleep(1)
   await setup.renderOnce()
   expect(setup.captureCharFrame()).toContain("拒绝理由  保留草稿")
+  controller.close()
+})
+
+test("审批页展示判定原因和结构化 findings", async () => {
+  const value = request("finding", "bash")
+  value.assessment.findings = [
+    { severity: "high", category: "system-mutation", summary: "修改系统状态", evidence: "sudo rm file" },
+  ]
+  const { setup, controller } = await setupReview([value])
+  const frame = setup.captureCharFrame()
+  expect(frame).toContain("判定原因：需要确认")
+  expect(frame).toContain("[高] 修改系统状态")
+  expect(frame).toContain("证据：sudo rm file")
   controller.close()
 })
 

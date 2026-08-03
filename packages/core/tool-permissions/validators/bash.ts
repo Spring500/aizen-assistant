@@ -1,6 +1,7 @@
 import { isAbsolute, relative, resolve } from "node:path"
 import type { JsonValue } from "../../session-format.ts"
 import type {
+  PermissionFinding,
   ToolAssessment,
   ToolPermissionDecision,
   ToolPermissionRequest,
@@ -188,16 +189,27 @@ function assessment(
   risk: ToolAssessment["risk"],
   reason: string,
   targets: string[] = [],
+  findings: PermissionFinding[] = [],
 ): ToolAssessment {
   return {
     summary: `执行命令：${command}`,
     targets,
     risk,
     reason,
+    findings,
     details: { command },
     match: { command },
     recoveryChecks: ["检查命令涉及的文件、进程或远程资源是否已发生变化"],
   }
+}
+
+function finding(
+  severity: PermissionFinding["severity"],
+  category: string,
+  summary: string,
+  evidence: string,
+): PermissionFinding {
+  return { severity, category, summary, evidence }
 }
 
 function networkReview(tokens: string[], request: ToolPermissionRequest, command: string): ToolPermissionDecision {
@@ -210,12 +222,11 @@ function networkReview(tokens: string[], request: ToolPermissionRequest, command
   const methodIndex = tokens.findIndex((token) => token === "-X" || token === "--request")
   const method =
     methodIndex >= 0 ? unquote(tokens[methodIndex + 1] ?? "").toUpperCase() : executable === "wget" ? "GET" : "GET"
-  const analyzed = assessment(
-    command,
-    dynamic || upload || !["GET", "HEAD"].includes(method) ? "high" : "medium",
-    "网络请求需要审核",
-    target ? [unquote(target)] : [],
-  )
+  const reason = "网络请求需要审核"
+  const severity = dynamic || upload || !["GET", "HEAD"].includes(method) ? "high" : "medium"
+  const analyzed = assessment(command, severity, reason, target ? [unquote(target)] : [], [
+    finding(severity, "network", reason, command),
+  ])
   if (dynamic || upload || !["GET", "HEAD"].includes(method)) return { type: "needHumanReview", assessment: analyzed }
   return {
     type: "needAiReview",
@@ -242,7 +253,16 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
       .at(-1)
       ?.toLowerCase() ?? ""
   if (humanCommands.has(executable))
-    return { type: "needHumanReview", assessment: assessment(segment, "high", "命令会修改系统级状态") }
+    return {
+      type: "needHumanReview",
+      assessment: assessment(
+        segment,
+        "high",
+        "命令会修改系统级状态",
+        [],
+        [finding("high", "system-mutation", "命令会修改系统级状态", segment)],
+      ),
+    }
   if (networkCommands.has(executable)) return networkReview(tokens, request, segment)
   if (executable === "git") {
     const subcommand = tokens
@@ -252,7 +272,16 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
     if (subcommand && safeGitCommands.has(subcommand))
       return { type: "allow", assessment: assessment(segment, "low", "只读 Git 查询") }
     if (subcommand && remoteMutationCommands.has(subcommand))
-      return { type: "needHumanReview", assessment: assessment(segment, "high", "Git 远程操作需要用户判断") }
+      return {
+        type: "needHumanReview",
+        assessment: assessment(
+          segment,
+          "high",
+          "Git 远程操作需要用户判断",
+          [],
+          [finding("high", "remote-mutation", "Git 远程操作需要用户判断", segment)],
+        ),
+      }
     return {
       type: "needAiReview",
       assessment: assessment(segment, "medium", "Git 操作可能修改工作区或历史"),
@@ -272,12 +301,26 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
           token === "-z",
       )
     )
-      return { type: "needHumanReview", assessment: assessment(segment, "high", "rg 参数会调用其他程序") }
+      return {
+        type: "needHumanReview",
+        assessment: assessment(
+          segment,
+          "high",
+          "rg 参数会调用其他程序",
+          [],
+          [finding("high", "dynamic-execution", "rg 参数会调用其他程序", segment)],
+        ),
+      }
     const targets = pathArguments(tokens)
       .map((path) => resolve(request.cwd, path))
       .filter((path) => isAbsolute(path))
     if (targets.some((path) => !inside(resolve(request.cwd), path)))
-      return { type: "needHumanReview", assessment: assessment(segment, "high", "命令读取工作区外路径", targets) }
+      return {
+        type: "needHumanReview",
+        assessment: assessment(segment, "high", "命令读取工作区外路径", targets, [
+          finding("high", "outside-workspace", "命令读取工作区外路径", segment),
+        ]),
+      }
     return { type: "allow", assessment: assessment(segment, "low", "命中保守只读命令规则", targets) }
   }
   if (packageCommands.has(executable))
@@ -289,7 +332,12 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
   if (executable === "rm" || executable === "mv" || executable === "cp" || executable === "mkdir") {
     const targets = pathArguments(tokens).map((path) => resolve(request.cwd, path))
     if (targets.some((path) => !inside(resolve(request.cwd), path)))
-      return { type: "needHumanReview", assessment: assessment(segment, "high", "命令修改工作区外路径", targets) }
+      return {
+        type: "needHumanReview",
+        assessment: assessment(segment, "high", "命令修改工作区外路径", targets, [
+          finding("high", "outside-workspace", "命令修改工作区外路径", segment),
+        ]),
+      }
     return {
       type: "needAiReview",
       assessment: assessment(segment, "medium", "命令会修改工作区文件", targets),
@@ -305,7 +353,17 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
 
 function combine(left: ToolPermissionDecision, right: ToolPermissionDecision): ToolPermissionDecision {
   const rank = { allow: 0, needAiReview: 1, needHumanReview: 2, deny: 3 } as const
-  return rank[right.type] > rank[left.type] ? right : left
+  const selected = rank[right.type] > rank[left.type] ? right : left
+  const findings = [...left.assessment.findings, ...right.assessment.findings]
+  const targets = [...new Set([...left.assessment.targets, ...right.assessment.targets])]
+  const assessment = { ...selected.assessment, targets, findings }
+  return selected.type === "deny"
+    ? { ...selected, assessment }
+    : selected.type === "needAiReview"
+      ? { ...selected, assessment }
+      : selected.type === "needHumanReview"
+        ? { ...selected, assessment }
+        : { ...selected, assessment }
 }
 
 /** 创建首期面向 Git Bash 保守语法子集的权限验证器。 */
@@ -320,7 +378,14 @@ export function createBashValidator(): ToolPermissionValidator {
         return { type: "deny", reason: invalid.reason, assessment: invalid }
       }
       if (destructiveRoot.test(command) || forkBomb.test(command)) {
-        const destructive = assessment(command, "critical", "命令命中明确的全系统破坏模式")
+        const reason = "命令命中明确的全系统破坏模式"
+        const destructive = assessment(
+          command,
+          "critical",
+          reason,
+          [],
+          [finding("critical", "system-destruction", reason, command)],
+        )
         return { type: "deny", reason: destructive.reason, assessment: destructive }
       }
       if (request.environment && object(request.environment)?.shell !== "git-bash")

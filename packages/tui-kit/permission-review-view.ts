@@ -166,6 +166,10 @@ export function createPermissionReviewView(
     controller = new AbortController()
     const abort = () => controller?.abort()
     const preview = () => permissionParameterPreview(request, overlays.renderer.terminalWidth, 3)
+    const findingLines = request.assessment.findings.flatMap((item) => [
+      `[${riskLabels[item.severity]}] ${item.summary}`,
+      `证据：${item.evidence}`,
+    ])
     const approvalBlocked = preview().truncated && !viewedEvidence.has(request.requestId)
     const existing = decisions.get(request.requestId)
     signal?.addEventListener("abort", abort, { once: true })
@@ -218,8 +222,12 @@ export function createPermissionReviewView(
             bold: request.assessment.risk === "high" || request.assessment.risk === "critical",
           },
         ],
-        headerLinesForWidth: (width) => permissionParameterPreview(request, width, 3).lines,
-        headerHeight: 3,
+        headerLinesForWidth: (width) => [
+          `判定原因：${request.assessment.reason}`,
+          ...findingLines,
+          ...permissionParameterPreview(request, width, 3).lines,
+        ],
+        headerHeight: 4 + findingLines.length,
         navigate,
         signal: controller.signal,
       },

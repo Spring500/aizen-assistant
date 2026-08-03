@@ -127,7 +127,13 @@ export class ToolPermissionManager {
         authorization: {
           type: "allow",
           arguments: request.arguments,
-          assessment: { summary: "完全开放模式", targets: [], risk: "low", reason: "当前会话允许直接执行工具" },
+          assessment: {
+            summary: "完全开放模式",
+            targets: [],
+            risk: "low",
+            reason: "当前会话允许直接执行工具",
+            findings: [],
+          },
           source: "mode",
         },
       }
@@ -178,7 +184,8 @@ export class ToolPermissionManager {
           toolName: request.toolName,
           declaredIntent: request.declaredIntent,
           cwd: request.cwd,
-          assessment: decision.assessment,
+          validatorDecision: "needAiReview",
+          assessment: sanitizeReviewPayload(decision.assessment) as typeof decision.assessment,
           payload: sanitizeReviewPayload(decision.reviewPayload),
         },
         signal,
@@ -225,6 +232,7 @@ export class ToolPermissionManager {
       targets: [],
       risk: "high" as const,
       reason: error ?? "需要用户判断",
+      findings: [],
     }
     if (request.mode === "aiOnly")
       return {

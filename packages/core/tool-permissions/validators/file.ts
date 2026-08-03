@@ -105,11 +105,24 @@ function assessment(
   normalizedArguments: JsonValue,
   localDetails: JsonValue,
 ): ToolAssessment {
+  const finding =
+    risk === "low"
+      ? []
+      : [
+          {
+            severity:
+              risk === "medium" ? ("medium" as const) : risk === "high" ? ("high" as const) : ("critical" as const),
+            category: "file-target",
+            summary: reason,
+            evidence: target,
+          },
+        ]
   return {
     summary,
     targets: [target],
     risk,
     reason,
+    findings: finding,
     normalizedArguments,
     details: localDetails,
     match: { path: target },
