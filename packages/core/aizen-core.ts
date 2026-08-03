@@ -519,6 +519,7 @@ export class AizenCore implements CorePort {
   }
 
   #recoverInterruptedTools(records: SessionRecord[]): SessionRecord[] {
+    const approved = new Map<string, Extract<SessionRecord, { kind: "tool_permission" }>>()
     const started = new Map<string, Extract<SessionRecord, { kind: "tool_permission" }>>()
     const finished = new Set<string>()
     const recovered = new Set<string>()
@@ -541,17 +542,28 @@ export class AizenCore implements CorePort {
         Array.isArray(record.event)
       )
         continue
+      if (record.event.type === "authorized" && record.event.authorization) {
+        const authorization = record.event.authorization
+        if (typeof authorization === "object" && !Array.isArray(authorization) && authorization.type === "allow")
+          approved.set(record.toolCallId, record)
+      }
       if (record.event.phase === "executionStarted") started.set(record.toolCallId, record)
       if (record.event.phase === "executionFinished") finished.add(record.toolCallId)
       if (record.event.type === "interruptedAfterStart") recovered.add(record.toolCallId)
     }
-    const interrupted = [...started].filter(
+    const interruptedAfterStart = [...started].filter(
       ([callId, record]) => !finished.has(callId) && !recovered.has(callId) && !finishedTurns.has(record.turnId),
     )
+    const interruptedBeforeStart = [...approved].filter(
+      ([callId, record]) =>
+        !started.has(callId) && !finished.has(callId) && !recovered.has(callId) && !finishedTurns.has(record.turnId),
+    )
+    const interrupted = [...interruptedAfterStart, ...interruptedBeforeStart]
     const interruptedTurns = new Set(interrupted.map(([, record]) => record.turnId))
     const result: SessionRecord[] = []
     const now = new Date().toISOString()
     for (const [callId, record] of interrupted) {
+      const wasStarted = started.has(callId)
       const event = record.event as Record<string, JsonValue>
       const authorization =
         event.authorization && typeof event.authorization === "object" && !Array.isArray(event.authorization)
@@ -573,9 +585,11 @@ export class AizenCore implements CorePort {
         at: now,
         toolCallId: callId,
         event: {
-          type: "interruptedAfterStart",
-          message: "应用在工具执行期间异常终止。操作可能未执行、部分执行或已完成；禁止直接重试。",
-          recoveryChecks: checks,
+          type: wasStarted ? "interruptedAfterStart" : "interruptedBeforeStart",
+          message: wasStarted
+            ? "应用在工具执行期间异常终止。操作可能未执行、部分执行或已完成；禁止直接重试。"
+            : "应用在已批准工具开始执行前异常终止；该调用没有执行。",
+          recoveryChecks: wasStarted ? checks : [],
         },
       })
     }
