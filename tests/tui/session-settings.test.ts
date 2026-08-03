@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test"
-import { sessionSettingsItems } from "../../apps/tui/session-settings.ts"
+import { modelWithPreferredThinkingLevel, sessionSettingsItems } from "../../apps/tui/session-settings.ts"
 
 const model = {
   providerId: "anthropic",
@@ -27,4 +27,10 @@ test("会话设置使用紧凑单行显示模型与视图", () => {
   expect(items[0]?.segments.map((item) => item.text).join("")).toBe("当前模型  [ anthropic · Claude Code Opus 4.8 ]")
   expect(items[1]?.segments.map((item) => item.text).join("")).toBe("当前视图  [ otter-builds-bridge · 代码审查 ]")
   expect(items.find((item) => item.value === "apply")?.segments[0]?.text).toBe("应用并开始对话")
+})
+
+test("新建会话偏好中的旧思考档位失效时使用模型当前默认值", () => {
+  const available = { ...model, thinkingLevel: "标准", thinkingLevels: ["快速", "标准", "深入"] }
+  expect(modelWithPreferredThinkingLevel(available, { ...model, thinkingLevel: "旧档位" }).thinkingLevel).toBe("标准")
+  expect(modelWithPreferredThinkingLevel(available, { ...model, thinkingLevel: "深入" }).thinkingLevel).toBe("深入")
 })

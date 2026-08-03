@@ -9,6 +9,14 @@ import type {
   ToolPermissionRequest,
 } from "./tool-permissions/types.ts"
 
+/** 表示当前模型或思考档位不能用于创建 pi 内存会话，交互层可引导用户重新选择。 */
+export class PiModelRuntimeError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "PiModelRuntimeError"
+  }
+}
+
 export type ViewRuntimeInput =
   | { viewId: null }
   | {

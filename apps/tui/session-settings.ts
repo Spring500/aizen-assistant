@@ -1,5 +1,5 @@
 import type { ModelOption } from "../../packages/core/pi-port.ts"
-import type { ViewId } from "../../packages/core/session-format.ts"
+import type { ModelReference, ViewId } from "../../packages/core/session-format.ts"
 import type { PermissionMode } from "../../packages/core/tool-permissions/types.ts"
 import type { ViewOption } from "../../packages/core/view-store.ts"
 import type { RichSelectorItem } from "../../packages/tui-kit/rich-selector.ts"
@@ -25,6 +25,20 @@ const permissionModeLabels: Record<PermissionMode, string> = {
   hybrid: "自动审核 + 人工审核",
   hybridConfirmDenials: "自动审核 + 人工确认拒绝",
   aiOnly: "仅自动审核",
+}
+
+/** 旧偏好中的档位只有在当前模型仍支持时才能覆盖模型的新默认档位。 */
+export function modelWithPreferredThinkingLevel(available: ModelOption, preferred: ModelReference): ModelOption {
+  const levels = [
+    ...(available.offThinkingLevel === undefined ? [] : [available.offThinkingLevel]),
+    ...(available.thinkingLevels ?? []),
+  ]
+  return {
+    ...available,
+    ...(preferred.thinkingLevel !== undefined && levels.includes(preferred.thinkingLevel)
+      ? { thinkingLevel: preferred.thinkingLevel }
+      : {}),
+  }
 }
 
 export function sessionSettingsItems(

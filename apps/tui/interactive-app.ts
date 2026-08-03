@@ -35,12 +35,12 @@ import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
 import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-editor.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
 
-import { ActionQueue, dispatchOrPresent } from "./action-runner.ts"
+import { ActionQueue, dispatchOrPresent, sendPromptWithRecovery } from "./action-runner.ts"
 import { agentSettingsItems } from "./agent-settings.ts"
 import { parseTuiCommand, tuiCommands } from "./commands.ts"
 import { createPermissionReview, type PermissionReviewController } from "./permission-review.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
-import { type SessionSettingsDraft, sessionSettingsItems } from "./session-settings.ts"
+import { modelWithPreferredThinkingLevel, type SessionSettingsDraft, sessionSettingsItems } from "./session-settings.ts"
 import { viewSelectionItems } from "./view-flow.ts"
 
 const createViewValue = ":create-view"
@@ -69,6 +69,7 @@ const authOptionLabels: Record<string, string> = {
   "Service account credentials file": "服务账号凭据文件",
 }
 
+/** 连接 Core 与 TUI，并在交互层保管尚未成功发送的用户草稿。 */
 export async function runInteractiveApp(options: InteractiveAppOptions): Promise<void> {
   const renderer = options.testing?.renderer ?? (await createAizenRenderer())
   const pi = options.testing
@@ -135,7 +136,18 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     {
       onSubmit: (value) => {
         const command = parseTuiCommand(value)
-        if (!command) runAction(() => dispatchWithError({ type: "send_prompt", text: value }, "发送消息失败"))
+        // 普通消息由恢复流程持有原文，模型失效时无需用户清空输入框再执行 /model。
+        if (!command)
+          runAction(() =>
+            sendPromptWithRecovery({
+              core,
+              text: value,
+              chooseModel,
+              chooseView,
+              present: showError,
+              restoreDraft: editor.setInputText,
+            }),
+          )
         else if (command.name === "/quit") quit()
         else if (command.name === "/new") runAction(createSession)
         else if (command.name === "/sessions") runAction(chooseSession)
@@ -971,6 +983,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     )
   }
 
+  /** 当前供应商允许编辑；若影响当前模型，Core 会在保存后用完整历史重建 pi 内存会话。 */
   async function manageProvider(provider: ProviderConfigEntry, selecting = false): Promise<boolean> {
     while (!exiting) {
       await core.dispatch({ type: "load_model_config" })
@@ -1012,21 +1025,31 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       const revision = core.getSnapshot().modelConfig?.revision ?? ""
       if (action === "edit") {
         const edited = await editProvider(current)
-        if (edited) await core.dispatch({ type: "save_provider", revision, provider: edited, create: false })
+        if (edited)
+          await dispatchWithError(
+            { type: "save_provider", revision, provider: edited, create: false },
+            "保存供应商失败",
+          )
       } else if (action === "add") {
         const edited = await editModel()
         if (edited)
-          await core.dispatch({
-            type: "save_model",
-            revision,
-            providerId: current.id,
-            model: edited,
-            create: true,
-          })
+          await dispatchWithError(
+            {
+              type: "save_model",
+              revision,
+              providerId: current.id,
+              model: edited,
+              create: true,
+            },
+            "保存模型失败",
+          )
       } else if (action === "done") return true
       else if (action === "delete") {
         if (await confirmAction(`删除供应商 ${current.id}`, "此操作不可撤销")) {
-          const result = await core.dispatch({ type: "delete_provider", revision, providerId: current.id })
+          const result = await dispatchWithError(
+            { type: "delete_provider", revision, providerId: current.id },
+            "删除供应商失败",
+          )
           if (result.ok) return false
         }
       } else await manageModel(current, action)
@@ -1034,6 +1057,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     return false
   }
 
+  /** 当前模型允许编辑但不允许删除；保存后由 Core 重新解析配置并重建 pi 内存会话。 */
   async function manageModel(provider: ProviderConfigEntry, model: ModelConfigEntry): Promise<void> {
     const current = core.getSnapshot().currentModel
     const protectedModel = current?.providerId === provider.id && current.modelId === model.id
@@ -1042,10 +1066,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       "model-manager",
       [
         {
-          name: protectedModel ? "编辑模型（当前会话正在使用）" : "编辑模型",
-          description: protectedModel ? "请先切换模型" : (model.readonlyReason ?? ""),
+          name: protectedModel ? "编辑当前模型" : "编辑模型",
+          description: protectedModel ? "保存后重新加载当前会话" : (model.readonlyReason ?? ""),
           value: "edit",
-          disabled: protectedModel || !model.editable,
+          // 当前模型允许编辑；Core 保存后会尝试用完整历史重建 pi 内存会话。
+          disabled: !model.editable,
         },
         { name: "复制为新模型", description: "保留参数并输入新的模型 ID", value: "copy" },
         {
@@ -1062,25 +1087,34 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     if (action === "edit") {
       const edited = await editModel(model)
       if (edited)
-        await core.dispatch({
-          type: "save_model",
-          revision,
-          providerId: provider.id,
-          model: edited,
-          create: false,
-        })
+        await dispatchWithError(
+          {
+            type: "save_model",
+            revision,
+            providerId: provider.id,
+            model: edited,
+            create: false,
+          },
+          "保存模型失败",
+        )
     } else if (action === "copy") {
       const copied = await editModel({ ...model, name: `${model.name} 副本` }, true)
       if (copied)
-        await core.dispatch({
-          type: "save_model",
-          revision,
-          providerId: provider.id,
-          model: copied,
-          create: true,
-        })
+        await dispatchWithError(
+          {
+            type: "save_model",
+            revision,
+            providerId: provider.id,
+            model: copied,
+            create: true,
+          },
+          "保存模型失败",
+        )
     } else if (await confirmAction(`删除模型 ${model.id}`, "此操作不可撤销")) {
-      await core.dispatch({ type: "delete_model", revision, providerId: provider.id, modelId: model.id })
+      await dispatchWithError(
+        { type: "delete_model", revision, providerId: provider.id, modelId: model.id },
+        "删除模型失败",
+      )
     }
   }
 
@@ -1193,6 +1227,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
+  /**
+   * 新建时只继承当前仍合法的思考档位；已有会话则把模型、API 和思考档位视为一组运行参数。
+   */
   async function openSessionSettings(mode: "new" | "existing"): Promise<boolean> {
     let draft: SessionSettingsDraft = { viewId: null, permissionMode: "hybrid" }
     if (mode === "new") {
@@ -1208,16 +1245,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               item.modelId === preferred.model.modelId &&
               item.available,
           )
-        if (available)
+        if (available) {
           draft = {
-            model: {
-              ...available,
-              ...(preferred.model.thinkingLevel === undefined ? {} : { thinkingLevel: preferred.model.thinkingLevel }),
-            },
+            model: modelWithPreferredThinkingLevel(available, preferred.model),
             viewId: preferred.viewId,
             permissionMode: preferred.permissionMode ?? "hybrid",
           }
-        else draft = { viewId: preferred.viewId, permissionMode: preferred.permissionMode ?? "hybrid" }
+        } else draft = { viewId: preferred.viewId, permissionMode: preferred.permissionMode ?? "hybrid" }
       } else draft = { viewId: preferred.viewId, permissionMode: preferred.permissionMode ?? "hybrid" }
     }
     if (mode === "existing") {
@@ -1296,7 +1330,14 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         if (!draft.model) continue
         const snapshot = core.getSnapshot()
         const current = snapshot.currentModel
-        if (!current || current.providerId !== draft.model.providerId || current.modelId !== draft.model.modelId) {
+        // 同一模型的 API 或思考档位变化也属于运行参数变化，不能只比较模型 ID。
+        if (
+          !current ||
+          current.providerId !== draft.model.providerId ||
+          current.modelId !== draft.model.modelId ||
+          current.api !== draft.model.api ||
+          current.thinkingLevel !== draft.model.thinkingLevel
+        ) {
           if (!(await dispatchWithError({ type: "set_model", model: draft.model }, "切换模型失败")).ok) continue
         }
         if (snapshot.currentViewId !== draft.viewId) {
