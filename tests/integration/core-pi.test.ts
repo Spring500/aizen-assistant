@@ -237,6 +237,131 @@ test("真实 pi 链路统一提交同一消息中的多工具人工审批", asyn
   }
 }, 30000)
 
+test("批次提交后中止会保留已完成项并停止运行项", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aizen-integration-batch-abort-"))
+  directories.push(root)
+  const mock = await startMockServer()
+  let slowStarted = false
+  let slowAborted = false
+  try {
+    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+    await pi.setRuntimeApiKey("anthropic", "test-key")
+    const models = await pi.listModels()
+    const option = models.find((item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6")
+    if (!option) throw new Error("缺少集成测试模型")
+    pi.setModelBaseUrl(option.providerId, option.modelId, mock.url)
+    const store = new SessionStore(join(root, "sessions"))
+    const validator = (toolName: string) => ({
+      toolName,
+      validate: async () => ({
+        type: "needHumanReview" as const,
+        assessment: { summary: toolName, targets: [], risk: "medium" as const, reason: "测试人工审批", findings: [] },
+      }),
+    })
+    const core = new AizenCore({
+      cwd: root,
+      store,
+      pi,
+      toolRegistrations: [
+        {
+          kind: "inProcess",
+          descriptor: { name: "fast_tool", label: "fast", description: "快速完成", parameters: { type: "object" } },
+          validator: validator("fast_tool"),
+          execute: async () => ({ content: [{ type: "text", text: "fast completed" }] }),
+        },
+        {
+          kind: "inProcess",
+          descriptor: { name: "slow_tool", label: "slow", description: "等待中止", parameters: { type: "object" } },
+          validator: validator("slow_tool"),
+          execute: async ({ signal }) => {
+            slowStarted = true
+            await new Promise<void>((resolve, reject) => {
+              if (signal?.aborted) {
+                slowAborted = true
+                reject(new Error("aborted"))
+                return
+              }
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  slowAborted = true
+                  reject(new Error("aborted"))
+                },
+                { once: true },
+              )
+              setTimeout(resolve, 10_000)
+            })
+            return { content: [{ type: "text", text: "slow completed" }] }
+          },
+        },
+      ],
+    })
+    await core.dispatch({ type: "create_session", model: option, viewId: null, permissionMode: "hybrid" })
+    const sessionId = core.getSnapshot().currentSessionId
+    const sending = core.dispatch({ type: "send_prompt", text: "执行并中止两个工具" })
+    const first = await mock.take({ modelId: option.modelId })
+    first.respond({
+      type: "tool_calls",
+      calls: [
+        { name: "fast_tool", arguments: { declaredIntent: "快速完成测试" }, callId: "fast-call" },
+        { name: "slow_tool", arguments: { declaredIntent: "等待中止测试" }, callId: "slow-call" },
+      ],
+    })
+    for (let attempt = 0; attempt < 100 && core.getSnapshot().pendingPermissionRequests?.length !== 2; attempt++)
+      await Bun.sleep(2)
+    const pending = core.getSnapshot().pendingPermissionRequests ?? []
+    await core.dispatch({
+      type: "answer_permission_batch",
+      batchId: pending[0]?.batchId ?? "",
+      answers: pending.map((request) => ({ requestId: request.requestId, type: "approve" as const })),
+    })
+    for (let attempt = 0; attempt < 100; attempt++) {
+      if (slowStarted && core.getSnapshot().activeTools.some((tool) => tool.callId === "fast-call" && tool.isFinished))
+        break
+      await Bun.sleep(2)
+    }
+    expect(slowStarted).toBe(true)
+    expect(await core.dispatch({ type: "abort" })).toEqual({ ok: true })
+    expect(await sending).toEqual({ ok: true })
+    expect(slowAborted).toBe(true)
+    const loaded = await store.read(sessionId ?? "")
+    const executionEvents = loaded.records.filter(
+      (record) =>
+        record.kind === "tool_permission" &&
+        !!record.event &&
+        typeof record.event === "object" &&
+        !Array.isArray(record.event),
+    )
+    expect(
+      executionEvents.some(
+        (record) =>
+          record.kind === "tool_permission" &&
+          !!record.event &&
+          typeof record.event === "object" &&
+          !Array.isArray(record.event) &&
+          record.toolCallId === "fast-call" &&
+          record.event.phase === "executionFinished" &&
+          record.event.isError === false,
+      ),
+    ).toBe(true)
+    expect(
+      executionEvents.some(
+        (record) =>
+          record.kind === "tool_permission" &&
+          !!record.event &&
+          typeof record.event === "object" &&
+          !Array.isArray(record.event) &&
+          record.toolCallId === "slow-call" &&
+          record.event.phase === "executionFinished" &&
+          record.event.isError === true,
+      ),
+    ).toBe(true)
+    await core.dispose()
+  } finally {
+    mock.stop()
+  }
+}, 30000)
+
 test("真实 pi 链路执行项目自有联合注册工具", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-registered-tool-"))
   directories.push(root)
