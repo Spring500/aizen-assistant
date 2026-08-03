@@ -61,6 +61,30 @@ test("resize 后使用 OpenTUI 新排版结果校正滚动状态", async () => {
   view.dispose()
 })
 
+test("先滚动再放宽页面不会保留失效偏移或重复行首", async () => {
+  const { setup, parent } = await setupView(22, 8)
+  const content = Array.from({ length: 30 }, (_, index) => `word${index}`).join(" ")
+  const view = createScrollableTextView(setup.renderer, {
+    id: "scrollable-text-resize-after-scroll",
+    parent,
+    content,
+  })
+  await setup.renderOnce()
+  view.scrollBy(10_000)
+  await setup.renderOnce()
+  expect(view.renderable.scrollY).toBeGreaterThan(0)
+
+  setup.resize(42, 8)
+  await setup.renderOnce()
+  expect(view.renderable.maxScrollY).toBe(0)
+  expect(view.renderable.scrollY).toBe(0)
+  const frame = setup.captureCharFrame()
+  expect(frame).toContain("word0 word1 word2 word3 word4 word5")
+  expect(frame.match(/word0/g)).toHaveLength(1)
+  expect(frame).toContain("word29")
+  view.dispose()
+})
+
 test("dispose 后不再响应 resize", async () => {
   const { setup, parent } = await setupView()
   let updates = 0

@@ -1,4 +1,4 @@
-import { type BoxRenderable, type CliRenderer, CliRenderEvents, TextRenderable } from "@opentui/core"
+import { type BoxRenderable, type CliRenderer, TextRenderable } from "@opentui/core"
 
 export type ScrollableTextState = {
   firstLine: number
@@ -52,7 +52,6 @@ export function createScrollableTextView(
   let disposed = false
   let viewedToEnd = false
   let lastState: ScrollableTextState | undefined
-  let refreshQueued = false
 
   const state = (): ScrollableTextState => {
     const totalLines = Math.max(1, renderable.virtualLineCount || renderable.lineCount || 1)
@@ -80,21 +79,14 @@ export function createScrollableTextView(
     return current
   }
 
-  const queueRefresh = () => {
-    if (disposed || refreshQueued) return
-    refreshQueued = true
-    queueMicrotask(() => {
-      refreshQueued = false
-      if (disposed || renderable.isDestroyed) return
-      const keepAtEnd = lastState?.atEnd ?? false
-      if (keepAtEnd) renderable.scrollY = renderable.maxScrollY
-      else renderable.scrollY = Math.min(renderable.scrollY, renderable.maxScrollY)
-      refresh()
-    })
+  const onLineInfoChange = () => {
+    if (disposed || renderable.isDestroyed) return
+    const keepAtEnd = lastState?.atEnd ?? false
+    if (keepAtEnd) renderable.scrollY = renderable.maxScrollY
+    else if (renderable.scrollY > renderable.maxScrollY) renderable.scrollY = renderable.maxScrollY
+    refresh()
   }
-
-  const onResize = () => queueRefresh()
-  renderer.on(CliRenderEvents.RESIZE, onResize)
+  renderable.on("line-info-change", onLineInfoChange)
 
   const view: ScrollableTextView = {
     renderable,
@@ -111,10 +103,9 @@ export function createScrollableTextView(
     dispose() {
       if (disposed) return
       disposed = true
-      renderer.off(CliRenderEvents.RESIZE, onResize)
+      renderable.off("line-info-change", onLineInfoChange)
     },
   }
 
-  queueRefresh()
   return view
 }
