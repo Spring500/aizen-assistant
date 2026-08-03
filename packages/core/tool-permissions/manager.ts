@@ -6,6 +6,7 @@ import type {
   HumanPermissionReviewer,
   HumanReviewRequest,
   PermissionAuditEvent,
+  PermissionReviewStep,
   ToolAssessment,
   ToolAuthorization,
   ToolPermissionBatchAuthorization,
@@ -36,6 +37,7 @@ type PreparedAuthorization =
       request: ToolPermissionRequest
       assessment: ToolAssessment
       decision?: ToolPermissionDecision
+      reviewSteps: PermissionReviewStep[]
       aiDecision?: Extract<AiReviewDecision, { type: "deny" | "needHumanReview" }>
       error?: string
     }
@@ -156,6 +158,12 @@ export class ToolPermissionManager {
     }
     await this.#record({ type: "validated", request, batchId, decision, at: this.#timestamp() })
 
+    const validatorStep: PermissionReviewStep = {
+      stage: "validator",
+      decision: decision.type,
+      reason: decision.type === "deny" ? decision.reason : decision.assessment.reason,
+    }
+
     if (decision.type === "deny")
       return {
         type: "finished",
@@ -165,6 +173,7 @@ export class ToolPermissionManager {
           reason: decision.reason,
           assessment: decision.assessment,
           source: "validator",
+          reviewSteps: [validatorStep],
         },
       }
     if (decision.type === "allow")
@@ -178,7 +187,8 @@ export class ToolPermissionManager {
           source: "validator",
         },
       }
-    if (decision.type === "needHumanReview") return this.#humanOrDeny(request, decision)
+    if (decision.type === "needHumanReview")
+      return this.#humanOrDeny(request, decision, undefined, undefined, [validatorStep])
 
     try {
       const aiDecision = await this.#aiReviewer.review(
@@ -196,6 +206,11 @@ export class ToolPermissionManager {
         signal,
       )
       await this.#record({ type: "aiReviewed", request, batchId, decision: aiDecision, at: this.#timestamp() })
+      const aiStep: PermissionReviewStep = {
+        stage: "ai",
+        decision: aiDecision.type,
+        reason: aiDecision.reason,
+      }
       if (aiDecision.type === "allow")
         return {
           type: "finished",
@@ -216,13 +231,17 @@ export class ToolPermissionManager {
             reason: aiDecision.reason,
             assessment: decision.assessment,
             source: "ai",
+            reviewSteps: [validatorStep, aiStep],
           },
         }
-      return this.#humanOrDeny(request, decision, undefined, aiDecision)
+      return this.#humanOrDeny(request, decision, undefined, aiDecision, [validatorStep, aiStep])
     } catch (error) {
       const message = `AI 审核失败：${error instanceof Error ? error.message : String(error)}`
       await this.#record({ type: "aiReviewed", request, batchId, error: message, at: this.#timestamp() })
-      return this.#humanOrDeny(request, decision, message)
+      return this.#humanOrDeny(request, decision, message, undefined, [
+        validatorStep,
+        { stage: "ai", decision: "error", reason: message },
+      ])
     }
   }
 
@@ -231,7 +250,12 @@ export class ToolPermissionManager {
     decision: ToolPermissionDecision | undefined,
     error?: string,
     aiDecision?: Extract<AiReviewDecision, { type: "deny" | "needHumanReview" }>,
+    reviewSteps: PermissionReviewStep[] = [],
   ): PreparedAuthorization {
+    const effectiveReviewSteps =
+      reviewSteps.length === 0 && error
+        ? [{ stage: "validator" as const, decision: "error", reason: error }]
+        : reviewSteps
     const assessment = decision?.assessment ?? {
       summary: request.toolName,
       targets: [],
@@ -248,12 +272,14 @@ export class ToolPermissionManager {
           reason: error ?? aiDecision?.reason ?? "当前权限模式不允许人工审核",
           ...(decision ? { assessment: decision.assessment } : {}),
           source: "system",
+          reviewSteps: effectiveReviewSteps,
         },
       }
     return {
       type: "human",
       request,
       assessment,
+      reviewSteps: effectiveReviewSteps,
       ...(decision ? { decision } : {}),
       ...(aiDecision ? { aiDecision } : {}),
       ...(error ? { error } : {}),
@@ -345,7 +371,12 @@ export class ToolPermissionManager {
   ): ToolAuthorization {
     const answer = answers.get(item.request.toolCallId)
     if (!answer)
-      return { type: "deny", reason: "Operation denied: Permission review returned no result.", source: "system" }
+      return {
+        type: "deny",
+        reason: "Operation denied: Permission review returned no result.",
+        source: "system",
+        reviewSteps: [...item.reviewSteps, { stage: "system", decision: "deny", reason: "人工审核没有返回结果" }],
+      }
     if (answer.type === "approve")
       return {
         type: "allow",
@@ -361,13 +392,28 @@ export class ToolPermissionManager {
           : "Operation denied: User denied permission without providing a reason.",
         assessment: item.assessment,
         source: "human",
+        reviewSteps: [
+          ...item.reviewSteps,
+          {
+            stage: "human",
+            decision: "deny",
+            reason: answer.reason ?? "用户拒绝且未提供理由",
+          },
+        ],
       }
     if (answer.type === "aborted")
       return {
         type: "aborted",
         reason: "Operation aborted: User aborted the turn while permission review was pending.",
+        reviewSteps: [...item.reviewSteps, { stage: "human", decision: "aborted", reason: "用户中止了本轮" }],
       }
-    return { type: "deny", reason: answer.reason, assessment: item.assessment, source: "system" }
+    return {
+      type: "deny",
+      reason: answer.reason,
+      assessment: item.assessment,
+      source: "system",
+      reviewSteps: [...item.reviewSteps, { stage: "system", decision: "deny", reason: answer.reason }],
+    }
   }
 
   #timestamp(): string {

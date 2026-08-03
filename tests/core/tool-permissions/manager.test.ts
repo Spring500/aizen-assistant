@@ -82,6 +82,7 @@ describe("ToolPermissionManager", () => {
     const decision = { type: "needAiReview", assessment, reviewPayload: { token: "secret", value: "safe" } } as const
     const allowed = setup(decision, "allow")
     expect(await allowed.manager.authorize(base)).toMatchObject({ type: "allow", source: "ai" })
+    expect((await allowed.manager.authorize(base)).reviewSteps).toBeUndefined()
     const escalated = setup(decision, "needHumanReview")
     expect(await escalated.manager.authorize(base)).toMatchObject({ type: "allow", source: "human" })
     expect(escalated.humanCalls).toHaveLength(1)

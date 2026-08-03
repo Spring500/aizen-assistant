@@ -126,6 +126,10 @@ test("Core将用户拒绝理由传给Agent权限结果", async () => {
   expect(pi.authorization).toMatchObject({
     type: "deny",
     reason: "Operation denied: User denied permission. Reason: 不要修改依赖",
+    reviewSteps: [
+      { stage: "validator", decision: "error", reason: "该工具没有权限验证器" },
+      { stage: "human", decision: "deny", reason: "不要修改依赖" },
+    ],
   })
   await core.dispose()
 })

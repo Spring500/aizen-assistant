@@ -106,10 +106,28 @@ export type HumanReviewBatchDecision = {
   answers: HumanReviewAnswer[]
 }
 
+export type PermissionReviewStep = {
+  stage: "validator" | "ai" | "human" | "system"
+  decision: string
+  reason: string
+}
+
 export type ToolAuthorization =
-  | { type: "allow"; arguments: JsonValue; assessment: ToolAssessment; source: "mode" | "validator" | "ai" | "human" }
-  | { type: "deny"; reason: string; assessment?: ToolAssessment; source: "validator" | "ai" | "human" | "system" }
-  | { type: "aborted"; reason: string }
+  | {
+      type: "allow"
+      arguments: JsonValue
+      assessment: ToolAssessment
+      source: "mode" | "validator" | "ai" | "human"
+      reviewSteps?: PermissionReviewStep[]
+    }
+  | {
+      type: "deny"
+      reason: string
+      assessment?: ToolAssessment
+      source: "validator" | "ai" | "human" | "system"
+      reviewSteps?: PermissionReviewStep[]
+    }
+  | { type: "aborted"; reason: string; reviewSteps?: PermissionReviewStep[] }
 
 export type ToolPermissionBatchAuthorization = {
   batchId: string

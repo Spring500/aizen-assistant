@@ -46,6 +46,7 @@ import type { AizenToolRegistration } from "../core/tool-registry.ts"
 import type { JsonValue, ModelReference, SessionRecord } from "../core/session-format.ts"
 import type { ToolAuthorization, ToolPermissionRequest } from "../core/tool-permissions/types.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
+import { permissionFailureMessage } from "./permission-failure.ts"
 import { PiPermissionReviewer } from "./permission-reviewer.ts"
 import { generateSessionTitle } from "./session-title-generator.ts"
 import { normalizeToolFailure } from "./tool-failure.ts"
@@ -724,16 +725,17 @@ export class PiSessionRuntime implements PiPort {
 
   #requireAllowed(authorization: ToolAuthorization): Extract<ToolAuthorization, { type: "allow" }> {
     if (authorization.type === "allow") return authorization
-    if (authorization.type === "aborted") throw new Error(authorization.reason)
+    if (authorization.type === "aborted") throw new Error(permissionFailureMessage(authorization))
     if (
       authorization.source === "validator" &&
       authorization.assessment?.findings.some((item) => item.category === "edit-preview")
     )
       throw new Error(`Operation failed: ${authorization.reason}`)
+    const message = permissionFailureMessage(authorization)
     throw new Error(
-      authorization.reason.startsWith("Operation denied:")
-        ? authorization.reason
-        : `Operation denied: ${authorization.source} rejected the tool call. Reason: ${authorization.reason}`,
+      message.startsWith("Operation denied:")
+        ? message
+        : `Operation denied: ${authorization.source} rejected the tool call. Reason: ${message}`,
     )
   }
 
