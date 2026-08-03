@@ -88,6 +88,35 @@ describe("ToolPermissionManager", () => {
     expect(escalated.humanCalls).toHaveLength(1)
   })
 
+  test("人工审核不会自动过期，只在显式中止后结束等待", async () => {
+    const registry = new ToolPermissionRegistry()
+    registry.register({ toolName: "demo", validate: async () => ({ type: "needHumanReview", assessment }) })
+    let reviewStarted = false
+    const manager = new ToolPermissionManager({
+      registry,
+      aiReviewer: { review: async () => ({ type: "allow", reason: "不应调用" }) },
+      humanReviewer: {
+        review: async (_request, signal) => {
+          reviewStarted = true
+          return new Promise((_, reject) => {
+            signal?.addEventListener("abort", () => reject(new Error("已中止")), { once: true })
+          })
+        },
+      },
+    })
+    const controller = new AbortController()
+    let settled = false
+    const authorization = manager.authorize(base, controller.signal).finally(() => {
+      settled = true
+    })
+    for (let attempt = 0; attempt < 20 && !reviewStarted; attempt++) await Bun.sleep(1)
+    expect(reviewStarted).toBe(true)
+    await Bun.sleep(20)
+    expect(settled).toBe(false)
+    controller.abort()
+    expect(await authorization).toMatchObject({ type: "aborted" })
+  })
+
   test("发送给AI的正文和密钥字段会被隐藏", async () => {
     const decision = {
       type: "needAiReview",

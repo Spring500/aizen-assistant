@@ -39,7 +39,6 @@ function request(id: string, toolName: string): HumanReviewRequest {
       details: toolName === "bash" ? { command: "npm install" } : { content: "完整正文" },
     },
     createdAt: new Date().toISOString(),
-    expiresAt: new Date(Date.now() + 10000).toISOString(),
   }
 }
 

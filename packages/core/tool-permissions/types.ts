@@ -85,7 +85,6 @@ export type HumanReviewRequest = {
   aiDecision?: AiReviewDecision
   sensitiveFields?: string[]
   createdAt: string
-  expiresAt: string
 }
 
 export type HumanReviewDecision = { type: "approve" } | { type: "deny"; reason?: string }
@@ -98,7 +97,6 @@ export type HumanReviewBatchRequest = {
   turnId: string
   requests: HumanReviewRequest[]
   createdAt: string
-  expiresAt: string
 }
 
 export type HumanReviewBatchDecision = {

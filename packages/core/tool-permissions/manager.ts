@@ -21,7 +21,6 @@ export type ToolPermissionManagerOptions = {
   humanReviewer: HumanPermissionReviewer
   audit?: (event: PermissionAuditEvent) => void | Promise<void>
   now?: () => Date
-  humanReviewTimeoutMs?: number
 }
 
 type HumanReviewResolution =
@@ -48,7 +47,6 @@ export class ToolPermissionManager {
   readonly #humanReviewer: HumanPermissionReviewer
   readonly #audit: (event: PermissionAuditEvent) => void | Promise<void>
   readonly #now: () => Date
-  readonly #humanReviewTimeoutMs: number
 
   constructor(options: ToolPermissionManagerOptions) {
     this.#registry = options.registry
@@ -56,7 +54,6 @@ export class ToolPermissionManager {
     this.#humanReviewer = options.humanReviewer
     this.#audit = options.audit ?? (() => {})
     this.#now = options.now ?? (() => new Date())
-    this.#humanReviewTimeoutMs = options.humanReviewTimeoutMs ?? 10 * 60 * 1000
   }
 
   /** 对一批已通过工具 Schema 校验的调用执行权限流程，并只把最终需要人工判断的调用交给用户。 */
@@ -292,7 +289,6 @@ export class ToolPermissionManager {
     signal?: AbortSignal,
   ): Promise<Map<string, HumanReviewResolution>> {
     const created = this.#now()
-    const expiresAt = new Date(created.getTime() + this.#humanReviewTimeoutMs).toISOString()
     const requests: HumanReviewRequest[] = items.map((item) => {
       const sensitiveFields = this.#registry
         .get(item.request.toolName)
@@ -312,13 +308,11 @@ export class ToolPermissionManager {
         ...(item.error ? { aiError: item.error } : {}),
         ...(sensitiveFields && sensitiveFields.length > 0 ? { sensitiveFields } : {}),
         createdAt: created.toISOString(),
-        expiresAt,
       }
     })
     const controller = new AbortController()
     const onAbort = () => controller.abort(signal?.reason)
     signal?.addEventListener("abort", onAbort, { once: true })
-    const timeout = setTimeout(() => controller.abort(new Error("人工审核超时")), this.#humanReviewTimeoutMs)
     try {
       const decision = await this.#humanReviewer.review(
         {
@@ -327,7 +321,6 @@ export class ToolPermissionManager {
           turnId: requests[0]?.turnId ?? "",
           requests,
           createdAt: created.toISOString(),
-          expiresAt,
         },
         controller.signal,
       )
@@ -354,13 +347,9 @@ export class ToolPermissionManager {
       return resolutions
     } catch (caught) {
       if (signal?.aborted) return new Map(requests.map((request) => [request.toolCallId, { type: "aborted" } as const]))
-      const reason =
-        caught instanceof Error && caught.message === "人工审核超时"
-          ? "Operation denied: Permission review timed out after 10 minutes."
-          : `Operation denied: Permission review failed. Reason: ${caught instanceof Error ? caught.message : String(caught)}`
+      const reason = `Operation denied: Permission review failed. Reason: ${caught instanceof Error ? caught.message : String(caught)}`
       return new Map(requests.map((request) => [request.toolCallId, { type: "system", reason } as const]))
     } finally {
-      clearTimeout(timeout)
       signal?.removeEventListener("abort", onAbort)
     }
   }

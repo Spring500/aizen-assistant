@@ -15,7 +15,6 @@ function request(command: string): HumanReviewRequest {
     arguments: { command },
     assessment: { summary: "命令", targets: [], risk: "medium", reason: "测试", findings: [] },
     createdAt: new Date().toISOString(),
-    expiresAt: new Date().toISOString(),
   }
 }
 
