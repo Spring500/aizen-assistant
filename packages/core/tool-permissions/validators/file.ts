@@ -226,18 +226,42 @@ export function createFileValidator(toolName: "read" | "write" | "edit"): ToolPe
       if (!inside(root, resolved.target) || sensitivePath(resolved.target)) {
         analyzed.risk = "high"
         analyzed.reason = !inside(root, resolved.target) ? "目标位于工作区外" : "目标属于敏感路径"
+        analyzed.findings = [
+          {
+            severity: "high",
+            category: !inside(root, resolved.target) ? "outside-workspace" : "sensitive-path",
+            summary: analyzed.reason,
+            evidence: resolved.target,
+          },
+        ]
         return { type: "needHumanReview", assessment: analyzed }
       }
       if (toolName === "read") return { type: "allow", assessment: analyzed }
       if (containsSensitiveField(request.arguments)) {
         analyzed.risk = "high"
         analyzed.reason = "工具参数包含敏感字段"
+        analyzed.findings = [
+          {
+            severity: "high",
+            category: "sensitive-argument",
+            summary: analyzed.reason,
+            evidence: resolved.target,
+          },
+        ]
         return { type: "needHumanReview", assessment: analyzed }
       }
       const extension = extname(resolved.target).toLowerCase()
       if (executionSensitive(resolved.target) || (!ordinaryExtensions.has(extension) && extension !== "")) {
         analyzed.risk = "medium"
         analyzed.reason = "目标可能影响后续执行或发布"
+        analyzed.findings = [
+          {
+            severity: "medium",
+            category: "execution-sensitive-file",
+            summary: analyzed.reason,
+            evidence: resolved.target,
+          },
+        ]
         return {
           type: "needAiReview",
           assessment: analyzed,

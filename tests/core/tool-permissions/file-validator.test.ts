@@ -68,11 +68,13 @@ test("edit 匹配失败直接返回无法执行", async () => {
   expect(result.assessment.findings).toMatchObject([{ category: "edit-preview" }])
 })
 
-test("依赖清单交给AI审核", async () => {
+test("依赖清单交给AI审核并说明执行影响", async () => {
   const root = await setup()
-  expect(
-    (await createFileValidator("write").validate(request(root, "write", { path: "package.json", content: "{}" }))).type,
-  ).toBe("needAiReview")
+  const result = await createFileValidator("write").validate(
+    request(root, "write", { path: "package.json", content: "{}" }),
+  )
+  expect(result.type).toBe("needAiReview")
+  expect(result.assessment.findings).toMatchObject([{ category: "execution-sensitive-file" }])
 })
 
 test("工作区外和敏感路径交给人工", async () => {
@@ -80,9 +82,11 @@ test("工作区外和敏感路径交给人工", async () => {
   const outside = await mkdtemp(join(tmpdir(), "aizen-outside-"))
   directories.push(outside)
   await writeFile(join(outside, "secret.txt"), "secret")
-  expect(
-    (await createFileValidator("read").validate(request(root, "read", { path: join(outside, "secret.txt") }))).type,
-  ).toBe("needHumanReview")
+  const outsideResult = await createFileValidator("read").validate(
+    request(root, "read", { path: join(outside, "secret.txt") }),
+  )
+  expect(outsideResult.type).toBe("needHumanReview")
+  expect(outsideResult.assessment.findings).toMatchObject([{ category: "outside-workspace" }])
   await mkdir(join(root, ".git"))
   await writeFile(join(root, ".git", "config"), "x")
   expect((await createFileValidator("read").validate(request(root, "read", { path: ".git/config" }))).type).toBe(

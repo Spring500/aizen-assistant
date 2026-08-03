@@ -45,12 +45,14 @@ export type EditableHeaderSegment = {
   dim?: boolean
 }
 
+export type EditableHeaderLine = string | EditableHeaderSegment[]
+
 export type EditableSelectorOptions = {
   title: string
   header?: EditableHeaderSegment[]
-  headerLines?: string[]
+  headerLines?: EditableHeaderLine[]
   /** 按当前终端宽度动态生成 Header，resize 后会重新计算。 */
-  headerLinesForWidth?: (width: number) => string[]
+  headerLinesForWidth?: (width: number) => EditableHeaderLine[]
   headerHeight?: number
   signal?: AbortSignal
   /** 左右方向键切换同一流程中的相邻页面。 */
@@ -99,6 +101,10 @@ function headerContent(segments: EditableHeaderSegment[]): StyledText {
       }),
     ),
   )
+}
+
+function dynamicHeaderContent(line: EditableHeaderLine): string | StyledText {
+  return typeof line === "string" ? line : headerContent(line)
 }
 
 /**
@@ -160,7 +166,7 @@ export function selectEditableItem<T>(
         wrapMode: "none",
         truncate: true,
         fg: systemColors.secondary,
-        content: headerLines[index] ?? "",
+        content: dynamicHeaderContent(headerLines[index] ?? ""),
       })
       handle.content.add(line)
       return line
@@ -412,7 +418,8 @@ export function selectEditableItem<T>(
     const onResize = () => {
       if (options.headerLinesForWidth) {
         const lines = options.headerLinesForWidth(overlays.renderer.terminalWidth)
-        for (const [index, renderable] of headerRenderables.entries()) renderable.content = lines[index] ?? ""
+        for (const [index, renderable] of headerRenderables.entries())
+          renderable.content = dynamicHeaderContent(lines[index] ?? "")
       }
       updateItems()
     }

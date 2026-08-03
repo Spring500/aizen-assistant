@@ -196,8 +196,14 @@ export function createPermissionReviewView(
     const sensitiveLines =
       sensitivePaths.length > 0 ? [`⚠ 敏感字段（本地原值未脱敏）：${sensitivePaths.join("、")}`] : []
     const findingLines = request.assessment.findings.flatMap((item) => [
-      `[${riskLabels[item.severity]}] ${item.summary}`,
-      `证据：${item.evidence}`,
+      [
+        {
+          text: `[${riskLabels[item.severity]}] ${item.summary}`,
+          color: riskColors[item.severity],
+          bold: item.severity === "high" || item.severity === "critical",
+        },
+      ],
+      [{ text: `证据：${item.evidence}`, color: riskColors[item.severity] }],
     ])
     const approvalBlocked = (preview().truncated || hiddenHighEvidence) && !viewedEvidence.has(request.requestId)
     const existing = decisions.get(request.requestId)
@@ -254,14 +260,17 @@ export function createPermissionReviewView(
             color: riskColors[request.assessment.risk],
             bold: request.assessment.risk === "high" || request.assessment.risk === "critical",
           },
+          {
+            text: ` · 判定原因：${request.assessment.reason}`,
+            color: riskColors[request.assessment.risk],
+          },
         ],
         headerLinesForWidth: (width) => [
-          `判定原因：${request.assessment.reason}`,
           ...sensitiveLines,
           ...findingLines,
           ...permissionParameterPreview(request, width, 3).lines,
         ],
-        headerHeight: 4 + sensitiveLines.length + findingLines.length,
+        headerHeight: 3 + sensitiveLines.length + findingLines.length,
         navigate,
         signal: controller.signal,
       },
