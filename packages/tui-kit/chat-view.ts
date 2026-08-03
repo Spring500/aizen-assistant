@@ -472,6 +472,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
   let latestSnapshot: CoreSnapshot | undefined
   let notice = ""
   let resizeTimer: ReturnType<typeof setTimeout> | undefined
+  let destroyed = false
 
   const turnAges = () => {
     const ids = [...new Set(blocks.map((block) => block.turnId))]
@@ -523,7 +524,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
   }
 
   const refreshFooter = () => {
-    if (!latestSnapshot) return
+    if (destroyed || !latestSnapshot) return
     header.content = "AizenAssistant | /fold 折叠设置"
     live.content = liveText(latestSnapshot)
     status.content = notice || statusText(latestSnapshot)
@@ -551,6 +552,8 @@ export function createChatView(renderer: CliRenderer): ChatView {
     live,
     status,
     destroy() {
+      destroyed = true
+      latestSnapshot = undefined
       if (resizeTimer) clearTimeout(resizeTimer)
       renderer.off(CliRenderEvents.RESIZE, onResize)
       header.destroy()
@@ -558,6 +561,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
       status.destroy()
     },
     update(snapshot) {
+      if (destroyed) return
       latestSnapshot = snapshot
       notice = ""
       fold = { ...snapshot.preferences.fold }
@@ -569,6 +573,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
       return { ...fold }
     },
     setFoldPreferences(next) {
+      if (destroyed) return
       fold = { ...next }
       notice = "已应用折叠设置，并全量回放会话"
       syncHistory(true)
