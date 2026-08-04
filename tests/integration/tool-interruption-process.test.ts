@@ -1,0 +1,235 @@
+import { afterEach, expect, test } from "bun:test"
+import { exists, mkdtemp, readFile, rm } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { AizenCore } from "../../packages/core/aizen-core.ts"
+import { SessionStore } from "../../packages/core/session-store.ts"
+import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
+import { startMockServer } from "../utils/mock-server.ts"
+
+const directories: string[] = []
+const workerPath = join(import.meta.dir, "tool-interruption-worker.ts")
+
+type Checkpoint =
+  | "assistantMessage"
+  | "permissionRequested"
+  | "validated"
+  | "authorized"
+  | "authorizedDenied"
+  | "executionStarted"
+  | "toolSideEffect"
+  | "executionFinished"
+  | "executionFailed"
+  | "toolMessage"
+
+type Case = {
+  checkpoint: Checkpoint
+  expected: string
+  sideEffect: boolean
+  isError: boolean
+}
+
+const cases: Case[] = [
+  {
+    checkpoint: "assistantMessage",
+    expected:
+      "Operation interrupted: The application stopped before permission review started, so the tool did not run. Submit a new tool call only if it is still needed.",
+    sideEffect: false,
+    isError: true,
+  },
+  {
+    checkpoint: "permissionRequested",
+    expected:
+      "Operation interrupted: Permission review did not complete, so the tool did not run. Submit a new tool call only if it is still needed.",
+    sideEffect: false,
+    isError: true,
+  },
+  {
+    checkpoint: "validated",
+    expected: `Operation interrupted: Permission review did not complete, so the tool did not run. Submit a new tool call only if it is still needed.\n\nPermission review:\n1. Validator: allow\n   Reason: 测试允许执行`,
+    sideEffect: false,
+    isError: true,
+  },
+  {
+    checkpoint: "authorized",
+    expected:
+      "Operation interrupted: The tool was authorized but did not start. Submit a new tool call if it is still needed.",
+    sideEffect: false,
+    isError: true,
+  },
+  {
+    checkpoint: "authorizedDenied",
+    expected: `Operation denied: Test policy rejected the tool call.\n\nPermission review:\n1. Validator: deny\n   Reason: Operation denied: Test policy rejected the tool call.\n\nThe tool did not run.`,
+    sideEffect: false,
+    isError: true,
+  },
+  {
+    checkpoint: "executionStarted",
+    expected:
+      "Operation interrupted: Execution started, but its outcome is unknown. Verify the target state before retrying or making further changes.",
+    sideEffect: false,
+    isError: true,
+  },
+  {
+    checkpoint: "toolSideEffect",
+    expected:
+      "Operation interrupted: Execution started, but its outcome is unknown. Verify the target state before retrying or making further changes.",
+    sideEffect: true,
+    isError: true,
+  },
+  {
+    checkpoint: "executionFinished",
+    expected:
+      "Operation interrupted: The tool completed, but its result was lost. Verify the target state before repeating the operation.",
+    sideEffect: true,
+    isError: true,
+  },
+  {
+    checkpoint: "executionFailed",
+    expected: `Operation failed: 测试工具产生部分影响后失败\n\nVerify the target state before retrying because the operation may have had partial effects.`,
+    sideEffect: true,
+    isError: true,
+  },
+  {
+    checkpoint: "toolMessage",
+    expected: "checkpoint completed",
+    sideEffect: true,
+    isError: false,
+  },
+]
+
+afterEach(async () => {
+  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
+})
+
+async function waitForFile(path: string, process: Bun.Subprocess): Promise<void> {
+  for (let attempt = 0; attempt < 500; attempt++) {
+    if (await exists(path)) return
+    if (process.exitCode !== null) throw new Error(`检查点 worker 提前退出：${process.exitCode}`)
+    await Bun.sleep(10)
+  }
+  throw new Error(`等待检查点超时：${path}`)
+}
+
+function toolResultFromRequest(messages: unknown[]): { callId: string; text: string; isError: boolean } | undefined {
+  for (const message of messages) {
+    if (!message || typeof message !== "object" || Array.isArray(message)) continue
+    const content = (message as { content?: unknown }).content
+    if (!Array.isArray(content)) continue
+    for (const part of content) {
+      if (!part || typeof part !== "object" || Array.isArray(part)) continue
+      const source = part as { type?: unknown; tool_use_id?: unknown; content?: unknown; is_error?: unknown }
+      if (source.type !== "tool_result" || typeof source.tool_use_id !== "string") continue
+      const text =
+        typeof source.content === "string"
+          ? source.content
+          : Array.isArray(source.content)
+            ? source.content
+                .filter(
+                  (item): item is { type: "text"; text: string } =>
+                    !!item && typeof item === "object" && !Array.isArray(item) && "type" in item && "text" in item,
+                )
+                .map((item) => item.text)
+                .join("\n")
+            : ""
+      return { callId: source.tool_use_id, text, isError: source.is_error === true }
+    }
+  }
+  return undefined
+}
+
+for (const scenario of cases) {
+  test(`进程异常退出后恢复工具阶段：${scenario.checkpoint}`, async () => {
+    const root = await mkdtemp(join(tmpdir(), `aizen-interruption-${scenario.checkpoint}-`))
+    directories.push(root)
+    const readyPath = join(root, "checkpoint.ready")
+    const sessionIdPath = join(root, "session-id.txt")
+    const mock = await startMockServer()
+    let requestSequence = 0
+    mock.handle(async () => {
+      requestSequence += 1
+      if (requestSequence === 1)
+        return {
+          type: "tool_call",
+          name: "checkpoint_tool",
+          arguments: { declaredIntent: "验证异常恢复" },
+          callId: "checkpoint-call",
+        }
+      await new Promise<void>(() => {})
+      return { type: "text", text: "不会到达" }
+    })
+    const worker = Bun.spawn(
+      [
+        process.execPath,
+        "run",
+        workerPath,
+        JSON.stringify({ root, mockUrl: mock.url, checkpoint: scenario.checkpoint, readyPath, sessionIdPath }),
+      ],
+      { stdout: "pipe", stderr: "pipe" },
+    )
+    try {
+      await waitForFile(readyPath, worker)
+      worker.kill()
+      await worker.exited
+      const sessionId = await readFile(sessionIdPath, "utf8")
+      expect(await exists(join(root, "effect.txt"))).toBe(scenario.sideEffect)
+
+      mock.handle(() => ({ type: "text", text: "恢复后继续" }))
+      const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+      await pi.setRuntimeApiKey("anthropic", "test-key")
+      const model = (await pi.listModels()).find(
+        (item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6",
+      )
+      if (!model) throw new Error("缺少测试模型")
+      pi.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+      const store = new SessionStore(join(root, "sessions"))
+      const crashed = await store.read(sessionId)
+      if (scenario.checkpoint === "authorized" || scenario.checkpoint === "authorizedDenied") {
+        expect(
+          crashed.records.some(
+            (record) =>
+              record.kind === "tool_permission" &&
+              !!record.event &&
+              typeof record.event === "object" &&
+              !Array.isArray(record.event) &&
+              record.event.type === "authorized" &&
+              !!record.event.authorization,
+          ),
+        ).toBe(true)
+      }
+      const core = new AizenCore({ cwd: root, store, pi })
+      expect(await core.dispatch({ type: "open_session", sessionId })).toEqual({ ok: true })
+      const userToolResults = core
+        .getSnapshot()
+        .transcript.filter(
+          (entry) =>
+            entry.type === "message" && entry.message.role === "tool" && entry.message.callId === "checkpoint-call",
+        )
+      expect(userToolResults).toHaveLength(1)
+      const userResult = userToolResults[0]
+      if (userResult?.type !== "message" || userResult.message.role !== "tool") throw new Error("缺少用户侧工具结果")
+      expect(userResult.message.parts).toEqual([{ kind: "text", text: scenario.expected }])
+      expect(userResult.message.isError).toBe(scenario.isError)
+
+      expect(await core.dispatch({ type: "send_prompt", text: "恢复后检查上下文" })).toEqual({ ok: true })
+      const requests = await mock.requests()
+      const recoveredRequest = requests.at(-1)
+      if (!recoveredRequest) throw new Error("MockServer 没有收到恢复后的请求")
+      const agentResult = toolResultFromRequest(recoveredRequest.messages)
+      expect(agentResult).toEqual({ callId: "checkpoint-call", text: scenario.expected, isError: scenario.isError })
+      await core.dispose()
+
+      const beforeSecondOpen = (await store.read(sessionId)).records.length
+      const secondPi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+      await secondPi.setRuntimeApiKey("anthropic", "test-key")
+      secondPi.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+      const secondCore = new AizenCore({ cwd: root, store, pi: secondPi })
+      expect(await secondCore.dispatch({ type: "open_session", sessionId })).toEqual({ ok: true })
+      expect((await store.read(sessionId)).records).toHaveLength(beforeSecondOpen)
+      await secondCore.dispose()
+    } finally {
+      if (worker.exitCode === null) worker.kill()
+      mock.stop()
+    }
+  }, 30000)
+}
