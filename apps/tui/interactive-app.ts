@@ -461,53 +461,28 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     try {
       let draft = view.getFoldPreferences()
       const fields = [
-        { key: "userTurns", name: "用户消息" },
-        { key: "assistantTurns", name: "助手回复" },
-        { key: "thinkingTurns", name: "思考过程" },
-        { key: "toolGroupTurns", name: "工具组" },
-        { key: "toolDetailTurns", name: "工具详情" },
+        { key: "thinkingExpanded", name: "思考过程" },
+        { key: "toolGroupExpanded", name: "工具组" },
+        { key: "toolDetailsExpanded", name: "工具详情" },
       ] as const
       while (!exiting) {
-        const selected = await selectEditableItem<"reset" | "apply">(
+        const selected = await selectItem<(typeof fields)[number]["key"] | "reset" | "apply">(
           overlays,
           "fold-selector",
-          () => [
+          [
             ...fields.map((field) => ({
-              name: `${field.name.padEnd(6, "　")} ${draft[field.key] === 0 ? "全部展开" : `最近 ${draft[field.key]} 轮`}`,
-              description: field.key === "toolDetailTurns" ? "不能超过工具组；0 表示全部展开" : "0 表示全部展开",
-              value: "apply" as const,
-              edit: {
-                label: `${field.name}  `,
-                value: String(draft[field.key]),
-                validate: (value: string) => (/^\d+$/.test(value) ? undefined : "请输入大于或等于 0 的整数"),
-                save: (value: string) => {
-                  const parsed = Number(value)
-                  if (!Number.isSafeInteger(parsed)) return
-                  draft = { ...draft, [field.key]: parsed }
-                  if (
-                    field.key === "toolGroupTurns" &&
-                    draft.toolGroupTurns !== 0 &&
-                    (draft.toolDetailTurns === 0 || draft.toolDetailTurns > draft.toolGroupTurns)
-                  )
-                    draft.toolDetailTurns = draft.toolGroupTurns
-                  if (
-                    field.key === "toolDetailTurns" &&
-                    (draft.toolDetailTurns === 0
-                      ? draft.toolGroupTurns !== 0
-                      : draft.toolGroupTurns !== 0 && draft.toolDetailTurns > draft.toolGroupTurns)
-                  )
-                    draft.toolGroupTurns = draft.toolDetailTurns
-                },
-              },
+              name: `${field.name.padEnd(6, "　")} ${draft[field.key] ? "展开" : "折叠"}`,
+              description: "选择后切换",
+              value: field.key,
             })),
-            { name: "恢复默认", description: "恢复内置折叠范围", value: "reset" as const },
+            { name: "恢复默认", description: "恢复内置折叠开关", value: "reset" as const },
             { name: "应用并返回", description: "保存设置并全量回放会话", value: "apply" as const },
           ],
           { title: "折叠设置", signal: interactionController.signal },
         )
         if (!selected) return
         if (selected === "reset") {
-          draft = { userTurns: 0, assistantTurns: 3, thinkingTurns: 1, toolGroupTurns: 1, toolDetailTurns: 1 }
+          draft = { thinkingExpanded: false, toolGroupExpanded: false, toolDetailsExpanded: false }
           continue
         }
         if (selected === "apply") {
@@ -515,6 +490,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           if (result.ok) view.setFoldPreferences(draft)
           return
         }
+        draft = { ...draft, [selected]: !draft[selected] }
       }
     } finally {
       endInteraction()

@@ -102,12 +102,16 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
 
-async function waitForFile(path: string, process: Bun.Subprocess): Promise<void> {
+async function waitForFile(path: string, process: Bun.Subprocess, trace: (stage: string) => void): Promise<void> {
   for (let attempt = 0; attempt < 500; attempt++) {
-    if (await exists(path)) return
+    if (await exists(path)) {
+      trace("检查点文件已可见")
+      return
+    }
     if (process.exitCode !== null) throw new Error(`检查点 worker 提前退出：${process.exitCode}`)
     await Bun.sleep(10)
   }
+  trace("等待检查点超时")
   throw new Error(`等待检查点超时：${path}`)
 }
 
@@ -140,6 +144,12 @@ function toolResultFromRequest(messages: unknown[]): { callId: string; text: str
 
 for (const scenario of cases) {
   test(`进程异常退出后恢复工具阶段：${scenario.checkpoint}`, async () => {
+    const startedAt = performance.now()
+    const trace = (stage: string) =>
+      console.log(
+        `[工具中断/${scenario.checkpoint}/parent] ${stage}，累计耗时 ${Math.round(performance.now() - startedAt)}ms`,
+      )
+    trace("开始")
     const root = await mkdtemp(join(tmpdir(), `aizen-interruption-${scenario.checkpoint}-`))
     directories.push(root)
     const readyPath = join(root, "checkpoint.ready")
@@ -158,6 +168,7 @@ for (const scenario of cases) {
       await new Promise<void>(() => {})
       return { type: "text", text: "不会到达" }
     })
+    trace("启动 worker")
     const worker = Bun.spawn(
       [
         process.execPath,
@@ -165,12 +176,14 @@ for (const scenario of cases) {
         workerPath,
         JSON.stringify({ root, mockUrl: mock.url, checkpoint: scenario.checkpoint, readyPath, sessionIdPath }),
       ],
-      { stdout: "pipe", stderr: "pipe" },
+      { stdout: "inherit", stderr: "inherit" },
     )
     try {
-      await waitForFile(readyPath, worker)
+      await waitForFile(readyPath, worker, trace)
+      trace("终止 worker")
       worker.kill()
-      await worker.exited
+      const workerExitCode = await worker.exited
+      trace(`worker 已退出：${workerExitCode}`)
       const sessionId = await readFile(sessionIdPath, "utf8")
       expect(await exists(join(root, "effect.txt"))).toBe(scenario.sideEffect)
 
@@ -227,9 +240,12 @@ for (const scenario of cases) {
       expect(await secondCore.dispatch({ type: "open_session", sessionId })).toEqual({ ok: true })
       expect((await store.read(sessionId)).records).toHaveLength(beforeSecondOpen)
       await secondCore.dispose()
+      trace("恢复验证完成")
     } finally {
+      trace("开始清理")
       if (worker.exitCode === null) worker.kill()
       mock.stop()
+      trace("清理完成")
     }
   }, 30000)
 }

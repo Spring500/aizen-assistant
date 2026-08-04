@@ -174,7 +174,6 @@ export class AizenCore implements CorePort {
     if (this.#disposed)
       return { ok: false, error: { code: "CORE_DISPOSED", message: "核心已经关闭", severity: "fatal" } }
     try {
-      this.#clearError()
       if (
         command.type !== "abort" &&
         command.type !== "answer_auth_prompt" &&
@@ -404,7 +403,10 @@ export class AizenCore implements CorePort {
   }
 
   async #readPreferences() {
-    return this.#preferencesStore ? this.#preferencesStore.read() : structuredClone(this.#snapshot.preferences)
+    if (!this.#preferencesStore) return structuredClone(this.#snapshot.preferences)
+    const preferences = await this.#preferencesStore.read()
+    this.#reportPreferenceWarnings()
+    return preferences
   }
 
   async #writePreferences(preferences: CoreSnapshot["preferences"]): Promise<void> {
@@ -500,7 +502,6 @@ export class AizenCore implements CorePort {
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
-    this.#clearError()
     this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
     await this.#tryRememberSessionDefaults(actualModel, viewId, permissionMode)
@@ -627,7 +628,6 @@ export class AizenCore implements CorePort {
       const actual = await this.#pi.restore({ cwd: this.#cwd, model, view, records: this.#records })
       this.#snapshot.currentModel = actual
       delete this.#snapshot.runtimeIssue
-      this.#clearError()
       await this.#tryRememberSessionDefaults(actual, viewId, this.#snapshot.currentPermissionMode)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1228,6 +1228,11 @@ export class AizenCore implements CorePort {
     this.#sessionNamingTask = task
   }
 
+  #reportPreferenceWarnings(): void {
+    const warnings = this.#preferencesStore?.takeWarnings() ?? []
+    if (warnings.length > 0) this.#reportError(`preferences.json 配置警告：${warnings.join("；")}`)
+  }
+
   #reportStoreWarnings(): void {
     const warnings = this.#store.takeWarnings()
     if (warnings.length > 0) this.#reportError(warnings.join("；"))
@@ -1240,11 +1245,6 @@ export class AizenCore implements CorePort {
 
   #reportError(message: string): void {
     this.#errors.report(message)
-    this.#syncVisibleError()
-  }
-
-  #clearError(): void {
-    this.#errors.clearVisible()
     this.#syncVisibleError()
   }
 

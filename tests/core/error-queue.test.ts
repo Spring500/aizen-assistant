@@ -12,8 +12,6 @@ describe("核心错误队列", () => {
 
     expect(queue.entries().map((entry) => entry.message)).toEqual(["第一项", "第二项", "第三项"])
     expect(queue.visible()?.message).toBe("第三项")
-    queue.clearVisible()
-    expect(queue.visible()).toBeUndefined()
     expect(queue.entries()).toHaveLength(3)
   })
 })

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
@@ -78,10 +78,9 @@ class NamingFakePi extends FakePi {
 async function configuredCore(root: string, pi: PiPort, store = new SessionStore(join(root, "sessions"))) {
   const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
   await preferencesStore.write({
-    version: 1,
     newSession: { viewId: null, permissionMode: "hybrid" },
     agents: { sessionNaming: { model: { providerId: "test", modelId: "title-model" } }, permissionReview: {} },
-    fold: { userTurns: 0, assistantTurns: 3, thinkingTurns: 1, toolGroupTurns: 1, toolDetailTurns: 1 },
+    fold: { thinkingExpanded: false, toolGroupExpanded: false, toolDetailsExpanded: false },
   })
   const core = new AizenCore({ cwd: "E:\\project", store, pi, preferencesStore })
   await core.dispatch({ type: "load_preferences" })
@@ -275,10 +274,9 @@ describe("核心编排", () => {
     directories.push(root)
     const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
     await preferencesStore.write({
-      version: 1,
       newSession: { viewId: null, permissionMode: "hybrid" },
       agents: { sessionNaming: {}, permissionReview: {} },
-      fold: { userTurns: 2, assistantTurns: 4, thinkingTurns: 1, toolGroupTurns: 3, toolDetailTurns: 1 },
+      fold: { thinkingExpanded: true, toolGroupExpanded: false, toolDetailsExpanded: true },
     })
     const core = new AizenCore({
       cwd: "E:\\project",
@@ -288,8 +286,36 @@ describe("核心编排", () => {
     })
 
     expect(await core.dispatch({ type: "create_session", model, viewId: null })).toEqual({ ok: true })
-    expect((await preferencesStore.read()).fold.assistantTurns).toBe(4)
+    expect((await preferencesStore.read()).fold.thinkingExpanded).toBe(true)
     expect((await preferencesStore.read()).newSession.model).toEqual(model)
+    await core.dispose()
+  })
+
+  test("偏好警告保留合法字段且不被后续命令清除", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
+    await writeFile(
+      join(root, "preferences.json"),
+      JSON.stringify({
+        newSession: { viewId: "review", permissionMode: "invalid" },
+        agents: { sessionNaming: {}, permissionReview: {} },
+        fold: { thinkingExpanded: true, toolGroupExpanded: false, toolDetailsExpanded: false },
+      }),
+    )
+    const core = new AizenCore({
+      cwd: "E:\\project",
+      store: new SessionStore(join(root, "sessions")),
+      pi: new FakePi(),
+      preferencesStore,
+    })
+
+    expect(await core.dispatch({ type: "load_preferences" })).toEqual({ ok: true })
+    expect(core.getSnapshot().preferences.newSession.viewId).toBe("review")
+    expect(core.getSnapshot().preferences.fold.thinkingExpanded).toBe(true)
+    expect(core.getSnapshot().lastError).toContain("newSession.permissionMode 无效，已使用默认值")
+    await core.dispatch({ type: "list_sessions" })
+    expect(core.getSnapshot().lastError).toContain("newSession.permissionMode 无效，已使用默认值")
     await core.dispose()
   })
 
