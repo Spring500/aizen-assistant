@@ -57,7 +57,7 @@ function setup(decision: ToolPermissionDecision, aiType: "allow" | "deny" | "nee
 const assessment = { summary: "动作", targets: [], risk: "low" as const, reason: "测试", findings: [] }
 
 describe("ToolPermissionManager", () => {
-  test("完全开放模式不调用验证器", async () => {
+  test("完全开放模式不启用收集器时不调用验证器", async () => {
     const registry = new ToolPermissionRegistry()
     const manager = new ToolPermissionManager({
       registry,
@@ -221,5 +221,146 @@ describe("ToolPermissionManager", () => {
     const { manager, humanCalls } = setup({ type: "needHumanReview", assessment })
     expect(await manager.authorize({ ...base, mode: "aiOnly" })).toMatchObject({ type: "deny", source: "system" })
     expect(humanCalls).toHaveLength(0)
+  })
+
+  test("完全开放模式等待验证器并只记录缺口后自动放行原始参数", async () => {
+    const registry = new ToolPermissionRegistry()
+    const calls: string[] = []
+    registry.register({
+      toolName: "demo",
+      validate: async () => {
+        await Bun.sleep(5)
+        calls.push("validated")
+        return {
+          type: "deny",
+          reason: "影子拒绝",
+          assessment: {
+            ...assessment,
+            normalizedArguments: { value: 2 },
+            coverageGaps: [{ code: "demo.rule-miss", kind: "rule-miss" as const, summary: "演示规则未覆盖" }],
+          },
+        }
+      },
+    })
+    const records: unknown[] = []
+    const manager = new ToolPermissionManager({
+      registry,
+      aiReviewer: {
+        review: async () => {
+          throw new Error("完全开放模式不应调用AI")
+        },
+      },
+      humanReviewer: {
+        review: async () => {
+          throw new Error("完全开放模式不应调用人工")
+        },
+      },
+      gapRecorder: {
+        record: async (record) => {
+          calls.push("recorded")
+          records.push(record)
+        },
+      },
+    })
+    expect(await manager.authorize({ ...base, mode: "unrestricted" })).toMatchObject({
+      type: "allow",
+      source: "mode",
+      arguments: { value: 1 },
+    })
+    expect(calls).toEqual(["validated", "recorded"])
+    expect(records).toMatchObject([
+      {
+        permissionMode: "unrestricted",
+        validatorDecision: "deny",
+        gaps: [{ code: "demo.rule-miss" }],
+        arguments: { value: 1 },
+      },
+    ])
+  })
+
+  test("普通模式复用验证结果记录缺口且不重复验证", async () => {
+    const registry = new ToolPermissionRegistry()
+    let validations = 0
+    registry.register({
+      toolName: "demo",
+      validate: async () => {
+        validations++
+        return {
+          type: "allow",
+          assessment: {
+            ...assessment,
+            coverageGaps: [{ code: "demo.coarse", kind: "coarse-rule" as const, summary: "规则较粗" }],
+          },
+        }
+      },
+    })
+    const records: unknown[] = []
+    const manager = new ToolPermissionManager({
+      registry,
+      aiReviewer: { review: async () => ({ type: "allow", reason: "不应调用" }) },
+      humanReviewer: { review: async (request) => ({ batchId: request.batchId, answers: [] }) },
+      gapRecorder: { record: async (record) => void records.push(record) },
+    })
+    expect(await manager.authorize(base)).toMatchObject({ type: "allow", source: "validator" })
+    expect(validations).toBe(1)
+    expect(records).toHaveLength(1)
+  })
+
+  test("Bash记录完整命令，文件工具只记录内容规模", async () => {
+    const registry = new ToolPermissionRegistry()
+    const gap = { code: "demo.gap", kind: "rule-miss" as const, summary: "测试缺口" }
+    registry.register({
+      toolName: "bash",
+      validate: async () => ({ type: "allow", assessment: { ...assessment, coverageGaps: [gap] } }),
+    })
+    registry.register({
+      toolName: "write",
+      validate: async () => ({ type: "allow", assessment: { ...assessment, coverageGaps: [gap] } }),
+    })
+    const records: Array<{ toolName: string; arguments: unknown }> = []
+    const manager = new ToolPermissionManager({
+      registry,
+      aiReviewer: { review: async () => ({ type: "allow", reason: "不应调用" }) },
+      humanReviewer: { review: async (request) => ({ batchId: request.batchId, answers: [] }) },
+      gapRecorder: {
+        record: async (record) => void records.push({ toolName: record.toolName, arguments: record.arguments }),
+      },
+    })
+    await manager.authorize({ ...base, toolName: "bash", arguments: { command: "find ." } })
+    await manager.authorize({
+      ...base,
+      toolName: "write",
+      arguments: { path: "secret.ts", content: "不要写入记录" },
+    })
+    expect(records).toEqual([
+      { toolName: "bash", arguments: { command: "find ." } },
+      {
+        toolName: "write",
+        arguments: { path: "secret.ts", contentCharacters: 6, contentLines: 1 },
+      },
+    ])
+  })
+
+  test("完全开放模式在验证器缺失、异常和记录失败时仍自动放行", async () => {
+    const errors: string[] = []
+    const missing = new ToolPermissionManager({
+      registry: new ToolPermissionRegistry(),
+      aiReviewer: { review: async () => ({ type: "deny", reason: "不应调用" }) },
+      humanReviewer: { review: async (request) => ({ batchId: request.batchId, answers: [] }) },
+      gapRecorder: { record: async () => {} },
+    })
+    expect(await missing.authorize({ ...base, mode: "unrestricted" })).toMatchObject({ type: "allow", source: "mode" })
+
+    const registry = new ToolPermissionRegistry()
+    registry.register({ toolName: "demo", validate: async () => Promise.reject(new Error("验证失败")) })
+    const broken = new ToolPermissionManager({
+      registry,
+      aiReviewer: { review: async () => ({ type: "deny", reason: "不应调用" }) },
+      humanReviewer: { review: async (request) => ({ batchId: request.batchId, answers: [] }) },
+      gapRecorder: { record: async () => Promise.reject(new Error("磁盘失败")) },
+      reportGapRecordingError: (error) => errors.push(error.message),
+    })
+    expect(await broken.authorize({ ...base, mode: "unrestricted" })).toMatchObject({ type: "allow", source: "mode" })
+    expect(errors).toEqual(["磁盘失败"])
   })
 })

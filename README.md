@@ -47,6 +47,13 @@ bun run build:tui
 
 编译后的 `dist/aizen-tui.exe` 运行时不要求用户另行安装 Node.js 或 Bun。
 
+## 启动参数
+
+| 参数 | 行为 |
+|---|---|
+| `--data-dir <目录>` | 指定本地数据目录；相对路径以启动时的工作目录为基准，且不能指定为当前工作目录。 |
+| `--collect-permission-gaps` | 将权限规则缺口记录到 `<数据目录>/local-observations/permission-gaps.jsonl`。完全开放模式会额外运行验证器但始终放行且不触发 AI 或人工审核，其他模式复用正常验证结果。 |
+
 ## 数据存储
 
 AizenAssistant 的数据保存在本地：

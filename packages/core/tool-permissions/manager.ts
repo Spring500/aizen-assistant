@@ -1,11 +1,13 @@
-import { sanitizeReviewPayload } from "./sanitizer.ts"
 import type { ToolPermissionRegistry } from "./registry.ts"
+import { sanitizePermissionAuditPayload, sanitizeReviewPayload } from "./sanitizer.ts"
 import type {
   AiPermissionReviewer,
   AiReviewDecision,
   HumanPermissionReviewer,
   HumanReviewRequest,
   PermissionAuditEvent,
+  PermissionCoverageGap,
+  PermissionGapRecorder,
   PermissionReviewStep,
   ToolAssessment,
   ToolAuthorization,
@@ -20,6 +22,8 @@ export type ToolPermissionManagerOptions = {
   aiReviewer: AiPermissionReviewer
   humanReviewer: HumanPermissionReviewer
   audit?: (event: PermissionAuditEvent) => void | Promise<void>
+  gapRecorder?: PermissionGapRecorder
+  reportGapRecordingError?: (error: Error) => void
   now?: () => Date
 }
 
@@ -41,18 +45,58 @@ type PreparedAuthorization =
       error?: string
     }
 
+function gapArguments(request: ToolPermissionRequest): ToolPermissionRequest["arguments"] {
+  const input = request.arguments
+  if (!input || typeof input !== "object" || Array.isArray(input)) return input
+  if (request.toolName === "bash") return input
+  if (request.toolName === "read")
+    return {
+      path: input.path ?? null,
+      offset: input.offset ?? null,
+      limit: input.limit ?? null,
+    }
+  if (request.toolName === "write") {
+    const content = typeof input.content === "string" ? input.content : ""
+    return {
+      path: input.path ?? null,
+      contentCharacters: content.length,
+      contentLines: content ? content.split("\n").length : 0,
+    }
+  }
+  if (request.toolName === "edit") {
+    const edits = Array.isArray(input.edits) ? input.edits : []
+    return {
+      path: input.path ?? null,
+      editCount: edits.length,
+      replacements: edits.map((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) return { oldCharacters: 0, newCharacters: 0 }
+        return {
+          oldCharacters: typeof item.oldText === "string" ? item.oldText.length : 0,
+          newCharacters: typeof item.newText === "string" ? item.newText.length : 0,
+        }
+      }),
+    }
+  }
+  return sanitizePermissionAuditPayload(input, request.sensitiveFields)
+}
+
 export class ToolPermissionManager {
   readonly #registry: ToolPermissionRegistry
   readonly #aiReviewer: AiPermissionReviewer
   readonly #humanReviewer: HumanPermissionReviewer
   readonly #audit: (event: PermissionAuditEvent) => void | Promise<void>
+  readonly #gapRecorder: PermissionGapRecorder | undefined
+  readonly #reportGapRecordingError: (error: Error) => void
   readonly #now: () => Date
+  #gapRecordingFailed = false
 
   constructor(options: ToolPermissionManagerOptions) {
     this.#registry = options.registry
     this.#aiReviewer = options.aiReviewer
     this.#humanReviewer = options.humanReviewer
     this.#audit = options.audit ?? (() => {})
+    this.#gapRecorder = options.gapRecorder
+    this.#reportGapRecordingError = options.reportGapRecordingError ?? (() => {})
     this.#now = options.now ?? (() => new Date())
   }
 
@@ -120,6 +164,7 @@ export class ToolPermissionManager {
     signal?: AbortSignal,
   ): Promise<PreparedAuthorization> {
     if (request.mode === "unrestricted") {
+      if (this.#gapRecorder) await this.#inspectUnrestricted(request, signal)
       return {
         type: "finished",
         request,
@@ -139,7 +184,16 @@ export class ToolPermissionManager {
     }
 
     const validator = this.#registry.get(request.toolName)
-    if (!validator) return this.#humanOrDeny(request, undefined, "该工具没有权限验证器")
+    if (!validator) {
+      await this.#recordGap(request, "missing", [
+        {
+          code: "validator.missing",
+          kind: "rule-miss",
+          summary: "该工具没有权限验证器",
+        },
+      ])
+      return this.#humanOrDeny(request, undefined, "该工具没有权限验证器")
+    }
     const sensitiveFields = validator.sensitiveFields?.filter((field): field is string => typeof field === "string")
     if (sensitiveFields && sensitiveFields.length > 0) request.sensitiveFields = sensitiveFields
 
@@ -147,12 +201,17 @@ export class ToolPermissionManager {
     try {
       decision = await validator.validate(request, signal)
     } catch (error) {
-      return this.#humanOrDeny(
-        request,
-        undefined,
-        `权限验证器异常：${error instanceof Error ? error.message : String(error)}`,
-      )
+      const message = `权限验证器异常：${error instanceof Error ? error.message : String(error)}`
+      await this.#recordGap(request, "error", [
+        {
+          code: "validator.error",
+          kind: "parse-failure",
+          summary: message,
+        },
+      ])
+      return this.#humanOrDeny(request, undefined, message)
     }
+    await this.#recordGap(request, decision.type, decision.assessment.coverageGaps ?? [])
     await this.#record({ type: "validated", request, batchId, decision, at: this.#timestamp() })
 
     const validatorStep: PermissionReviewStep = {
@@ -402,6 +461,63 @@ export class ToolPermissionManager {
       assessment: item.assessment,
       source: "system",
       reviewSteps: [...item.reviewSteps, { stage: "system", decision: "deny", reason: answer.reason }],
+    }
+  }
+
+  async #inspectUnrestricted(request: ToolPermissionRequest, signal?: AbortSignal): Promise<void> {
+    const validator = this.#registry.get(request.toolName)
+    if (!validator) {
+      await this.#recordGap(request, "missing", [
+        {
+          code: "validator.missing",
+          kind: "rule-miss",
+          summary: "该工具没有权限验证器",
+        },
+      ])
+      return
+    }
+    try {
+      const sensitiveFields = validator.sensitiveFields?.filter((field): field is string => typeof field === "string")
+      if (sensitiveFields && sensitiveFields.length > 0) request.sensitiveFields = sensitiveFields
+      const decision = await validator.validate(request, signal)
+      await this.#recordGap(request, decision.type, decision.assessment.coverageGaps ?? [])
+    } catch (error) {
+      await this.#recordGap(request, "error", [
+        {
+          code: "validator.error",
+          kind: "parse-failure",
+          summary: `权限验证器异常：${error instanceof Error ? error.message : String(error)}`,
+        },
+      ])
+    }
+  }
+
+  async #recordGap(
+    request: ToolPermissionRequest,
+    validatorDecision: ToolPermissionDecision["type"] | "missing" | "error",
+    gaps: PermissionCoverageGap[],
+  ): Promise<void> {
+    if (!this.#gapRecorder || gaps.length === 0) return
+    try {
+      await this.#gapRecorder.record({
+        version: 1,
+        at: this.#timestamp(),
+        sessionId: request.sessionId,
+        turnId: request.turnId,
+        toolCallId: request.toolCallId,
+        permissionMode: request.mode,
+        toolName: request.toolName,
+        declaredIntent: request.declaredIntent,
+        cwd: request.cwd,
+        ...(request.environment === undefined ? {} : { environment: request.environment }),
+        validatorDecision,
+        gaps,
+        arguments: gapArguments(request),
+      })
+    } catch (error) {
+      if (this.#gapRecordingFailed) return
+      this.#gapRecordingFailed = true
+      this.#reportGapRecordingError(error instanceof Error ? error : new Error(String(error)))
     }
   }
 

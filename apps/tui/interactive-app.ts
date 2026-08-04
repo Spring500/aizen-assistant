@@ -12,13 +12,14 @@ import type {
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
+import { JsonlPermissionGapRecorder } from "../../packages/core/tool-permissions/gap-recorder.ts"
 import type { CorePort } from "../../packages/core/types.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
-import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { selectEditableItem } from "../../packages/tui-kit/editable-selector.ts"
+import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { editInline } from "../../packages/tui-kit/inline-input.ts"
 import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
 import { selectMultiple } from "../../packages/tui-kit/multi-select.ts"
@@ -32,14 +33,14 @@ import {
 import { selectRichItem } from "../../packages/tui-kit/rich-selector.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
 import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
-import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-editor.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
+import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-editor.ts"
 
 import { ActionQueue, dispatchOrPresent, sendPromptWithRecovery } from "./action-runner.ts"
 import { agentSettingsItems } from "./agent-settings.ts"
 import { parseTuiCommand, tuiCommands } from "./commands.ts"
-import { createPermissionReview, type PermissionReviewController } from "./permission-review.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
+import { createPermissionReview, type PermissionReviewController } from "./permission-review.ts"
 import { modelWithPreferredThinkingLevel, type SessionSettingsDraft, sessionSettingsItems } from "./session-settings.ts"
 import { viewSelectionItems } from "./view-flow.ts"
 
@@ -49,6 +50,7 @@ const manageViewsValue = ":manage-views"
 export type InteractiveAppOptions = {
   cwd: string
   dataDirectory: string
+  collectPermissionGaps?: boolean
   testing?: { renderer: TuiRenderer; core: CorePort }
 }
 
@@ -90,6 +92,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "models.json")),
       preferencesStore: new AppPreferencesStore(join(options.dataDirectory, "preferences.json")),
       views: new ViewStore(join(options.dataDirectory, "views.json")),
+      ...(options.collectPermissionGaps
+        ? {
+            permissionGapRecorder: new JsonlPermissionGapRecorder(
+              join(options.dataDirectory, "local-observations", "permission-gaps.jsonl"),
+            ),
+          }
+        : {}),
     })
   const view = createChatView(renderer)
   const interactionController = new AbortController()
