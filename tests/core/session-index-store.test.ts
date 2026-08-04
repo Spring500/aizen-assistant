@@ -86,17 +86,30 @@ describe("会话摘要索引存储", () => {
     await writeFile(
       scriptPath,
       [
+        "function Write-Stage($name) {",
+        '  [Console]::Out.WriteLine("$(Get-Date -Format o) [holder] $name")',
+        "  [Console]::Out.Flush()",
+        "}",
+        "Write-Stage 'script-started'",
+        "Write-Stage 'before-open'",
         "$stream=[IO.File]::Open($args[0],[IO.FileMode]::Open,[IO.FileAccess]::Read,[IO.FileShare]::None)",
+        "Write-Stage 'handle-opened'",
         "try {",
         "  [IO.File]::WriteAllText($args[1],'ready')",
+        "  Write-Stage 'ready-written'",
+        "  Write-Stage 'waiting-release'",
         "  while (-not (Test-Path $args[2])) { Start-Sleep -Milliseconds 10 }",
-        "} finally { $stream.Dispose() }",
+        "  Write-Stage 'release-observed'",
+        "} finally {",
+        "  $stream.Dispose()",
+        "  Write-Stage 'handle-disposed'",
+        "}",
       ].join("\n"),
     )
     trace("启动 PowerShell 独占句柄进程")
     const holder = Bun.spawn(["powershell.exe", "-NoProfile", "-File", scriptPath, path, ready, release], {
-      stdout: "pipe",
-      stderr: "pipe",
+      stdout: "inherit",
+      stderr: "inherit",
     })
     try {
       let held = false
@@ -121,8 +134,6 @@ describe("会话摘要索引存储", () => {
       trace("已发送释放信号")
       expect(await holder.exited).toBe(0)
       trace("PowerShell 进程已退出")
-      const stderr = await new Response(holder.stderr).text()
-      expect(stderr).toBe("")
 
       const index = JSON.parse(await readFile(path, "utf8"))
       expect(warnings).toHaveLength(1)

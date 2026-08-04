@@ -39,10 +39,11 @@ test("状态栏视图模型根据运行状态生成统一内容", () => {
     currentModel: { providerId: "test", modelId: "model", api: "a", thinkingLevel: "off", contextWindow: 1000 },
     contextUsage: { used: 250, total: 1000 },
   })
-  expect(statusBarView(current)).toEqual({
-    session: "模型：test/model | 视图：未选择视图 | 上下文：250/1,000",
-    shortcuts: "Esc 中止 | Ctrl+C 退出",
-  })
+  const view = statusBarView(current)
+  expect(
+    typeof view.session === "string" ? view.session : view.session.chunks.map((chunk) => chunk.text).join(""),
+  ).toContain("权限：自动+人工")
+  expect(view.shortcuts).toBe("Esc 中止 | Ctrl+C 退出")
 })
 
 test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态", async () => {

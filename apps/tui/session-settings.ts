@@ -1,5 +1,6 @@
 import type { ModelOption } from "../../packages/core/pi-port.ts"
 import type { ModelReference, ViewId } from "../../packages/core/session-format.ts"
+import type { PermissionMode } from "../../packages/core/tool-permissions/types.ts"
 import type { ViewOption } from "../../packages/core/view-store.ts"
 import type { RichSelectorItem } from "../../packages/tui-kit/rich-selector.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
@@ -7,9 +8,24 @@ import { systemColors } from "../../packages/tui-kit/theme.ts"
 export type SessionSettingsDraft = {
   model?: ModelOption
   viewId: ViewId
+  permissionMode?: PermissionMode
 }
 
-export type SessionSettingsAction = "model" | "view" | "manage-models" | "manage-views" | "apply" | "cancel"
+export type SessionSettingsAction =
+  | "model"
+  | "view"
+  | "permission-mode"
+  | "manage-models"
+  | "manage-views"
+  | "apply"
+  | "cancel"
+
+const permissionModeLabels: Record<PermissionMode, string> = {
+  unrestricted: "完全开放",
+  hybrid: "自动审核 + 人工审核",
+  hybridConfirmDenials: "自动审核 + 人工确认拒绝",
+  aiOnly: "仅自动审核",
+}
 
 /** 旧偏好中的档位只有在当前模型仍支持时才能覆盖模型的新默认档位。 */
 export function modelWithPreferredThinkingLevel(available: ModelOption, preferred: ModelReference): ModelOption {
@@ -49,6 +65,14 @@ export function sessionSettingsItems(
         { text: view?.id ?? "none", italic: true, dim: true },
         { text: " · " },
         { text: view?.name ?? "无视图", color: systemColors.sessionStatus, bold: true },
+        { text: " ]" },
+      ],
+    },
+    {
+      value: "permission-mode",
+      segments: [
+        { text: "权限模式  [ " },
+        { text: permissionModeLabels[draft.permissionMode ?? "hybrid"], color: systemColors.sessionStatus, bold: true },
         { text: " ]" },
       ],
     },

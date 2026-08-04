@@ -27,6 +27,7 @@
     "@earendil-works/pi-coding-agent": "0.80.10",
     "@opentui/core": "0.4.5",
     "@silvia-odwyer/photon-node": "0.3.4",
+    "diff": "8.0.4",
     "proper-lockfile": "4.1.2",
     "write-file-atomic": "7.0.1"
   },
