@@ -873,18 +873,33 @@ describe("核心编排", () => {
     await original.dispatch({ type: "create_session", model, viewId: null })
     const sourceId = original.getSnapshot().currentSessionId ?? ""
     await original.dispatch({ type: "send_prompt", text: "第一轮" })
+    await original.dispatch({ type: "send_prompt", text: "第二轮" })
     await original.dispose()
 
     const moved = new AizenCore({ cwd: "C", store, pi: new FakePi() })
     await moved.dispatch({ type: "open_session", sessionId: sourceId })
-    const firstTurn = moved.getSnapshot().transcript.find((entry) => entry.type === "input")
-    if (firstTurn?.type !== "input") throw new Error("缺少第一轮")
-    expect(await moved.dispatch({ type: "fork_session", turnId: firstTurn.turnId })).toEqual({ ok: true })
+    const secondTurn = moved
+      .getSnapshot()
+      .transcript.find(
+        (entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第二轮")),
+      )
+    if (secondTurn?.type !== "input") throw new Error("缺少第二轮")
+    expect(await moved.dispatch({ type: "fork_session", turnId: secondTurn.turnId })).toEqual({ ok: true })
     const forkId = moved.getSnapshot().currentSessionId ?? ""
     expect((await store.read(forkId)).records.filter((record) => record.kind === "working_directory_changed")).toEqual([
       expect.objectContaining({ previousCwd: "A", currentCwd: "C" }),
     ])
     await moved.dispose()
+
+    const reopened = new AizenCore({ cwd: "C", store, pi: new FakePi() })
+    await reopened.dispatch({ type: "open_session", sessionId: forkId })
+    const firstTurn = reopened.getSnapshot().transcript.find((entry) => entry.type === "input")
+    if (firstTurn?.type !== "input") throw new Error("缺少第一轮")
+    expect(await reopened.dispatch({ type: "rewind", turnId: firstTurn.turnId })).toEqual({ ok: true })
+    expect((await store.read(forkId)).records.filter((record) => record.kind === "working_directory_changed")).toEqual([
+      expect.objectContaining({ previousCwd: "A", currentCwd: "C" }),
+    ])
+    await reopened.dispose()
   })
 
   test("分支生成新会话并使用源名称副本", async () => {

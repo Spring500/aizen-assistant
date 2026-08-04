@@ -542,7 +542,7 @@ export class AizenCore implements CorePort {
       loaded.records.push(...recoveryRecords)
     }
     this.#records = loaded.records
-    this.#sessionInitialCwd = loaded.header.cwd
+    this.#sessionInitialCwd = this.#originalWorkingDirectory(loaded.header.cwd, loaded.records)
     this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
     this.#sessionNamingAttempted = false
@@ -701,6 +701,11 @@ export class AizenCore implements CorePort {
     return latest?.kind === "working_directory_changed" ? latest.currentCwd : initialCwd
   }
 
+  #originalWorkingDirectory(initialCwd: string, records: SessionRecord[]): string {
+    const first = records.find((record) => record.kind === "working_directory_changed")
+    return first?.kind === "working_directory_changed" ? first.previousCwd : initialCwd
+  }
+
   /**
    * 删除所选轮次及其后的对话，但保留用户执行回退时正在使用的模型和视图。
    * 因此 rewind 是对话内容回退，不会恢复所选轮次当时的模型设置。
@@ -729,7 +734,7 @@ export class AizenCore implements CorePort {
     const records = this.#recordsBeforeTurn(turnId, name, true)
     const header = await this.#store.createGenerated({ cwd: this.#cwd, createdAt: at }, records)
     const sessionId = header.sessionId
-    this.#sessionInitialCwd = header.cwd
+    this.#sessionInitialCwd = this.#originalWorkingDirectory(header.cwd, records)
     await this.#activateRecords(sessionId, records, name, true)
     this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
