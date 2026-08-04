@@ -89,10 +89,14 @@ error: TextBuffer is destroyed
 - 应用退出会等待 `view.destroy()` 完成；footer 写入同时检查生命周期和 OpenTUI `isDestroyed` 状态。
 - 已增加“更新进行中销毁、关闭后拒绝更新、重复销毁”的回归测试。
 
+#### 验证结果
+
+- CI Run `30923223527` 连续执行 10 个 Attempt，全部通过。
+- 十轮均未复现 `TextBuffer is destroyed`，也未复现 Windows 独占句柄测试超时。
+
 #### 待办
 
-- [ ] 在 Windows CI 连续运行 10 次，确认不再出现 `TextBuffer is destroyed`。
-- [ ] 若仍复现，保留对应 Run、Attempt 和完整调用栈并重新评估其他 OpenTUI 生命周期来源。
+- [ ] 若后续再次复现，保留对应 Run、Attempt 和完整调用栈并重新评估其他 OpenTUI 生命周期来源。
 
 ### Windows 独占句柄测试在等待 holder 就绪时偶发超时
 
