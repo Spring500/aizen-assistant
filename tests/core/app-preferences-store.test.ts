@@ -34,21 +34,21 @@ describe("应用偏好存储", () => {
     expect(await store.read()).toEqual(preferences)
   })
 
-  test("拒绝版本 1 的轮次折叠配置", async () => {
+  test("拒绝旧轮次字段和多余顶层版本字段", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-preferences-"))
     directories.push(directory)
     const file = join(directory, "preferences.json")
     await writeFile(
       file,
       JSON.stringify({
-        version: 1,
         newSession: { viewId: null },
+        agents: { sessionNaming: {} },
         fold: { userTurns: 0, assistantTurns: 3, thinkingTurns: 0, toolGroupTurns: 2, toolDetailTurns: 0 },
       }),
     )
-    await expect(new AppPreferencesStore(file).read()).rejects.toThrow(
-      "preferences.json 配置错误：不支持的 preferences.json 版本：1",
-    )
+    await expect(new AppPreferencesStore(file).read()).rejects.toThrow("fold 包含未知字段：userTurns")
+    await writeFile(file, JSON.stringify({ ...defaultAppPreferences, version: 1 }))
+    await expect(new AppPreferencesStore(file).read()).rejects.toThrow("preferences.json 包含未知字段：version")
   })
 
   test("会话命名偏好只保存供应商和模型标识", () => {

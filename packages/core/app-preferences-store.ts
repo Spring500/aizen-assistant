@@ -24,7 +24,6 @@ export type FoldPreferences = {
 }
 
 export type AppPreferences = {
-  version: 2
   newSession: {
     model?: ModelReference
     viewId: ViewId
@@ -41,7 +40,6 @@ export const defaultFoldPreferences: FoldPreferences = {
 }
 
 export const defaultAppPreferences: AppPreferences = {
-  version: 2,
   newSession: { viewId: null, permissionMode: "hybrid" },
   agents: { sessionNaming: {}, permissionReview: {} },
   fold: defaultFoldPreferences,
@@ -104,8 +102,7 @@ function foldPreferences(value: unknown): FoldPreferences {
 /** 校验并规范化应用偏好，防止旧版本或无效配置进入核心和界面。 */
 export function parseAppPreferences(value: unknown): AppPreferences {
   const source = object(value, "preferences.json")
-  exact(source, ["version", "newSession", "agents", "fold"], "preferences.json")
-  if (source.version !== 2) throw new Error(`不支持的 preferences.json 版本：${String(source.version)}`)
+  exact(source, ["newSession", "agents", "fold"], "preferences.json")
   const newSession = object(source.newSession, "newSession")
   exact(newSession, ["model", "viewId", "permissionMode"], "newSession")
   if (newSession.viewId !== null && typeof newSession.viewId !== "string")
@@ -118,7 +115,6 @@ export function parseAppPreferences(value: unknown): AppPreferences {
     agents.permissionReview === undefined ? {} : object(agents.permissionReview, "agents.permissionReview")
   exact(permissionReview, ["model"], "agents.permissionReview")
   return {
-    version: 2,
     newSession: {
       ...(newSession.model === undefined ? {} : { model: modelReference(newSession.model) }),
       viewId: newSession.viewId as ViewId,

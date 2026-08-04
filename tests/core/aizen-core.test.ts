@@ -78,7 +78,6 @@ class NamingFakePi extends FakePi {
 async function configuredCore(root: string, pi: PiPort, store = new SessionStore(join(root, "sessions"))) {
   const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
   await preferencesStore.write({
-    version: 2,
     newSession: { viewId: null, permissionMode: "hybrid" },
     agents: { sessionNaming: { model: { providerId: "test", modelId: "title-model" } }, permissionReview: {} },
     fold: { thinkingExpanded: false, toolGroupExpanded: false, toolDetailsExpanded: false },
@@ -275,7 +274,6 @@ describe("核心编排", () => {
     directories.push(root)
     const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
     await preferencesStore.write({
-      version: 2,
       newSession: { viewId: null, permissionMode: "hybrid" },
       agents: { sessionNaming: {}, permissionReview: {} },
       fold: { thinkingExpanded: true, toolGroupExpanded: false, toolDetailsExpanded: true },

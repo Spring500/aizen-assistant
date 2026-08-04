@@ -458,7 +458,6 @@ test("真实 pi 链路并行完成主回复和工具式自动命名", async () =
     pi.setModelBaseUrl(naming.providerId, naming.modelId, mock.url)
     const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
     await preferencesStore.write({
-      version: 2,
       newSession: { viewId: null, permissionMode: "hybrid" },
       agents: {
         sessionNaming: { model: { providerId: naming.providerId, modelId: naming.modelId } },
