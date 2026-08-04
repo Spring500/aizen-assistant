@@ -387,7 +387,7 @@ test("工具组和工具详情分别由布尔开关控制", async () => {
         },
       },
     ]
-    view.update(
+    await view.update(
       snapshot({
         preferences: {
           ...structuredClone(defaultAppPreferences),
@@ -401,7 +401,7 @@ test("工具组和工具详情分别由布尔开关控制", async () => {
     expect(collapsed).toContain("▶1个工具调用：bash")
     expect(collapsed).not.toContain("运行测试")
 
-    view.update(
+    await view.update(
       snapshot({
         preferences: {
           ...structuredClone(defaultAppPreferences),
