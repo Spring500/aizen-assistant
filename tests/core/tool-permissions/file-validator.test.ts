@@ -1,9 +1,9 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { createFileValidator } from "../../../packages/core/tool-permissions/validators/file.ts"
 import type { ToolPermissionRequest } from "../../../packages/core/tool-permissions/types.ts"
+import { createFileValidator } from "../../../packages/core/tool-permissions/validators/file.ts"
 
 const directories: string[] = []
 afterEach(async () => Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))))
@@ -75,6 +75,16 @@ test("依赖清单交给AI审核并说明执行影响", async () => {
   )
   expect(result.type).toBe("needAiReview")
   expect(result.assessment.findings).toMatchObject([{ category: "execution-sensitive-file" }])
+  expect(result.assessment.coverageGaps).toMatchObject([{ code: "file.execution-impact-coarse-rule" }])
+})
+
+test("未知文件扩展名标记分类缺口", async () => {
+  const root = await setup()
+  const result = await createFileValidator("write").validate(
+    request(root, "write", { path: "archive.custom", content: "data" }),
+  )
+  expect(result.type).toBe("needAiReview")
+  expect(result.assessment.coverageGaps).toMatchObject([{ code: "file.extension-unclassified" }])
 })
 
 test("工作区外和敏感路径交给人工", async () => {

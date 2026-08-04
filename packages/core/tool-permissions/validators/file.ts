@@ -252,6 +252,7 @@ export function createFileValidator(toolName: "read" | "write" | "edit"): ToolPe
       }
       const extension = extname(resolved.target).toLowerCase()
       if (executionSensitive(resolved.target) || (!ordinaryExtensions.has(extension) && extension !== "")) {
+        const classifiedByFallback = !executionSensitive(resolved.target)
         analyzed.risk = "medium"
         analyzed.reason = "目标可能影响后续执行或发布"
         analyzed.findings = [
@@ -261,6 +262,21 @@ export function createFileValidator(toolName: "read" | "write" | "edit"): ToolPe
             summary: analyzed.reason,
             evidence: resolved.target,
           },
+        ]
+        analyzed.coverageGaps = [
+          classifiedByFallback
+            ? {
+                code: "file.extension-unclassified",
+                kind: "rule-miss",
+                summary: "文件扩展名不在普通文件或执行敏感规则中",
+                evidence: resolved.target,
+              }
+            : {
+                code: "file.execution-impact-coarse-rule",
+                kind: "coarse-rule",
+                summary: "文件仅按名称、扩展名或目录判断执行影响",
+                evidence: resolved.target,
+              },
         ]
         return {
           type: "needAiReview",
