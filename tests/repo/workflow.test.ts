@@ -4,7 +4,7 @@ import { parse } from "yaml"
 const sha = /^[0-9a-f]{40}$/
 
 type Workflow = {
-  jobs: Record<string, { steps: Array<{ uses?: string; run?: string }> }>
+  jobs: Record<string, { "timeout-minutes"?: number; steps: Array<{ uses?: string; run?: string }> }>
 }
 
 for (const path of [".github/workflows/ci.yml", ".github/workflows/pr-title.yml"]) {
@@ -21,6 +21,12 @@ for (const path of [".github/workflows/ci.yml", ".github/workflows/pr-title.yml"
     }
   })
 }
+
+test("主 CI 最多运行五分钟", async () => {
+  const workflow = parse(await Bun.file(".github/workflows/ci.yml").text()) as Workflow
+
+  expect(workflow.jobs.verify?.["timeout-minutes"]).toBe(5)
+})
 
 test("PR 标题检查不安装项目依赖", async () => {
   const workflow = parse(await Bun.file(".github/workflows/pr-title.yml").text()) as Workflow
