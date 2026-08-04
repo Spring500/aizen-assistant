@@ -28,7 +28,7 @@ export const tuiCommands: readonly TuiCommand[] = [
   { name: "/model", description: "切换当前模型" },
   { name: "/models", description: "管理供应商和模型" },
   { name: "/agents", description: "设置内置 Agent" },
-  { name: "/fold", description: "设置会话内容折叠范围" },
+  { name: "/fold", description: "设置会话内容折叠开关" },
   { name: "/quit", description: "退出应用" },
 ]
 

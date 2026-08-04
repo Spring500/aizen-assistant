@@ -27,11 +27,6 @@ export class CoreErrorQueue {
     return entry
   }
 
-  /** 清除当前显示项；历史队列仍保留供后续扩展读取。 */
-  clearVisible(): void {
-    this.#visible = undefined
-  }
-
   /** 返回当前应显示的最新错误。 */
   visible(): ReportedError | undefined {
     return this.#visible

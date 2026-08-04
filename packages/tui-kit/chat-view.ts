@@ -205,7 +205,14 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
 
   const blocks: DisplayBlock[] = []
   for (const [entryIndex, entry] of snapshot.transcript.entries()) {
-    if (entry.type === "input") {
+    if (entry.type === "environment") {
+      blocks.push({
+        kind: "plain",
+        id: `environment-${entry.recordId}`,
+        turnId: `environment-${entry.recordId}`,
+        content: entry.text,
+      })
+    } else if (entry.type === "input") {
       for (const [itemIndex, item] of entry.items.entries()) {
         const text = item.parts
           .filter((part) => part.kind === "text")
@@ -342,16 +349,11 @@ function styledToolText(tool: ToolDisplay, detailsExpanded: boolean): StyledText
   return new StyledText(chunks)
 }
 
-function expanded(limit: number, turnAge: number): boolean {
-  return limit === 0 || turnAge < limit
-}
-
 function createHistoryBlock(
   context: RenderContext,
   index: number,
   block: DisplayBlock,
   fold: FoldPreferences,
-  turnAge: number,
 ): BoxRenderable {
   const rootId = `history-entry-${index}`
   if (block.kind === "plain") {
@@ -361,14 +363,13 @@ function createHistoryBlock(
   }
   if (block.kind === "user") {
     const root = makeBox(context, rootId, blockColors.user)
-    const content = expanded(fold.userTurns, turnAge) ? block.content : `▶ 你 ${oneLine(block.content).slice(4, 84)}...`
-    root.add(makeText(context, `${rootId}-text`, content, blockColors.user))
+    root.add(makeText(context, `${rootId}-text`, block.content, blockColors.user))
     return root
   }
   if (block.kind === "assistant" || block.kind === "thinking") {
     const isThinking = block.kind === "thinking"
     const color = isThinking ? blockColors.thinking : blockColors.assistant
-    const isExpanded = expanded(isThinking ? fold.thinkingTurns : fold.assistantTurns, turnAge)
+    const isExpanded = !isThinking || fold.thinkingExpanded
     const label = isThinking ? "思考" : "助手"
     const meta = timingText(block.timing)
     const content = isExpanded
@@ -380,8 +381,8 @@ function createHistoryBlock(
   }
 
   const root = makeBox(context, rootId, blockColors.toolGroup)
-  const groupExpanded = expanded(fold.toolGroupTurns, turnAge)
-  const detailsExpanded = groupExpanded && expanded(fold.toolDetailTurns, turnAge)
+  const groupExpanded = fold.toolGroupExpanded
+  const detailsExpanded = groupExpanded && fold.toolDetailsExpanded
   const names = block.tools.map((tool) => tool.name).join(" / ")
   const meta = timingText(block.timing)
   root.add(
@@ -462,32 +463,25 @@ export function createChatView(renderer: CliRenderer): ChatView {
 
   let blocks: DisplayBlock[] = []
   let fold: FoldPreferences = {
-    userTurns: 0,
-    assistantTurns: 3,
-    thinkingTurns: 1,
-    toolGroupTurns: 1,
-    toolDetailTurns: 1,
+    thinkingExpanded: false,
+    toolGroupExpanded: false,
+    toolDetailsExpanded: false,
   }
   let committedFingerprints: string[] = []
   let latestSnapshot: CoreSnapshot | undefined
   let notice = ""
   let resizeTimer: ReturnType<typeof setTimeout> | undefined
-
-  const turnAges = () => {
-    const ids = [...new Set(blocks.map((block) => block.turnId))]
-    return new Map(ids.map((id, index) => [id, ids.length - index - 1]))
-  }
+  let destroyed = false
 
   const renderedFingerprints = () => blocks.map((block) => JSON.stringify({ block, fold }))
 
   const commitBlocks = (startIndex: number) => {
     if (startIndex >= blocks.length) return
-    const ages = turnAges()
     const surface = renderer.createScrollbackSurface()
     try {
       for (let index = startIndex; index < blocks.length; index += 1) {
         const block = blocks[index] as DisplayBlock
-        surface.root.add(createHistoryBlock(surface.renderContext, index, block, fold, ages.get(block.turnId) ?? 0))
+        surface.root.add(createHistoryBlock(surface.renderContext, index, block, fold))
       }
       surface.render()
       surface.commitRows(0, surface.height)
@@ -523,7 +517,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
   }
 
   const refreshFooter = () => {
-    if (!latestSnapshot) return
+    if (destroyed || !latestSnapshot) return
     header.content = "AizenAssistant | /fold 折叠设置"
     live.content = liveText(latestSnapshot)
     status.content = notice || statusText(latestSnapshot)
@@ -551,6 +545,8 @@ export function createChatView(renderer: CliRenderer): ChatView {
     live,
     status,
     destroy() {
+      destroyed = true
+      latestSnapshot = undefined
       if (resizeTimer) clearTimeout(resizeTimer)
       renderer.off(CliRenderEvents.RESIZE, onResize)
       header.destroy()
@@ -558,6 +554,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
       status.destroy()
     },
     update(snapshot) {
+      if (destroyed) return
       latestSnapshot = snapshot
       notice = ""
       fold = { ...snapshot.preferences.fold }
@@ -569,6 +566,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
       return { ...fold }
     },
     setFoldPreferences(next) {
+      if (destroyed) return
       fold = { ...next }
       notice = "已应用折叠设置，并全量回放会话"
       syncHistory(true)

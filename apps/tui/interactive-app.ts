@@ -12,13 +12,14 @@ import type {
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
+import { JsonlPermissionGapRecorder } from "../../packages/core/tool-permissions/gap-recorder.ts"
 import type { CorePort } from "../../packages/core/types.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
-import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { selectEditableItem } from "../../packages/tui-kit/editable-selector.ts"
+import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { editInline } from "../../packages/tui-kit/inline-input.ts"
 import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
 import { selectMultiple } from "../../packages/tui-kit/multi-select.ts"
@@ -32,13 +33,14 @@ import {
 import { selectRichItem } from "../../packages/tui-kit/rich-selector.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
 import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
-import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-editor.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
+import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-editor.ts"
 
 import { ActionQueue, dispatchOrPresent, sendPromptWithRecovery } from "./action-runner.ts"
 import { agentSettingsItems } from "./agent-settings.ts"
 import { parseTuiCommand, tuiCommands } from "./commands.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
+import { createPermissionReview, type PermissionReviewController } from "./permission-review.ts"
 import { modelWithPreferredThinkingLevel, type SessionSettingsDraft, sessionSettingsItems } from "./session-settings.ts"
 import { viewSelectionItems } from "./view-flow.ts"
 
@@ -48,6 +50,7 @@ const manageViewsValue = ":manage-views"
 export type InteractiveAppOptions = {
   cwd: string
   dataDirectory: string
+  collectPermissionGaps?: boolean
   testing?: { renderer: TuiRenderer; core: CorePort }
 }
 
@@ -89,6 +92,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "models.json")),
       preferencesStore: new AppPreferencesStore(join(options.dataDirectory, "preferences.json")),
       views: new ViewStore(join(options.dataDirectory, "views.json")),
+      ...(options.collectPermissionGaps
+        ? {
+            permissionGapRecorder: new JsonlPermissionGapRecorder(
+              join(options.dataDirectory, "local-observations", "permission-gaps.jsonl"),
+            ),
+          }
+        : {}),
     })
   const view = createChatView(renderer)
   const interactionController = new AbortController()
@@ -97,6 +107,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   let authProviderName: string | undefined
   let interactionDepth = 0
   let terminalTitle = ""
+  let permissionReview: PermissionReviewController | undefined
 
   const syncTerminalTitle = (snapshot: ReturnType<typeof core.getSnapshot>) => {
     const identity = snapshot.currentSessionId
@@ -166,6 +177,38 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   )
   editor.setInputVisible(false)
 
+  const openPermissionReview = () => {
+    const requests = core.getSnapshot().pendingPermissionRequests ?? []
+    if (permissionReview) {
+      permissionReview.update(requests)
+      if (requests.length === 0) permissionReview = undefined
+      return
+    }
+    if (requests.length === 0 || exiting) return
+    permissionReview = createPermissionReview(
+      overlays,
+      requests,
+      (answer) => {
+        if (answer.decision === "abort") {
+          void core.dispatch({ type: "abort" })
+          return
+        }
+        void core
+          .dispatch({
+            type: "answer_permission_batch",
+            batchId: answer.batchId,
+            answers: answer.answers.map((item) => ({
+              requestId: item.requestId,
+              type: item.decision,
+              ...(item.decision === "deny" && item.reason ? { reason: item.reason } : {}),
+            })),
+          })
+          .then(() => openPermissionReview())
+      },
+      interactionController.signal,
+    )
+  }
+
   const updateStatusBar = () => {
     const snapshot = core.getSnapshot()
     syncTerminalTitle(snapshot)
@@ -209,6 +252,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       editor.setInputVisible(
         !exiting && interactionDepth === 0 && event.snapshot.status === "idle" && !!event.snapshot.currentSessionId,
       )
+      permissionReview?.update(event.snapshot.pendingPermissionRequests ?? [])
+      if ((event.snapshot.pendingPermissionRequests ?? []).length === 0) permissionReview = undefined
+    } else if (event.type === "permission_request") {
+      void openPermissionReview()
     } else if (event.promptType === "select") {
       editor.input.blur()
       void selectItem(
@@ -414,53 +461,28 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     try {
       let draft = view.getFoldPreferences()
       const fields = [
-        { key: "userTurns", name: "用户消息" },
-        { key: "assistantTurns", name: "助手回复" },
-        { key: "thinkingTurns", name: "思考过程" },
-        { key: "toolGroupTurns", name: "工具组" },
-        { key: "toolDetailTurns", name: "工具详情" },
+        { key: "thinkingExpanded", name: "思考过程" },
+        { key: "toolGroupExpanded", name: "工具组" },
+        { key: "toolDetailsExpanded", name: "工具详情" },
       ] as const
       while (!exiting) {
-        const selected = await selectEditableItem<"reset" | "apply">(
+        const selected = await selectItem<(typeof fields)[number]["key"] | "reset" | "apply">(
           overlays,
           "fold-selector",
-          () => [
+          [
             ...fields.map((field) => ({
-              name: `${field.name.padEnd(6, "　")} ${draft[field.key] === 0 ? "全部展开" : `最近 ${draft[field.key]} 轮`}`,
-              description: field.key === "toolDetailTurns" ? "不能超过工具组；0 表示全部展开" : "0 表示全部展开",
-              value: "apply" as const,
-              edit: {
-                label: `${field.name}  `,
-                value: String(draft[field.key]),
-                validate: (value: string) => (/^\d+$/.test(value) ? undefined : "请输入大于或等于 0 的整数"),
-                save: (value: string) => {
-                  const parsed = Number(value)
-                  if (!Number.isSafeInteger(parsed)) return
-                  draft = { ...draft, [field.key]: parsed }
-                  if (
-                    field.key === "toolGroupTurns" &&
-                    draft.toolGroupTurns !== 0 &&
-                    (draft.toolDetailTurns === 0 || draft.toolDetailTurns > draft.toolGroupTurns)
-                  )
-                    draft.toolDetailTurns = draft.toolGroupTurns
-                  if (
-                    field.key === "toolDetailTurns" &&
-                    (draft.toolDetailTurns === 0
-                      ? draft.toolGroupTurns !== 0
-                      : draft.toolGroupTurns !== 0 && draft.toolDetailTurns > draft.toolGroupTurns)
-                  )
-                    draft.toolGroupTurns = draft.toolDetailTurns
-                },
-              },
+              name: `${field.name.padEnd(6, "　")} ${draft[field.key] ? "展开" : "折叠"}`,
+              description: "选择后切换",
+              value: field.key,
             })),
-            { name: "恢复默认", description: "恢复内置折叠范围", value: "reset" as const },
+            { name: "恢复默认", description: "恢复内置折叠开关", value: "reset" as const },
             { name: "应用并返回", description: "保存设置并全量回放会话", value: "apply" as const },
           ],
           { title: "折叠设置", signal: interactionController.signal },
         )
         if (!selected) return
         if (selected === "reset") {
-          draft = { userTurns: 0, assistantTurns: 3, thinkingTurns: 1, toolGroupTurns: 1, toolDetailTurns: 1 }
+          draft = { thinkingExpanded: false, toolGroupExpanded: false, toolDetailsExpanded: false }
           continue
         }
         if (selected === "apply") {
@@ -468,6 +490,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           if (result.ok) view.setFoldPreferences(draft)
           return
         }
+        draft = { ...draft, [selected]: !draft[selected] }
       }
     } finally {
       endInteraction()
@@ -1139,11 +1162,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       if (!(await dispatchWithError({ type: "load_preferences" }, "读取 Agent 设置失败")).ok) return
       if (!(await dispatchWithError({ type: "list_models" }, "读取模型失败")).ok) return
       let model = core.getSnapshot().preferences.agents.sessionNaming.model
+      let reviewModel = core.getSnapshot().preferences.agents.permissionReview?.model
       while (!exiting) {
         const action = await selectRichItem(
           overlays,
           "agent-settings",
-          agentSettingsItems(model, core.getSnapshot().models),
+          agentSettingsItems(model, reviewModel, core.getSnapshot().models),
           { title: "Agent 设置", signal: interactionController.signal },
         )
         if (!action || action === "cancel") return
@@ -1164,11 +1188,19 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           }
           continue
         }
+        if (action === "permission-review") {
+          const selectedModel = await chooseModel()
+          if (selectedModel) reviewModel = { providerId: selectedModel.providerId, modelId: selectedModel.modelId }
+          continue
+        }
         if (action === "apply") {
           await dispatchWithError(
             {
               type: "save_agent_preferences",
-              agents: { sessionNaming: { ...(model ? { model } : {}) } },
+              agents: {
+                sessionNaming: { ...(model ? { model } : {}) },
+                permissionReview: { ...(reviewModel ? { model: reviewModel } : {}) },
+              },
             },
             "保存 Agent 设置失败",
           )
@@ -1184,7 +1216,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
    * 新建时只继承当前仍合法的思考档位；已有会话则把模型、API 和思考档位视为一组运行参数。
    */
   async function openSessionSettings(mode: "new" | "existing"): Promise<boolean> {
-    let draft: SessionSettingsDraft = { viewId: null }
+    let draft: SessionSettingsDraft = { viewId: null, permissionMode: "hybrid" }
     if (mode === "new") {
       await dispatchWithError({ type: "load_preferences" }, "读取应用偏好失败")
       const preferred = core.getSnapshot().preferences.newSession
@@ -1202,9 +1234,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           draft = {
             model: modelWithPreferredThinkingLevel(available, preferred.model),
             viewId: preferred.viewId,
+            permissionMode: preferred.permissionMode ?? "hybrid",
           }
-        } else draft = { viewId: preferred.viewId }
-      } else draft = { viewId: preferred.viewId }
+        } else draft = { viewId: preferred.viewId, permissionMode: preferred.permissionMode ?? "hybrid" }
+      } else draft = { viewId: preferred.viewId, permissionMode: preferred.permissionMode ?? "hybrid" }
     }
     if (mode === "existing") {
       const snapshot = core.getSnapshot()
@@ -1222,6 +1255,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           ...(listed?.offThinkingLevel ? { offThinkingLevel: listed.offThinkingLevel } : {}),
         },
         viewId: snapshot.currentViewId ?? null,
+        permissionMode: snapshot.currentPermissionMode ?? "hybrid",
       }
     }
     while (!exiting) {
@@ -1242,6 +1276,23 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       } else if (action === "view") {
         const viewId = await chooseView()
         if (viewId !== undefined) draft = { ...draft, viewId }
+      } else if (action === "permission-mode") {
+        const permissionMode = await selectItem(
+          overlays,
+          "session-permission-mode",
+          [
+            { name: "完全开放", description: "所有已校验工具直接执行", value: "unrestricted" as const },
+            { name: "自动审核 + 人工审核", description: "AI 拒绝直接生效", value: "hybrid" as const },
+            {
+              name: "自动审核 + 人工确认拒绝",
+              description: "AI 拒绝也交给用户确认",
+              value: "hybridConfirmDenials" as const,
+            },
+            { name: "仅自动审核", description: "所有人工分支直接拒绝", value: "aiOnly" as const },
+          ],
+          { title: "选择权限模式", signal: interactionController.signal },
+        )
+        if (permissionMode) draft = { ...draft, permissionMode }
       } else if (action === "manage-models") await manageModels("standalone")
       else if (action === "manage-views") await manageViews()
       else if (action === "apply") {
@@ -1251,7 +1302,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             continue
           }
           const result = await dispatchWithError(
-            { type: "create_session", model: draft.model, viewId: draft.viewId },
+            {
+              type: "create_session",
+              model: draft.model,
+              viewId: draft.viewId,
+              permissionMode: draft.permissionMode ?? "hybrid",
+            },
             "创建会话失败",
           )
           return result.ok
@@ -1271,6 +1327,17 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         }
         if (snapshot.currentViewId !== draft.viewId) {
           if (!(await dispatchWithError({ type: "set_view", viewId: draft.viewId }, "切换视图失败")).ok) continue
+        }
+        if (snapshot.currentPermissionMode !== draft.permissionMode) {
+          if (
+            !(
+              await dispatchWithError(
+                { type: "set_permission_mode", permissionMode: draft.permissionMode ?? "hybrid" },
+                "切换权限模式失败",
+              )
+            ).ok
+          )
+            continue
         }
         return true
       }

@@ -14,6 +14,7 @@ export type MockRequestContext = {
 export type MockResponse =
   | { type: "text"; text: string }
   | { type: "tool_call"; name: string; arguments: unknown; callId?: string }
+  | { type: "tool_calls"; calls: Array<{ name: string; arguments: unknown; callId?: string }> }
   | { type: "http_error"; status: number; body?: unknown }
 
 export type MockResponseHandler = (request: MockRequestContext) => MockResponse | Promise<MockResponse>
@@ -96,22 +97,25 @@ function buildSseBody(response: Exclude<MockResponse, { type: "http_error" }>, m
       usage: { output_tokens: 1 },
     })
   } else {
-    body += sseEvent("content_block_start", {
-      type: "content_block_start",
-      index: 0,
-      content_block: {
-        type: "tool_use",
-        id: response.callId ?? `tool_${crypto.randomUUID()}`,
-        name: response.name,
-        input: {},
-      },
-    })
-    body += sseEvent("content_block_delta", {
-      type: "content_block_delta",
-      index: 0,
-      delta: { type: "input_json_delta", partial_json: JSON.stringify(response.arguments) },
-    })
-    body += sseEvent("content_block_stop", { type: "content_block_stop", index: 0 })
+    const calls = response.type === "tool_call" ? [response] : response.calls
+    for (const [index, call] of calls.entries()) {
+      body += sseEvent("content_block_start", {
+        type: "content_block_start",
+        index,
+        content_block: {
+          type: "tool_use",
+          id: call.callId ?? `tool_${crypto.randomUUID()}`,
+          name: call.name,
+          input: {},
+        },
+      })
+      body += sseEvent("content_block_delta", {
+        type: "content_block_delta",
+        index,
+        delta: { type: "input_json_delta", partial_json: JSON.stringify(call.arguments) },
+      })
+      body += sseEvent("content_block_stop", { type: "content_block_stop", index })
+    }
     body += sseEvent("message_delta", {
       type: "message_delta",
       delta: { stop_reason: "tool_use", stop_sequence: null },

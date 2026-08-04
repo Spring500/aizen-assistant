@@ -3,11 +3,14 @@ import type { EditableModelConfig, EditableProviderConfig, ModelConfigSnapshot }
 import type { ViewOption } from "./view-store.ts"
 import type { AuthPromptOption, AuthProviderOption, ModelOption, ModelRuntimeInfo } from "./pi-port.ts"
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
+import { workingDirectoryChangeText } from "./session-projection.ts"
+import type { HumanReviewRequest, PermissionMode } from "./tool-permissions/types.ts"
 import type { SessionSummary } from "./session-store.ts"
 
 export type CoreStatus = "idle" | "running" | "aborting" | "authenticating" | "error"
 
 export type TranscriptEntry =
+  | { type: "environment"; recordId: string; text: string }
   | { type: "input"; turnId: string; items: TurnInputItem[] }
   | { type: "message"; turnId: string; message: MessageRecord["message"] }
   | { type: "turn_end"; turnId: string; outcome: "completed" | "aborted" | "failed" }
@@ -46,6 +49,9 @@ export type CoreSnapshot = {
   currentSessionName?: string
   currentModel?: ModelRuntimeInfo
   currentViewId?: ViewId
+  currentPermissionMode?: PermissionMode
+  pendingPermissionRequests?: HumanReviewRequest[]
+  permissionReviewError?: string
   runtimeIssue?: RuntimeIssue
   models: ModelOption[]
   modelConfig?: ModelConfigSnapshot
@@ -67,7 +73,7 @@ export type CoreCommand =
   | { type: "save_agent_preferences"; agents: AgentPreferences }
   | { type: "list_sessions" }
   | { type: "list_views" }
-  | { type: "create_session"; model: ModelReference; viewId: ViewId }
+  | { type: "create_session"; model: ModelReference; viewId: ViewId; permissionMode?: PermissionMode }
   | { type: "open_session"; sessionId: string }
   | { type: "rename_session"; sessionId: string; name: string }
   | { type: "rewind"; turnId: string }
@@ -88,6 +94,18 @@ export type CoreCommand =
   | { type: "delete_model"; revision: string; providerId: string; modelId: string }
   | { type: "set_model"; model: ModelReference }
   | { type: "set_view"; viewId: ViewId }
+  | { type: "set_permission_mode"; permissionMode: PermissionMode }
+  | {
+      type: "answer_permission_batch"
+      batchId: string
+      answers: Array<{ requestId: string; type: "approve" | "deny"; reason?: string }>
+    }
+  | {
+      type: "answer_permission_request"
+      requestId: string
+      decision: "approve" | "deny"
+      reason?: string
+    }
   | { type: "create_view"; name: string; id?: string }
   | { type: "update_view"; viewId: string; name?: string; path?: string }
   | { type: "ensure_view_file"; viewId: string; name: "SYSTEM.md" | "AGENTS.md" }
@@ -99,6 +117,7 @@ export type CoreCommand =
 
 export type CoreEvent =
   | { type: "snapshot"; snapshot: CoreSnapshot }
+  | { type: "permission_request"; request: HumanReviewRequest }
   | {
       type: "auth_prompt"
       promptId: string
@@ -126,6 +145,12 @@ export interface CorePort {
 export function recordsToTranscript(records: SessionRecord[]): TranscriptEntry[] {
   const entries: TranscriptEntry[] = []
   for (const record of records) {
+    if (record.kind === "working_directory_changed")
+      entries.push({
+        type: "environment",
+        recordId: record.recordId,
+        text: workingDirectoryChangeText(record.previousCwd, record.currentCwd),
+      })
     if (record.kind === "turn_started") entries.push({ type: "input", turnId: record.turnId, items: record.items })
     if (record.kind === "message") entries.push({ type: "message", turnId: record.turnId, message: record.message })
     if (record.kind === "turn_finished")

@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer"
+import type { PermissionMode } from "./tool-permissions/types.ts"
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
@@ -65,12 +66,37 @@ export type ViewChangedRecord = {
   viewId: ViewId
 }
 
+export type PermissionModeChangedRecord = {
+  kind: "permission_mode_changed"
+  recordId: string
+  at: string
+  permissionMode: PermissionMode
+}
+
+export type WorkingDirectoryChangedRecord = {
+  kind: "working_directory_changed"
+  recordId: string
+  at: string
+  previousCwd: string
+  currentCwd: string
+}
+
+export type ToolPermissionRecord = {
+  kind: "tool_permission"
+  recordId: string
+  turnId: string
+  at: string
+  toolCallId: string
+  event: JsonValue
+}
+
 export type TurnStartedRecord = {
   kind: "turn_started"
   recordId: string
   turnId: string
   at: string
   viewId: ViewId
+  permissionMode?: PermissionMode
   items: TurnInputItem[]
 }
 
@@ -137,6 +163,9 @@ export type SessionRecord =
   | SessionRenamedRecord
   | ModelChangedRecord
   | ViewChangedRecord
+  | WorkingDirectoryChangedRecord
+  | PermissionModeChangedRecord
+  | ToolPermissionRecord
   | TurnStartedRecord
   | MessageRecord
   | TurnFinishedRecord
@@ -195,6 +224,12 @@ function jsonValue(value: unknown, label: string): JsonValue {
 function viewId(value: unknown): ViewId {
   if (value === null) return null
   return string(value, "viewId")
+}
+
+function permissionMode(value: unknown): PermissionMode {
+  if (value !== "unrestricted" && value !== "hybrid" && value !== "hybridConfirmDenials" && value !== "aiOnly")
+    throw new Error(`未知的权限模式：${String(value)}`)
+  return value
 }
 
 function modelReference(value: unknown): ModelReference {
@@ -388,14 +423,39 @@ export function parseSessionValue(value: unknown): SessionLine {
       viewId: viewId(source.viewId),
     }
   }
+  if (kind === "working_directory_changed") {
+    return {
+      kind,
+      ...baseRecord(source, ["kind", "recordId", "at", "previousCwd", "currentCwd"]),
+      previousCwd: string(source.previousCwd, "previousCwd"),
+      currentCwd: string(source.currentCwd, "currentCwd"),
+    }
+  }
+  if (kind === "permission_mode_changed") {
+    return {
+      kind,
+      ...baseRecord(source, ["kind", "recordId", "at", "permissionMode"]),
+      permissionMode: permissionMode(source.permissionMode),
+    }
+  }
+  if (kind === "tool_permission") {
+    return {
+      kind,
+      ...baseRecord(source, ["kind", "recordId", "turnId", "at", "toolCallId", "event"]),
+      turnId: string(source.turnId, "turnId"),
+      toolCallId: string(source.toolCallId, "toolCallId"),
+      event: jsonValue(source.event, "event"),
+    }
+  }
   if (kind === "turn_started") {
-    const base = baseRecord(source, ["kind", "recordId", "turnId", "at", "viewId", "items"])
+    const base = baseRecord(source, ["kind", "recordId", "turnId", "at", "viewId", "permissionMode", "items"])
     if (!Array.isArray(source.items)) throw new Error("items 必须是数组")
     return {
       kind,
       ...base,
       turnId: string(source.turnId, "turnId"),
       viewId: viewId(source.viewId),
+      ...(source.permissionMode === undefined ? {} : { permissionMode: permissionMode(source.permissionMode) }),
       items: source.items.map(turnInputItem),
     }
   }

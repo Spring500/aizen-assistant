@@ -1,22 +1,30 @@
 import {
   type CliRenderer,
   CliRenderEvents,
+  createTextAttributes,
   InputRenderable,
   type KeyEvent,
+  parseColor,
   type PasteEvent,
+  StyledText,
+  type TextChunk,
   TextRenderable,
 } from "@opentui/core"
 import { overlayManager, type OverlayManager } from "./overlay-manager.ts"
 import type { MenuTone } from "./selector.ts"
 import { systemColors } from "./theme.ts"
 
-export type EditableField = {
+export type EditableField<T> = {
   label: string
   value: string
   placeholder?: string
   mask?: boolean
   validate?: (value: string) => string | undefined
+  /** 草稿变化时通知调用方，用于离开并重建菜单后恢复输入。 */
+  draft?: (value: string) => void
   save?: (value: string) => void | Promise<void>
+  /** 保存字段后直接提交当前选项；省略时保存后继续停留在菜单。 */
+  submit?: (value: string) => T
 }
 
 export type EditableSelectorItem<T> = {
@@ -27,12 +35,28 @@ export type EditableSelectorItem<T> = {
   disabled?: boolean
   disabledReason?: string
   tone?: MenuTone
-  edit?: EditableField
+  edit?: EditableField<T>
 }
+
+export type EditableHeaderSegment = {
+  text: string
+  color?: string
+  bold?: boolean
+  dim?: boolean
+}
+
+export type EditableHeaderLine = string | EditableHeaderSegment[]
 
 export type EditableSelectorOptions = {
   title: string
+  header?: EditableHeaderSegment[]
+  headerLines?: EditableHeaderLine[]
+  /** 按当前终端宽度动态生成 Header，resize 后会重新计算。 */
+  headerLinesForWidth?: (width: number) => EditableHeaderLine[]
+  headerHeight?: number
   signal?: AbortSignal
+  /** 左右方向键切换同一流程中的相邻页面。 */
+  navigate?: (direction: "previous" | "next") => void
 }
 
 type EditingState<T> = {
@@ -42,14 +66,45 @@ type EditingState<T> = {
   secretValue: string
 }
 
+type EditableDraft = { value: string; secretValue: string }
+
 const maximumRows = 12
 
 function itemRows(items: EditableSelectorItem<unknown>[]): number {
   return Math.min(maximumRows, Math.max(4, items.length))
 }
 
+const toneColors: Record<MenuTone, string> = {
+  normal: systemColors.secondary,
+  primary: systemColors.header,
+  success: systemColors.statusIdle,
+  warning: systemColors.statusRunning,
+  danger: systemColors.statusError,
+  muted: systemColors.disabled,
+}
+
 function cursor(selected: boolean): string {
   return selected ? "▶ " : "  "
+}
+
+function headerContent(segments: EditableHeaderSegment[]): StyledText {
+  return new StyledText(
+    segments.map(
+      (segment): TextChunk => ({
+        __isChunk: true,
+        text: segment.text,
+        fg: parseColor(segment.color ?? systemColors.secondary),
+        attributes: createTextAttributes({
+          ...(segment.bold === undefined ? {} : { bold: segment.bold }),
+          ...(segment.dim === undefined ? {} : { dim: segment.dim }),
+        }),
+      }),
+    ),
+  )
+}
+
+function dynamicHeaderContent(line: EditableHeaderLine): string | StyledText {
+  return typeof line === "string" ? line : headerContent(line)
 }
 
 /**
@@ -67,15 +122,54 @@ export function selectEditableItem<T>(
     let selected = 0
     let offset = 0
     let editing: EditingState<T> | undefined
+    const drafts = new Map<string, EditableDraft>()
     let items = getItems()
+    const headerLineCount = options.headerLinesForWidth
+      ? Math.max(1, options.headerHeight ?? 3)
+      : (options.headerLines?.length ?? 0)
+    const headerRows = (options.header ? 1 : 0) + headerLineCount
     const handle = overlays.open<T>({
       id,
       title: options.title,
       description: items[0]?.description ?? "",
       actions: [],
-      contentHeight: itemRows(items),
+      contentHeight: itemRows(items) + headerRows,
       ...(options.signal ? { signal: options.signal } : {}),
       onCancel: () => finish(undefined, true),
+    })
+    if (options.header) {
+      handle.content.add(
+        new TextRenderable(overlays.renderer, {
+          id: `${id}-header`,
+          position: "absolute",
+          top: 0,
+          left: 0,
+          right: 0,
+          height: 1,
+          wrapMode: "none",
+          truncate: true,
+          content: headerContent(options.header),
+        }),
+      )
+    }
+    const headerLines = options.headerLinesForWidth
+      ? options.headerLinesForWidth(overlays.renderer.terminalWidth)
+      : (options.headerLines ?? [])
+    const headerRenderables = Array.from({ length: headerLineCount }, (_, index) => {
+      const line = new TextRenderable(overlays.renderer, {
+        id: `${id}-header-line-${index}`,
+        position: "absolute",
+        top: (options.header ? 1 : 0) + index,
+        left: 0,
+        right: 0,
+        height: 1,
+        wrapMode: "none",
+        truncate: true,
+        fg: systemColors.secondary,
+        content: dynamicHeaderContent(headerLines[index] ?? ""),
+      })
+      handle.content.add(line)
+      return line
     })
     const rows = Array.from(
       { length: maximumRows },
@@ -83,7 +177,7 @@ export function selectEditableItem<T>(
         new TextRenderable(overlays.renderer, {
           id: `${id}-row-${index}`,
           position: "absolute",
-          top: index,
+          top: index + headerRows,
           left: 0,
           right: 0,
           height: 1,
@@ -115,7 +209,11 @@ export function selectEditableItem<T>(
         if (!item) continue
         const isSelected = itemIndex === selected
         const isEditing = editing?.index === itemIndex
-        row.fg = item.disabled ? systemColors.disabled : isSelected ? systemColors.header : systemColors.secondary
+        row.fg = item.disabled
+          ? systemColors.disabled
+          : isSelected
+            ? systemColors.header
+            : toneColors[item.tone ?? "normal"]
         row.content = `${cursor(isSelected)}${isEditing ? item.edit?.label : item.name}`
       }
       layoutInput()
@@ -127,9 +225,22 @@ export function selectEditableItem<T>(
       const visible = visibleCount()
       state.input.visible = row >= 0 && row < visible
       if (!state.input.visible) return
-      state.input.top = row
+      state.input.top = row + headerRows
       state.input.left = Bun.stringWidth(`${cursor(true)}${state.item.edit?.label ?? ""}`)
       state.input.right = 0
+    }
+    function draftKey(item: EditableSelectorItem<T>, index: number): string {
+      return item.id ?? String(index)
+    }
+    function captureDraft() {
+      const state = editing
+      if (!state || state.input.isDestroyed) return
+      const value = state.item.edit?.mask ? state.secretValue : state.input.value
+      drafts.set(draftKey(state.item, state.index), {
+        value: state.input.value,
+        secretValue: value,
+      })
+      state.item.edit?.draft?.(value)
     }
     function finish(value: T | undefined, cancelled = false) {
       if (settled) return
@@ -146,7 +257,9 @@ export function selectEditableItem<T>(
     function updateItems() {
       items = getItems()
       selected = Math.min(selected, Math.max(0, items.length - 1))
-      handle.setContentHeight(itemRows(items))
+      handle.setContentHeight(itemRows(items) + headerRows)
+      const item = items[selected]
+      if (item?.edit && !item.disabled) startEdit(item, selected)
       updateState()
       render()
     }
@@ -195,6 +308,7 @@ export function selectEditableItem<T>(
           return
         }
       }
+      captureDraft()
       destroyEditing()
       if (!confirm) {
         handle.clearError()
@@ -203,18 +317,29 @@ export function selectEditableItem<T>(
         return
       }
       handle.clearError()
-      void Promise.resolve(state.item.edit?.save?.(value)).then(updateItems)
+      void Promise.resolve(state.item.edit?.save?.(value)).then(() => {
+        drafts.set(draftKey(state.item, state.index), { value, secretValue: value })
+        const submitted = state.item.edit?.submit?.(value)
+        if (submitted !== undefined) finish(submitted)
+        else updateItems()
+      })
     }
     function startEdit(item: EditableSelectorItem<T>, index: number) {
-      if (!item.edit || editing) return
+      if (!item.edit) return
+      if (editing?.index === index) return
+      captureDraft()
+      destroyEditing()
+      const draft = drafts.get(draftKey(item, index))
+      const initialValue = draft?.value ?? item.edit.value
+      const secretValue = draft?.secretValue ?? item.edit.value
       const input = new InputRenderable(overlays.renderer, {
         id: `${id}-field-${item.id ?? index}-input`,
         position: "absolute",
-        top: index - offset,
+        top: index - offset + headerRows,
         left: Bun.stringWidth(`${cursor(true)}${item.edit.label}`),
         right: 0,
         zIndex: 10,
-        value: item.edit.mask ? "•".repeat(Array.from(item.edit.value).length) : item.edit.value,
+        value: item.edit.mask ? "•".repeat(Array.from(secretValue).length) : initialValue,
         placeholder: item.edit.placeholder ?? "",
         backgroundColor: "#111827",
         focusedBackgroundColor: "#111827",
@@ -223,14 +348,18 @@ export function selectEditableItem<T>(
         cursorColor: systemColors.header,
       })
       handle.content.add(input)
-      editing = { item, index, input, secretValue: item.edit.value }
+      editing = { item, index, input, secretValue }
       input.cursorOffset = input.value.length
       input.focus()
       updateState()
       render()
     }
     function move(delta: number) {
+      captureDraft()
       selected = Math.max(0, Math.min(items.length - 1, selected + delta))
+      const item = items[selected]
+      if (item?.edit && !item.disabled) startEdit(item, selected)
+      else destroyEditing()
       updateState()
       render()
     }
@@ -239,8 +368,20 @@ export function selectEditableItem<T>(
       handle.setDescription(item?.description ?? "")
       if (editing) {
         handle.setActions([
-          { id: "confirm", key: { name: "return" }, label: "Enter 确认", run: () => stopEdit(true) },
-          { id: "cancel", key: { name: "escape" }, label: "Esc 取消", run: () => stopEdit(false) },
+          {
+            id: "move",
+            key: { name: "up" },
+            alternateKeys: [{ name: "down" }],
+            label: "↑↓ 移动",
+            run: (key) => move(key.name === "up" ? -1 : 1),
+          },
+          {
+            id: "confirm",
+            key: { name: "return" },
+            label: item?.edit?.submit ? "Enter 提交" : "Enter 保存",
+            run: () => stopEdit(true),
+          },
+          { id: "cancel", key: { name: "escape" }, label: "Esc 返回", run: () => finish(undefined) },
         ])
         return
       }
@@ -255,30 +396,46 @@ export function selectEditableItem<T>(
         {
           id: "select",
           key: { name: "return" },
-          label: item?.edit ? "Enter 编辑" : "Enter 选择",
+          label: item?.edit ? (item.edit.submit ? "Enter 提交" : "Enter 保存") : "Enter 选择",
           enabled: !item?.disabled,
           disabledReason: item?.disabledReason ?? item?.description ?? "当前选项不可用",
           run: () => {
             const current = items[selected]
             if (!current) return
-            if (current.edit) startEdit(current, selected)
+            if (current.edit) stopEdit(true)
             else finish(current.value)
           },
         },
         { id: "cancel", key: { name: "escape" }, label: "Esc 返回", run: () => finish(undefined) },
       ])
     }
+    function navigate(direction: "previous" | "next") {
+      if (!options.navigate) return
+      captureDraft()
+      options.navigate(direction)
+      finish(undefined, true)
+    }
     const onResize = () => {
-      render()
+      if (options.headerLinesForWidth) {
+        const lines = options.headerLinesForWidth(overlays.renderer.terminalWidth)
+        for (const [index, renderable] of headerRenderables.entries())
+          renderable.content = dynamicHeaderContent(lines[index] ?? "")
+      }
+      updateItems()
     }
     overlays.renderer.on(CliRenderEvents.RESIZE, onResize)
     handle.setInput({
       keypress: (key) => {
+        if (options.navigate && !editing && (key.name === "left" || key.name === "right")) {
+          navigate(key.name === "left" ? "previous" : "next")
+          return
+        }
         if (editing) routeEditingKey(key)
         else if (key.name === "escape") finish(undefined)
       },
       paste: routeEditingPaste,
     })
+    if (items[0]?.edit && !items[0].disabled) startEdit(items[0], 0)
     updateState()
     render()
   })

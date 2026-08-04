@@ -39,10 +39,11 @@ test("状态栏视图模型根据运行状态生成统一内容", () => {
     currentModel: { providerId: "test", modelId: "model", api: "a", thinkingLevel: "off", contextWindow: 1000 },
     contextUsage: { used: 250, total: 1000 },
   })
-  expect(statusBarView(current)).toEqual({
-    session: "模型：test/model | 视图：未选择视图 | 上下文：250/1,000",
-    shortcuts: "Esc 中止 | Ctrl+C 退出",
-  })
+  const view = statusBarView(current)
+  expect(
+    typeof view.session === "string" ? view.session : view.session.chunks.map((chunk) => chunk.text).join(""),
+  ).toContain("权限：自动+人工")
+  expect(view.shortcuts).toBe("Esc 中止 | Ctrl+C 退出")
 })
 
 test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态", async () => {
@@ -86,12 +87,38 @@ test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态"
   }
 })
 
+test("聊天视图展示工作目录变化", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    view.update(
+      snapshot({
+        transcript: [
+          {
+            type: "environment",
+            recordId: "cwd-change",
+            text: 'Working directory changed from "E:\\old" to "D:\\new".',
+          },
+        ],
+      }),
+    )
+    await setup.renderOnce()
+    expect(setup.externalOutput.takeText()).toContain('Working directory changed from "E:\\old" to "D:\\new".')
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("历史块包含同底色的上下留白并记录思考内容", async () => {
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
     view.update(
       snapshot({
+        preferences: {
+          ...structuredClone(defaultAppPreferences),
+          fold: { ...defaultAppPreferences.fold, thinkingExpanded: true },
+        },
         transcript: [
           {
             type: "message",
@@ -198,6 +225,76 @@ test("工具调用时也显示当前回复耗时", async () => {
   }
 })
 
+test("工具组和工具详情分别由布尔开关控制", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    const transcript: CoreSnapshot["transcript"] = [
+      {
+        type: "message",
+        turnId: "tools",
+        message: {
+          role: "assistant",
+          parts: [
+            {
+              kind: "tool_call",
+              callId: "c1",
+              name: "bash",
+              arguments: { command: "bun test" },
+              declaredIntent: "运行测试",
+            },
+          ],
+          source: { providerId: "test", modelId: "model", api: "a" },
+          stopReason: "tool_use",
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+      {
+        type: "message",
+        turnId: "tools",
+        message: {
+          role: "tool",
+          callId: "c1",
+          name: "bash",
+          parts: [{ kind: "text", text: "all passed" }],
+          isError: false,
+        },
+      },
+    ]
+    view.update(
+      snapshot({
+        preferences: {
+          ...structuredClone(defaultAppPreferences),
+          fold: { thinkingExpanded: false, toolGroupExpanded: false, toolDetailsExpanded: true },
+        },
+        transcript,
+      }),
+    )
+    await setup.renderOnce()
+    const collapsed = setup.externalOutput.takeText().replace(/\s+/g, "")
+    expect(collapsed).toContain("▶1个工具调用：bash")
+    expect(collapsed).not.toContain("运行测试")
+
+    view.update(
+      snapshot({
+        preferences: {
+          ...structuredClone(defaultAppPreferences),
+          fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: false },
+        },
+        transcript,
+      }),
+    )
+    await setup.renderOnce()
+    const summary = setup.externalOutput.takeText().replace(/\s+/g, "")
+    expect(summary).toContain("▼1个工具调用：bash")
+    expect(summary).toContain("[bash]运行测试")
+    expect(summary).not.toContain("buntest")
+    expect(summary).not.toContain("allpassed")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("同一轮内跨助手消息的连续工具调用合并为一个工具组", async () => {
   const setup = await setupRepl()
   try {
@@ -206,7 +303,7 @@ test("同一轮内跨助手消息的连续工具调用合并为一个工具组",
       snapshot({
         preferences: {
           ...structuredClone(defaultAppPreferences),
-          fold: { userTurns: 0, assistantTurns: 0, thinkingTurns: 0, toolGroupTurns: 2, toolDetailTurns: 1 },
+          fold: { thinkingExpanded: true, toolGroupExpanded: true, toolDetailsExpanded: true },
         },
         transcript: [
           {
@@ -301,7 +398,7 @@ test("历史没有变化时不重复写入 scrollback", async () => {
     const current = snapshot({
       preferences: {
         ...structuredClone(defaultAppPreferences),
-        fold: { userTurns: 1, assistantTurns: 1, thinkingTurns: 1, toolGroupTurns: 1, toolDetailTurns: 1 },
+        fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
       },
       transcript: [
         {
@@ -362,8 +459,9 @@ test("历史没有变化时不重复写入 scrollback", async () => {
     view.update(current)
     await setup.renderOnce()
     const firstOutput = setup.externalOutput.takeText().replace(/\s+/g, "")
-    expect(firstOutput).toContain("▶你旧轮次用户消息")
-    expect(firstOutput).toContain("▶助手旧轮次助手正文")
+    expect(firstOutput).toContain("[你]旧轮次用户消息")
+    expect(firstOutput).toContain("旧轮次助手正文")
+    expect(firstOutput).toContain("▶思考最近思考")
     expect(firstOutput).toContain("[bash]验证全部测试是否通过")
     expect(firstOutput).toContain("›buntest")
     expect(firstOutput).toContain("✓allpassed")

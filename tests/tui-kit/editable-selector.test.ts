@@ -132,6 +132,36 @@ test("可编辑菜单 resize 后保持当前行缩进与输入对齐", async () 
   }
 })
 
+test("可编辑菜单切换行后保留未保存草稿", async () => {
+  const setup = await createTestRenderer({ width: 60, height: 14 })
+  try {
+    const pending = selectEditableItem(
+      setup.renderer,
+      "draft-menu",
+      () => [
+        {
+          id: "name",
+          name: "名称  old",
+          description: "草稿字段",
+          value: "name",
+          edit: { label: "名称  ", value: "old" },
+        },
+        { name: "保存", description: "普通选项", value: "save" },
+      ],
+      { title: "草稿保留" },
+    )
+    setup.renderer.keyInput.emit("keypress", key("x"))
+    setup.renderer.keyInput.emit("keypress", key("\x1b[B"))
+    setup.renderer.keyInput.emit("keypress", key("\x1b[A"))
+    await setup.renderOnce()
+    expect(setup.captureCharFrame()).toContain("▶ 名称  oldx")
+    setup.renderer.keyInput.emit("keypress", key("\x1b"))
+    expect(await pending).toBeUndefined()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("可编辑菜单把校验失败写入错误说明行", async () => {
   const setup = await createTestRenderer({ width: 50, height: 14 })
   try {
