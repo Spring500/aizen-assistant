@@ -237,7 +237,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
   const unsubscribe = core.subscribe((event) => {
     if (event.type === "snapshot") {
-      view.update(event.snapshot)
+      void view.update(event.snapshot)
       syncTerminalTitle(event.snapshot)
       const statusBar = statusBarView(event.snapshot)
       editor.setStatus(statusBar.session)
@@ -487,7 +487,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         }
         if (selected === "apply") {
           const result = await dispatchWithError({ type: "save_fold_preferences", fold: draft }, "保存折叠设置失败")
-          if (result.ok) view.setFoldPreferences(draft)
+          if (result.ok) await view.setFoldPreferences(draft)
           return
         }
         draft = { ...draft, [selected]: !draft[selected] }
