@@ -20,7 +20,11 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
   try {
     const sourceMode = basename(process.execPath).toLowerCase().startsWith("bun")
     const dataDirectory = resolveDataDirectory(parsed.dataDirectory, process.execPath, process.cwd(), sourceMode)
-    await runInteractiveApp({ cwd: process.cwd(), dataDirectory })
+    await runInteractiveApp({
+      cwd: process.cwd(),
+      dataDirectory,
+      collectPermissionGaps: parsed.collectPermissionGaps,
+    })
     return 0
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))

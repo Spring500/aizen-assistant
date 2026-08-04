@@ -17,9 +17,22 @@ import type {
   TurnStartedRecord,
   ViewId,
 } from "./session-format.ts"
+import { projectVisibleSessionRecords } from "./session-projection.ts"
 import { recoverInterruptedToolCalls } from "./session-recovery.ts"
 import type { SessionStore } from "./session-store.ts"
-import { projectVisibleSessionRecords } from "./session-projection.ts"
+import { ToolPermissionManager } from "./tool-permissions/manager.ts"
+import { ToolPermissionRegistry } from "./tool-permissions/registry.ts"
+import { sanitizePermissionAuditPayload } from "./tool-permissions/sanitizer.ts"
+import type {
+  HumanReviewBatchDecision,
+  HumanReviewBatchRequest,
+  PermissionAuditEvent,
+  PermissionGapRecorder,
+  PermissionMode,
+} from "./tool-permissions/types.ts"
+import { createBashValidator } from "./tool-permissions/validators/bash.ts"
+import { createFileValidator } from "./tool-permissions/validators/file.ts"
+import { type AizenToolRegistration, validateToolRegistrations } from "./tool-registry.ts"
 import {
   type CoreCommand,
   type CoreCommandResult,
@@ -28,18 +41,6 @@ import {
   type CoreSnapshot,
   recordsToTranscript,
 } from "./types.ts"
-import { ToolPermissionManager } from "./tool-permissions/manager.ts"
-import { ToolPermissionRegistry } from "./tool-permissions/registry.ts"
-import { sanitizePermissionAuditPayload } from "./tool-permissions/sanitizer.ts"
-import type {
-  HumanReviewBatchDecision,
-  HumanReviewBatchRequest,
-  PermissionAuditEvent,
-  PermissionMode,
-} from "./tool-permissions/types.ts"
-import { createBashValidator } from "./tool-permissions/validators/bash.ts"
-import { createFileValidator } from "./tool-permissions/validators/file.ts"
-import { validateToolRegistrations, type AizenToolRegistration } from "./tool-registry.ts"
 import type { ViewStore } from "./view-store.ts"
 
 export type ExtraMessageProvider = (input: {
@@ -59,6 +60,7 @@ export type AizenCoreOptions = {
   modelConfigStore?: ModelConfigStore
   preferencesStore?: AppPreferencesStore
   toolRegistrations?: AizenToolRegistration[]
+  permissionGapRecorder?: PermissionGapRecorder
 }
 
 function sessionModel(model: ModelReference): ModelReference {
@@ -89,6 +91,7 @@ export class AizenCore implements CorePort {
   readonly #modelConfigStore: ModelConfigStore | undefined
   readonly #preferencesStore: AppPreferencesStore | undefined
   readonly #toolRegistrations: AizenToolRegistration[]
+  readonly #permissionGapRecorder: PermissionGapRecorder | undefined
   readonly #listeners = new Set<(event: CoreEvent) => void>()
   readonly #unsubscribePi: () => void
   readonly #permissionManager: ToolPermissionManager | undefined
@@ -133,6 +136,7 @@ export class AizenCore implements CorePort {
     this.#modelConfigStore = options.modelConfigStore
     this.#preferencesStore = options.preferencesStore
     this.#toolRegistrations = options.toolRegistrations ?? []
+    this.#permissionGapRecorder = options.permissionGapRecorder
     validateToolRegistrations(this.#toolRegistrations)
     this.#unsubscribePi = this.#pi.subscribe((event) => this.#handlePiEvent(event))
     this.#permissionManager = this.#createPermissionManager()
@@ -388,6 +392,7 @@ export class AizenCore implements CorePort {
         this.#unsubscribePi()
         try {
           await this.#pi.dispose()
+          await this.#permissionGapRecorder?.close?.()
         } catch (error) {
           failure ??= error
         } finally {
@@ -968,6 +973,15 @@ export class AizenCore implements CorePort {
       },
       humanReviewer: { review: (request, signal) => this.#requestPermissionAnswer(request, signal) },
       audit: (event) => this.#recordPermissionAudit(event),
+      ...(this.#permissionGapRecorder
+        ? {
+            gapRecorder: this.#permissionGapRecorder,
+            reportGapRecordingError: (error: Error) => {
+              this.#reportError(`记录权限规则缺口失败：${error.message}`)
+              this.#notify()
+            },
+          }
+        : {}),
     })
   }
 
