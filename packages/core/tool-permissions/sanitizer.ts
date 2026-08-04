@@ -35,9 +35,33 @@ export function sanitizeReviewPayload(value: JsonValue, extra: SensitiveFieldMat
   return { truncated: true, preview: truncate(text.slice(0, maximumStringBytes)) }
 }
 
-/** 为本地权限记录生成脱敏、截断且不含完整审核材料的副本。 */
+function isToolAuthorization(value: JsonValue): value is { [key: string]: JsonValue } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  return value.type === "allow" || value.type === "deny" || value.type === "aborted"
+}
+
+function sanitizeAudit(value: JsonValue, key?: string, extra: SensitiveFieldMatcher[] = []): JsonValue {
+  if (key === "authorization" && isToolAuthorization(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([childKey, item]) => [childKey, sanitizeAudit(item, childKey, extra)]),
+    )
+  }
+  if (key && (hiddenPayloadKey.test(key) || matchesSensitiveKey(key, extra))) return "[敏感内容已隐藏]"
+  if (typeof value === "string") return truncate(value)
+  if (Array.isArray(value)) return value.map((item) => sanitizeAudit(item, undefined, extra))
+  if (value && typeof value === "object")
+    return Object.fromEntries(
+      Object.entries(value).map(([childKey, item]) => [childKey, sanitizeAudit(item, childKey, extra)]),
+    )
+  return value
+}
+
+/** 为本地权限记录生成脱敏、截断且保留结构化授权状态的副本。 */
 export function sanitizePermissionAuditPayload(value: JsonValue, extra: SensitiveFieldMatcher[] = []): JsonValue {
-  return sanitizeReviewPayload(value, extra)
+  const sanitized = sanitizeAudit(value, undefined, extra)
+  const serialized = JSON.stringify(sanitized)
+  if (Buffer.byteLength(serialized) <= maximumPayloadBytes) return sanitized
+  return { truncated: true, preview: truncate(serialized.slice(0, maximumStringBytes)) }
 }
 
 export type SensitiveFieldMatcher = RegExp | string

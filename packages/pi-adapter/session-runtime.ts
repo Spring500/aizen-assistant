@@ -44,6 +44,7 @@ import type {
 import { PiModelRuntimeError } from "../core/pi-port.ts"
 import type { AizenToolRegistration } from "../core/tool-registry.ts"
 import type { JsonValue, ModelReference, SessionRecord } from "../core/session-format.ts"
+import { projectVisibleSessionRecords } from "../core/session-projection.ts"
 import type { ToolAuthorization, ToolPermissionRequest } from "../core/tool-permissions/types.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
 import { permissionFailureMessage } from "./permission-failure.ts"
@@ -993,11 +994,7 @@ export class PiSessionRuntime implements PiPort {
    * 校验其中的旧思考档位。只有下一次实际发送所用的模型和档位由 #start 严格校验。
    */
   #restoreEntries(sessionManager: SessionManager, records: SessionRecord[]): void {
-    const finishedTurns = new Set(
-      records.filter((record) => record.kind === "turn_finished").map((record) => record.turnId),
-    )
-    for (const record of records) {
-      if ((record.kind === "turn_started" || record.kind === "message") && !finishedTurns.has(record.turnId)) continue
+    for (const record of projectVisibleSessionRecords(records)) {
       if (record.kind === "model_changed") {
         this.#registerEntry(
           record.recordId,

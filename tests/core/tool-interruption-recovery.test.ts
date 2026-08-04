@@ -85,7 +85,7 @@ test("恢复时把已批准但未开始的工具标记为未执行且不重试",
     expect(result.message.details).toMatchObject({ interrupted: true, executionStarted: false })
     expect(result.message.parts[0]).toMatchObject({
       kind: "text",
-      text: expect.stringContaining("The tool call did not run"),
+      text: expect.stringContaining("The tool was authorized but did not start"),
     })
   }
   expect(
@@ -149,7 +149,7 @@ test("恢复时把已开始但未结束的工具标记为需先检查而不自�
   const header = await store.createGenerated({ cwd: root, createdAt: at }, records)
   const core = new AizenCore({ cwd: root, store, pi: new RestorePi() })
   expect(await core.dispatch({ type: "open_session", sessionId: header.sessionId })).toEqual({ ok: true })
-  expect(core.getSnapshot().lastError).toContain("异常退出时仍在执行")
+  expect(core.getSnapshot().lastError).toContain("存在未完成的工具调用")
   const loaded = await store.read(header.sessionId)
   const recovery = loaded.records.find(
     (record) =>

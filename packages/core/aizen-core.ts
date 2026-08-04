@@ -10,7 +10,6 @@ import {
 } from "./pi-port.ts"
 import type {
   AssistantMessage,
-  JsonValue,
   ModelReference,
   SessionRecord,
   TurnFinishedRecord,
@@ -18,7 +17,9 @@ import type {
   TurnStartedRecord,
   ViewId,
 } from "./session-format.ts"
+import { recoverInterruptedToolCalls } from "./session-recovery.ts"
 import type { SessionStore } from "./session-store.ts"
+import { projectVisibleSessionRecords } from "./session-projection.ts"
 import {
   type CoreCommand,
   type CoreCommandResult,
@@ -536,7 +537,8 @@ export class AizenCore implements CorePort {
           ? (permissionRecord.permissionMode ?? "hybrid")
           : (this.#snapshot.preferences.newSession.permissionMode ?? "hybrid")
     this.#snapshot.pendingPermissionRequests = []
-    this.#snapshot.transcript = recordsToTranscript(loaded.records)
+    const visibleRecords = projectVisibleSessionRecords(loaded.records)
+    this.#snapshot.transcript = recordsToTranscript(visibleRecords)
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
@@ -544,7 +546,7 @@ export class AizenCore implements CorePort {
     await this.#tryActivateCurrentRecords()
     if (loaded.warnings.length > 0) this.#reportError(loaded.warnings.join("；"))
     else if (recoveryRecords.length > 0)
-      this.#reportError("检测到上次异常退出时仍在执行的工具；已记录检查指引，未自动重试")
+      this.#reportError("检测到上次异常退出时存在未完成的工具调用；已记录中断状态，未自动重试")
     await this.#tryRememberSessionDefaults(
       this.#snapshot.currentModel,
       viewRecord.viewId,
@@ -553,118 +555,7 @@ export class AizenCore implements CorePort {
   }
 
   #recoverInterruptedTools(records: SessionRecord[]): SessionRecord[] {
-    const approved = new Map<string, Extract<SessionRecord, { kind: "tool_permission" }>>()
-    const started = new Map<string, Extract<SessionRecord, { kind: "tool_permission" }>>()
-    const finished = new Set<string>()
-    const recovered = new Set<string>()
-    const existingResults = new Set<string>()
-    const callsByTurn = new Map<string, Array<{ callId: string; name: string }>>()
-    const finishedTurns = new Set<string>()
-    for (const record of records) {
-      if (record.kind === "turn_finished") finishedTurns.add(record.turnId)
-      if (record.kind === "message" && record.message.role === "tool") existingResults.add(record.message.callId)
-      if (record.kind === "message" && record.message.role === "assistant") {
-        const calls = record.message.parts
-          .filter((part) => part.kind === "tool_call")
-          .map((part) => ({ callId: part.callId, name: part.name }))
-        if (calls.length > 0) callsByTurn.set(record.turnId, [...(callsByTurn.get(record.turnId) ?? []), ...calls])
-      }
-      if (
-        record.kind !== "tool_permission" ||
-        !record.event ||
-        typeof record.event !== "object" ||
-        Array.isArray(record.event)
-      )
-        continue
-      if (record.event.type === "authorized" && record.event.authorization) {
-        const authorization = record.event.authorization
-        if (typeof authorization === "object" && !Array.isArray(authorization) && authorization.type === "allow")
-          approved.set(record.toolCallId, record)
-      }
-      if (record.event.phase === "executionStarted") started.set(record.toolCallId, record)
-      if (record.event.phase === "executionFinished") finished.add(record.toolCallId)
-      if (record.event.type === "interruptedAfterStart") recovered.add(record.toolCallId)
-    }
-    const interruptedAfterStart = [...started].filter(
-      ([callId, record]) => !finished.has(callId) && !recovered.has(callId) && !finishedTurns.has(record.turnId),
-    )
-    const interruptedBeforeStart = [...approved].filter(
-      ([callId, record]) =>
-        !started.has(callId) && !finished.has(callId) && !recovered.has(callId) && !finishedTurns.has(record.turnId),
-    )
-    const interrupted = [...interruptedAfterStart, ...interruptedBeforeStart]
-    const interruptedTurns = new Set(interrupted.map(([, record]) => record.turnId))
-    const result: SessionRecord[] = []
-    const now = new Date().toISOString()
-    for (const [callId, record] of interrupted) {
-      const wasStarted = started.has(callId)
-      const event = record.event as Record<string, JsonValue>
-      const authorization =
-        event.authorization && typeof event.authorization === "object" && !Array.isArray(event.authorization)
-          ? event.authorization
-          : undefined
-      const assessment =
-        authorization?.assessment &&
-        typeof authorization.assessment === "object" &&
-        !Array.isArray(authorization.assessment)
-          ? authorization.assessment
-          : undefined
-      const checks = Array.isArray(assessment?.recoveryChecks)
-        ? assessment.recoveryChecks.filter((item: JsonValue): item is string => typeof item === "string")
-        : ["检查原工具涉及的文件、进程或远程资源状态"]
-      result.push({
-        kind: "tool_permission",
-        recordId: crypto.randomUUID(),
-        turnId: record.turnId,
-        at: now,
-        toolCallId: callId,
-        event: {
-          type: wasStarted ? "interruptedAfterStart" : "interruptedBeforeStart",
-          message: wasStarted
-            ? "应用在工具执行期间异常终止。操作可能未执行、部分执行或已完成；禁止直接重试。"
-            : "应用在已批准工具开始执行前异常终止；该调用没有执行。",
-          recoveryChecks: wasStarted ? checks : [],
-        },
-      })
-    }
-    for (const turnId of interruptedTurns) {
-      const calls = callsByTurn.get(turnId) ?? []
-      if (calls.length === 0) continue
-      for (const call of calls) {
-        if (existingResults.has(call.callId)) continue
-        const wasStarted = started.has(call.callId)
-        result.push({
-          kind: "message",
-          recordId: crypto.randomUUID(),
-          turnId,
-          at: now,
-          message: {
-            role: "tool",
-            callId: call.callId,
-            name: call.name,
-            parts: [
-              {
-                kind: "text",
-                text: wasStarted
-                  ? "Operation interrupted: The application stopped after execution started. The operation may not have run, may have partially run, or may have completed. Verify the target state before attempting another change."
-                  : "Operation interrupted: The application stopped before execution started. The tool call did not run.",
-              },
-            ],
-            isError: true,
-            details: { interrupted: true, executionStarted: wasStarted },
-          },
-        })
-      }
-      result.push({
-        kind: "turn_finished",
-        recordId: crypto.randomUUID(),
-        turnId,
-        at: now,
-        outcome: "failed",
-        error: { code: "TOOL_EXECUTION_INTERRUPTED", message: "应用在工具执行期间异常终止" },
-      })
-    }
-    return result
+    return recoverInterruptedToolCalls(records)
   }
 
   /**
@@ -701,7 +592,7 @@ export class AizenCore implements CorePort {
           ? (permissionRecord.permissionMode ?? "hybrid")
           : "hybrid"
     this.#snapshot.pendingPermissionRequests = []
-    this.#snapshot.transcript = recordsToTranscript(records)
+    this.#snapshot.transcript = recordsToTranscript(projectVisibleSessionRecords(records))
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
