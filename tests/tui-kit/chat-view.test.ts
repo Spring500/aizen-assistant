@@ -87,6 +87,28 @@ test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态"
   }
 })
 
+test("聊天视图展示工作目录变化", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    view.update(
+      snapshot({
+        transcript: [
+          {
+            type: "environment",
+            recordId: "cwd-change",
+            text: 'Working directory changed from "E:\\old" to "D:\\new".',
+          },
+        ],
+      }),
+    )
+    await setup.renderOnce()
+    expect(setup.externalOutput.takeText()).toContain('Working directory changed from "E:\\old" to "D:\\new".')
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("历史块包含同底色的上下留白并记录思考内容", async () => {
   const setup = await setupRepl()
   try {

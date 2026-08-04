@@ -73,6 +73,14 @@ export type PermissionModeChangedRecord = {
   permissionMode: PermissionMode
 }
 
+export type WorkingDirectoryChangedRecord = {
+  kind: "working_directory_changed"
+  recordId: string
+  at: string
+  previousCwd: string
+  currentCwd: string
+}
+
 export type ToolPermissionRecord = {
   kind: "tool_permission"
   recordId: string
@@ -155,6 +163,7 @@ export type SessionRecord =
   | SessionRenamedRecord
   | ModelChangedRecord
   | ViewChangedRecord
+  | WorkingDirectoryChangedRecord
   | PermissionModeChangedRecord
   | ToolPermissionRecord
   | TurnStartedRecord
@@ -412,6 +421,14 @@ export function parseSessionValue(value: unknown): SessionLine {
       kind,
       ...baseRecord(source, ["kind", "recordId", "at", "viewId"]),
       viewId: viewId(source.viewId),
+    }
+  }
+  if (kind === "working_directory_changed") {
+    return {
+      kind,
+      ...baseRecord(source, ["kind", "recordId", "at", "previousCwd", "currentCwd"]),
+      previousCwd: string(source.previousCwd, "previousCwd"),
+      currentCwd: string(source.currentCwd, "currentCwd"),
     }
   }
   if (kind === "permission_mode_changed") {
