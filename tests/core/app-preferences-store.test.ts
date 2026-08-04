@@ -34,21 +34,70 @@ describe("应用偏好存储", () => {
     expect(await store.read()).toEqual(preferences)
   })
 
-  test("拒绝旧轮次字段和多余顶层版本字段", async () => {
+  test("逐字段保留合法偏好并为无效和废弃字段使用默认值", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-preferences-"))
     directories.push(directory)
     const file = join(directory, "preferences.json")
     await writeFile(
       file,
       JSON.stringify({
-        newSession: { viewId: null },
-        agents: { sessionNaming: {} },
-        fold: { userTurns: 0, assistantTurns: 3, thinkingTurns: 0, toolGroupTurns: 2, toolDetailTurns: 0 },
+        version: 1,
+        newSession: {
+          viewId: "review",
+          permissionMode: "invalid",
+          model: { providerId: "p", modelId: "m", api: "a" },
+        },
+        agents: {
+          sessionNaming: { model: { providerId: "title", modelId: "model" } },
+          permissionReview: { model: { providerId: "review" } },
+        },
+        fold: {
+          userTurns: 0,
+          thinkingExpanded: true,
+          toolGroupExpanded: "yes",
+        },
       }),
     )
-    await expect(new AppPreferencesStore(file).read()).rejects.toThrow("fold 包含未知字段：userTurns")
-    await writeFile(file, JSON.stringify({ ...defaultAppPreferences, version: 1 }))
-    await expect(new AppPreferencesStore(file).read()).rejects.toThrow("preferences.json 包含未知字段：version")
+    const store = new AppPreferencesStore(file)
+    expect(await store.read()).toEqual({
+      newSession: {
+        viewId: "review",
+        permissionMode: "hybrid",
+        model: { providerId: "p", modelId: "m", api: "a" },
+      },
+      agents: {
+        sessionNaming: { model: { providerId: "title", modelId: "model" } },
+        permissionReview: {},
+      },
+      fold: {
+        thinkingExpanded: true,
+        toolGroupExpanded: false,
+        toolDetailsExpanded: false,
+      },
+    })
+    expect(store.takeWarnings()).toEqual([
+      "preferences.json.version 是未知字段，已忽略",
+      "newSession.permissionMode 无效，已使用默认值",
+      "agents.permissionReview.model.modelId 必须是非空字符串，已使用默认值",
+      "fold.userTurns 是未知字段，已忽略",
+      "fold.toolGroupExpanded 必须是布尔值，已使用默认值",
+      "fold.toolDetailsExpanded 缺失，已使用默认值",
+    ])
+    expect(store.takeWarnings()).toEqual([])
+  })
+
+  test("非法 JSON 和非对象根节点使用全部默认偏好并报告原因", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aizen-preferences-"))
+    directories.push(directory)
+    const file = join(directory, "preferences.json")
+    const store = new AppPreferencesStore(file)
+    await writeFile(file, "{")
+    expect(await store.read()).toEqual(defaultAppPreferences)
+    expect(store.takeWarnings()[0]).toContain("preferences.json 不是有效 JSON，已使用全部默认偏好")
+
+    await writeFile(file, "[]")
+    expect(await store.read()).toEqual(defaultAppPreferences)
+    expect(store.takeWarnings()).toEqual(["preferences.json 必须是对象，已使用默认值"])
   })
 
   test("会话命名偏好只保存供应商和模型标识", () => {
@@ -72,7 +121,7 @@ describe("应用偏好存储", () => {
     ).toThrow("未知字段")
   })
 
-  test("折叠设置只接受三个布尔开关", () => {
+  test("写入时严格拒绝非法折叠设置", () => {
     expect(() =>
       parseAppPreferences({
         ...defaultAppPreferences,
