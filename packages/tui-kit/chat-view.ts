@@ -3,9 +3,11 @@ import {
   type CliRenderer,
   CliRenderEvents,
   createTextAttributes,
+  MarkdownRenderable,
   parseColor,
   type RenderContext,
   StyledText,
+  SyntaxStyle,
   type TextChunk,
   TextRenderable,
 } from "@opentui/core"
@@ -19,9 +21,9 @@ export type ChatView = {
   live: TextRenderable
   status: TextRenderable
   destroy(): void
-  update(snapshot: CoreSnapshot): void
+  update(snapshot: CoreSnapshot): Promise<void>
   getFoldPreferences(): FoldPreferences
-  setFoldPreferences(fold: FoldPreferences): void
+  setFoldPreferences(fold: FoldPreferences): Promise<void>
 }
 
 type ToolDisplay = {
@@ -51,6 +53,20 @@ const blockColors = {
   tool: "#292c31",
   toolGroup: "#292c31",
 } as const
+
+function createAssistantMarkdownStyle(): SyntaxStyle {
+  return SyntaxStyle.fromStyles({
+    default: { fg: "#f3f4f6", bg: blockColors.assistant },
+    conceal: { fg: systemColors.secondary, bg: blockColors.assistant, dim: true },
+    "markup.heading": { fg: systemColors.header, bg: blockColors.assistant, bold: true },
+    "markup.strong": { fg: "#f3f4f6", bg: blockColors.assistant, bold: true },
+    "markup.italic": { fg: "#f3f4f6", bg: blockColors.assistant, italic: true },
+    "markup.raw": { fg: systemColors.live, bg: blockColors.assistant },
+    "markup.link": { fg: systemColors.sessionStatus, bg: blockColors.assistant, underline: true },
+    "markup.quote": { fg: systemColors.secondary, bg: blockColors.assistant, italic: true },
+    "markup.list": { fg: systemColors.header, bg: blockColors.assistant, bold: true },
+  })
+}
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -354,6 +370,7 @@ function createHistoryBlock(
   index: number,
   block: DisplayBlock,
   fold: FoldPreferences,
+  assistantMarkdownStyle: SyntaxStyle,
 ): BoxRenderable {
   const rootId = `history-entry-${index}`
   if (block.kind === "plain") {
@@ -372,11 +389,27 @@ function createHistoryBlock(
     const isExpanded = !isThinking || fold.thinkingExpanded
     const label = isThinking ? "思考" : "助手"
     const meta = timingText(block.timing)
-    const content = isExpanded
-      ? `▼ ${label}${meta ? `  ${meta}` : ""}\n${block.content}`
-      : `▶ ${label} ${oneLine(block.content).slice(0, 80)}...${meta ? `  ${meta}` : ""}`
     const root = makeBox(context, rootId, color)
-    root.add(makeText(context, `${rootId}-text`, content, color))
+    if (!isExpanded || isThinking) {
+      const content = isExpanded
+        ? `▼ ${label}${meta ? `  ${meta}` : ""}\n${block.content}`
+        : `▶ ${label} ${oneLine(block.content).slice(0, 80)}...${meta ? `  ${meta}` : ""}`
+      root.add(makeText(context, `${rootId}-text`, content, color))
+      return root
+    }
+    root.add(makeText(context, `${rootId}-header`, `▼ ${label}${meta ? `  ${meta}` : ""}`, color))
+    root.add(
+      new MarkdownRenderable(context, {
+        id: `${rootId}-markdown`,
+        content: block.content,
+        syntaxStyle: assistantMarkdownStyle,
+        width: "100%",
+        fg: "#f3f4f6",
+        bg: color,
+        streaming: false,
+        tableOptions: { widthMode: "content" },
+      }),
+    )
     return root
   }
 
@@ -461,6 +494,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
   renderer.root.add(live)
   renderer.root.add(status)
 
+  const assistantMarkdownStyle = createAssistantMarkdownStyle()
   let blocks: DisplayBlock[] = []
   let fold: FoldPreferences = {
     thinkingExpanded: false,
@@ -471,26 +505,28 @@ export function createChatView(renderer: CliRenderer): ChatView {
   let latestSnapshot: CoreSnapshot | undefined
   let notice = ""
   let resizeTimer: ReturnType<typeof setTimeout> | undefined
+  let historySyncQueue = Promise.resolve()
   let destroyed = false
 
   const renderedFingerprints = () => blocks.map((block) => JSON.stringify({ block, fold }))
 
-  const commitBlocks = (startIndex: number) => {
+  const commitBlocks = async (startIndex: number) => {
     if (startIndex >= blocks.length) return
     const surface = renderer.createScrollbackSurface()
     try {
       for (let index = startIndex; index < blocks.length; index += 1) {
         const block = blocks[index] as DisplayBlock
-        surface.root.add(createHistoryBlock(surface.renderContext, index, block, fold))
+        surface.root.add(createHistoryBlock(surface.renderContext, index, block, fold, assistantMarkdownStyle))
       }
-      surface.render()
+      await surface.settle()
       surface.commitRows(0, surface.height)
     } finally {
       surface.destroy()
     }
   }
 
-  const syncHistory = (forceReplay = false) => {
+  const syncHistory = async (forceReplay = false) => {
+    if (destroyed) return
     const nextFingerprints = renderedFingerprints()
     if (
       !forceReplay &&
@@ -502,7 +538,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
       !forceReplay &&
       nextFingerprints.length >= committedFingerprints.length &&
       committedFingerprints.every((value, index) => nextFingerprints[index] === value)
-    if (canAppend) commitBlocks(committedFingerprints.length)
+    if (canAppend) await commitBlocks(committedFingerprints.length)
     else {
       try {
         renderer.resetSplitFooterForReplay({ clearSavedLines: true })
@@ -511,9 +547,16 @@ export function createChatView(renderer: CliRenderer): ChatView {
         if (!(error instanceof Error) || error.message !== "resetSplitFooterForReplay requires an active terminal")
           throw error
       }
-      commitBlocks(0)
+      await commitBlocks(0)
     }
+    if (destroyed) return
     committedFingerprints = nextFingerprints
+  }
+
+  const queueHistorySync = (forceReplay = false) => {
+    const operation = historySyncQueue.then(() => syncHistory(forceReplay))
+    historySyncQueue = operation.catch(() => {})
+    return operation
   }
 
   const refreshFooter = () => {
@@ -534,8 +577,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
     resizeTimer = setTimeout(() => {
       resizeTimer = undefined
       if (!latestSnapshot) return
-      syncHistory(true)
-      refreshFooter()
+      void queueHistorySync(true).then(refreshFooter)
     }, 75)
   }
   renderer.on(CliRenderEvents.RESIZE, onResize)
@@ -552,24 +594,25 @@ export function createChatView(renderer: CliRenderer): ChatView {
       header.destroy()
       live.destroy()
       status.destroy()
+      void historySyncQueue.finally(() => assistantMarkdownStyle.destroy())
     },
-    update(snapshot) {
+    async update(snapshot) {
       if (destroyed) return
       latestSnapshot = snapshot
       notice = ""
       fold = { ...snapshot.preferences.fold }
       blocks = displayBlocks(snapshot)
-      syncHistory()
       refreshFooter()
+      await queueHistorySync()
     },
     getFoldPreferences() {
       return { ...fold }
     },
-    setFoldPreferences(next) {
+    async setFoldPreferences(next) {
       if (destroyed) return
       fold = { ...next }
       notice = "已应用折叠设置，并全量回放会话"
-      syncHistory(true)
+      await queueHistorySync(true)
       refreshFooter()
     },
   }
