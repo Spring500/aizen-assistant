@@ -125,7 +125,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     interactionController.abort()
     const status = core.getSnapshot().status
     if (status === "authenticating") core.dispatch({ type: "cancel_auth" }).catch(() => {})
-    if (status === "running" || status === "aborting") core.dispatch({ type: "abort" }).catch(() => {})
+    if (status === "running" || status === "compacting" || status === "aborting")
+      core.dispatch({ type: "abort" }).catch(() => {})
   }
   overlays.setCtrlCHandler(quit)
   const showError = async (title: string, error: string) => {
@@ -163,6 +164,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         else if (command.name === "/rewind") runAction(() => changeConversation("rewind"))
         else if (command.name === "/fork") runAction(() => changeConversation("fork"))
         else if (command.name === "/rename") runAction(() => renameCurrentSession(command.argument))
+        else if (command.name === "/compact")
+          runAction(() =>
+            dispatchWithError(
+              { type: "compact", ...(command.argument ? { customInstructions: command.argument } : {}) },
+              "压缩会话",
+            ),
+          )
         else if (command.name === "/views") runAction(manageViews)
         else if (command.name === "/view" || command.name === "/model") runAction(() => openSessionSettings("existing"))
         else if (command.name === "/fold") runAction(chooseFold)

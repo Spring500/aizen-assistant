@@ -26,6 +26,7 @@ class PermissionPi implements PiPort {
   refreshView = async () => {}
   switchView = async () => model
   generateSessionTitle = async () => "标题"
+  compact = async (_customInstructions?: string) => {}
   abort = async () => {
     this.abortController?.abort()
   }

@@ -1,12 +1,15 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
-import type { ThinkingLevel } from "@earendil-works/pi-agent-core"
+import type { AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core"
 import {
   type Api,
+  type AssistantMessage as PiAssistantMessage,
   type AuthPrompt,
   clampThinkingLevel,
   getSupportedThinkingLevels,
+  isContextOverflow,
   type Model,
+  type UserMessage as PiUserMessage,
   type ModelThinkingLevel,
 } from "@earendil-works/pi-ai"
 import {
@@ -16,12 +19,14 @@ import {
   createEditTool,
   createReadTool,
   createWriteTool,
+  DEFAULT_COMPACTION_SETTINGS,
   DefaultResourceLoader,
   getShellConfig,
   ModelRuntime,
   type ResourceLoader,
   SessionManager,
   SettingsManager,
+  shouldCompact,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
@@ -426,6 +431,7 @@ export class PiSessionRuntime implements PiPort {
   #activePromptInput: PiPromptInput | undefined
   #session: AgentSession | undefined
   #activePrompt: Promise<void> | undefined
+  #activeCompaction: Promise<void> | undefined
   #unsubscribe: (() => void) | undefined
   #unsubscribeAgent: (() => void) | undefined
   #authAbortController: AbortController | undefined
@@ -490,7 +496,14 @@ export class PiSessionRuntime implements PiPort {
     } catch (error) {
       throw new PiModelRuntimeError(error instanceof Error ? error.message : String(error))
     }
-    const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: false } })
+    const settingsManager = SettingsManager.inMemory({
+      compaction: {
+        enabled: true,
+        reserveTokens: DEFAULT_COMPACTION_SETTINGS.reserveTokens,
+        keepRecentTokens: DEFAULT_COMPACTION_SETTINGS.keepRecentTokens,
+      },
+      retry: { enabled: false },
+    })
     const initialLoader = createViewLoader(input.cwd, input.view, settingsManager)
     await initialLoader.reload()
     this.#validateViewLoader(initialLoader, input.view.viewId)
@@ -568,32 +581,7 @@ export class PiSessionRuntime implements PiPort {
       settingsManager,
     })
     this.#session = session
-    this.#unsubscribeAgent = session.agent.subscribe((event) => {
-      if (event.type === "message_update") {
-        const update = event.assistantMessageEvent
-        if (update.type === "text_start" || update.type === "thinking_start") {
-          this.#contentStarts.set(update.contentIndex, Date.now())
-        } else if (update.type === "text_end" || update.type === "thinking_end") {
-          const finishedAt = Date.now()
-          this.#contentTimings.set(update.contentIndex, {
-            startedAt: this.#contentStarts.get(update.contentIndex) ?? finishedAt,
-            finishedAt,
-          })
-        }
-      }
-      if (event.type !== "message_end" || (event.message.role !== "assistant" && event.message.role !== "toolResult"))
-        return
-      const entries = session.sessionManager.getEntries()
-      const entry = entries[entries.length - 1]
-      if (entry?.type !== "message" || entry.message !== event.message) throw new Error("pi 没有保存已完成消息")
-      const recordId = this.#entryRecordIds.get(entry.id) ?? crypto.randomUUID()
-      this.#registerEntry(recordId, entry.id)
-      this.#emit({
-        type: "message",
-        recordId,
-        record: piMessageToCore(event.message, { content: this.#contentTimings, tools: this.#toolTimings }),
-      })
-    })
+    this.#subscribeAgentMessages(session)
     this.#unsubscribe = session.subscribe((event) => {
       if (event.type === "message_update") {
         if (event.assistantMessageEvent.type === "text_delta")
@@ -673,6 +661,7 @@ export class PiSessionRuntime implements PiPort {
   /**
    * 将当轮输入临时合并到 pi 上下文，并用活动请求信息覆盖完整工具循环。
    * useLater=false 的临时输入在请求结束后移除，不得累积到下一轮。
+   * 由于该链路直接驱动底层 Agent，压缩阈值和溢出恢复也必须在此显式执行。
    */
   async prompt(input: PiPromptInput): Promise<void> {
     const session = this.#requireSession()
@@ -683,6 +672,7 @@ export class PiSessionRuntime implements PiPort {
       this.#contentTimings.clear()
       this.#toolStarts.clear()
       this.#toolTimings.clear()
+      await this.#compactBeforePrompt(session)
       const mapped = turnInputToPi(input.items, Date.now())
       const allMessages = mapped.map((item) => item.message)
       const persistentMessages = mapped.filter((item) => item.persistent).map((item) => item.message)
@@ -696,6 +686,7 @@ export class PiSessionRuntime implements PiPort {
       this.#activePromptInput = input
       try {
         await session.agent.continue()
+        await this.#compactAfterPrompt(session, allMessages, persistentMessages)
       } finally {
         this.#activePromptInput = undefined
         session.agent.state.messages = session.agent.state.messages.filter(
@@ -709,6 +700,84 @@ export class PiSessionRuntime implements PiPort {
     } finally {
       if (this.#activePrompt === running) this.#activePrompt = undefined
     }
+  }
+
+  /** 手动压缩当前内存会话，结果通过既有 compaction 事件交给核心落盘。 */
+  async compact(customInstructions?: string): Promise<void> {
+    const session = this.#requireSession()
+    if (this.#activePrompt || this.#activeCompaction || !session.isIdle)
+      throw new Error("生成或执行工具期间不能压缩会话")
+    const running = session.compact(customInstructions).then(() => {})
+    this.#activeCompaction = running
+    try {
+      await running
+      this.#subscribeAgentMessages(session)
+    } finally {
+      if (this.#activeCompaction === running) this.#activeCompaction = undefined
+    }
+  }
+
+  async #compactBeforePrompt(session: AgentSession): Promise<void> {
+    const assistant = this.#lastAssistant(session)
+    if (!assistant || assistant.stopReason === "aborted") return
+    if (isContextOverflow(assistant, session.model?.contextWindow ?? 0) || this.#overCompactionThreshold(session)) {
+      await session.compact()
+      this.#subscribeAgentMessages(session)
+    }
+  }
+
+  async #compactAfterPrompt(
+    session: AgentSession,
+    currentMessages: PiUserMessage[],
+    persistentMessages: PiUserMessage[],
+  ): Promise<void> {
+    const assistant = this.#lastAssistant(session)
+    if (!assistant) return
+    if (isContextOverflow(assistant, session.model?.contextWindow ?? 0)) {
+      if (assistant.stopReason === "stop") {
+        await session.compact()
+        this.#subscribeAgentMessages(session)
+        return
+      }
+      await session.compact()
+      this.#subscribeAgentMessages(session)
+      const messages = session.agent.state.messages
+      if (messages.at(-1) === assistant) session.agent.state.messages = messages.slice(0, -1)
+      this.#restoreCurrentTurnMessages(session, currentMessages, persistentMessages)
+      await session.agent.continue()
+      return
+    }
+    if (this.#overCompactionThreshold(session)) {
+      await session.compact()
+      this.#subscribeAgentMessages(session)
+    }
+  }
+
+  #restoreCurrentTurnMessages(
+    session: AgentSession,
+    currentMessages: PiUserMessage[],
+    persistentMessages: PiUserMessage[],
+  ): void {
+    const persistent = new Set(persistentMessages)
+    const firstIndex = session.agent.state.messages.findIndex((message) => persistent.has(message as PiUserMessage))
+    if (firstIndex < 0) throw new Error("压缩后无法恢复当前轮输入")
+    session.agent.state.messages = [
+      ...session.agent.state.messages.slice(0, firstIndex),
+      ...currentMessages,
+      ...session.agent.state.messages.slice(firstIndex).filter((message) => !persistent.has(message as PiUserMessage)),
+    ]
+  }
+
+  #overCompactionThreshold(session: AgentSession): boolean {
+    const usage = session.getContextUsage()
+    if (usage?.tokens === null || usage === undefined) return false
+    return shouldCompact(usage.tokens, usage.contextWindow, DEFAULT_COMPACTION_SETTINGS)
+  }
+
+  #lastAssistant(session: AgentSession): PiAssistantMessage | undefined {
+    return [...session.agent.state.messages]
+      .reverse()
+      .find((message): message is PiAssistantMessage => message.role === "assistant")
   }
 
   setToolRegistrations(registrations: AizenToolRegistration[]): void {
@@ -821,7 +890,8 @@ export class PiSessionRuntime implements PiPort {
   async abort(): Promise<void> {
     const session = this.#requireSession()
     session.agent.abort()
-    await this.#activePrompt
+    session.abortCompaction()
+    await Promise.all([this.#activePrompt, this.#activeCompaction])
   }
 
   /** 模型配置只允许在 session 空闲时重载，保证一个完整工具循环使用同一份运行参数。 */
@@ -949,6 +1019,42 @@ export class PiSessionRuntime implements PiPort {
     await this.#disposeSession()
   }
 
+  #handleAgentMessageEvent(session: AgentSession, event: AgentEvent): void {
+    if (event.type === "message_update") {
+      const update = event.assistantMessageEvent
+      if (update.type === "text_start" || update.type === "thinking_start") {
+        this.#contentStarts.set(update.contentIndex, Date.now())
+      } else if (update.type === "text_end" || update.type === "thinking_end") {
+        const finishedAt = Date.now()
+        this.#contentTimings.set(update.contentIndex, {
+          startedAt: this.#contentStarts.get(update.contentIndex) ?? finishedAt,
+          finishedAt,
+        })
+      }
+    }
+    if (event.type !== "message_end" || (event.message.role !== "assistant" && event.message.role !== "toolResult"))
+      return
+    const entries = session.sessionManager.getEntries()
+    const entry = entries.at(-1)
+    if (entry?.type !== "message" || entry.message !== event.message) throw new Error("pi 没有保存已完成消息")
+    const recordId = this.#entryRecordIds.get(entry.id) ?? crypto.randomUUID()
+    this.#registerEntry(recordId, entry.id)
+    this.#emit({
+      type: "message",
+      recordId,
+      record: piMessageToCore(event.message, { content: this.#contentTimings, tools: this.#toolTimings }),
+    })
+  }
+
+  /**
+   * pi 压缩会重新连接自身 Agent 监听器并把它排到外部监听器之后；
+   * 每次压缩后重订阅，保证 pi 先写入内存会话，再向核心发布完成消息。
+   */
+  #subscribeAgentMessages(session: AgentSession): void {
+    this.#unsubscribeAgent?.()
+    this.#unsubscribeAgent = session.agent.subscribe((event) => this.#handleAgentMessageEvent(session, event))
+  }
+
   #emit(event: PiPortEvent): void {
     for (const listener of this.#listeners) listener(event)
   }
@@ -965,9 +1071,10 @@ export class PiSessionRuntime implements PiPort {
     this.#unsubscribeAgent?.()
     this.#unsubscribeAgent = undefined
     if (this.#session) {
-      if (this.#activePrompt) {
+      if (this.#activePrompt || this.#activeCompaction) {
         this.#session.agent.abort()
-        await this.#activePrompt
+        this.#session.abortCompaction()
+        await Promise.all([this.#activePrompt, this.#activeCompaction])
       } else if (!this.#session.isIdle) await this.#session.abort()
       this.#session.dispose()
     }
@@ -978,6 +1085,7 @@ export class PiSessionRuntime implements PiPort {
     this.#settingsManager = undefined
     this.#cwd = undefined
     this.#activePrompt = undefined
+    this.#activeCompaction = undefined
     this.#contentStarts.clear()
     this.#contentTimings.clear()
     this.#toolStarts.clear()

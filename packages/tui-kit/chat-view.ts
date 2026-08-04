@@ -550,6 +550,7 @@ function statusText(snapshot: CoreSnapshot): string {
   return {
     idle: "空闲",
     running: "处理中",
+    compacting: "正在压缩上下文",
     aborting: "正在中止",
     authenticating: "等待输入认证信息",
     error: "发生错误",
