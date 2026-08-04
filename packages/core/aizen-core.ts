@@ -1,6 +1,7 @@
 import { type AppPreferencesStore, defaultAppPreferences, parseAppPreferences } from "./app-preferences-store.ts"
 import { CoreErrorQueue } from "./error-queue.ts"
 import type { ModelConfigStore } from "./model-config-store.ts"
+import { normalizeProjectPath } from "./paths.ts"
 import {
   PiModelRuntimeError,
   type PiPermissionExecutionEvent,
@@ -100,6 +101,7 @@ export class AizenCore implements CorePort {
     { resolve: (decision: HumanReviewBatchDecision) => void; reject: (error: Error) => void }
   >()
   #snapshot: CoreSnapshot
+  #sessionInitialCwd: string
   #records: SessionRecord[] = []
   #writeQueue = Promise.resolve()
   #writeError: Error | undefined
@@ -115,6 +117,7 @@ export class AizenCore implements CorePort {
 
   constructor(options: AizenCoreOptions) {
     this.#cwd = options.cwd
+    this.#sessionInitialCwd = options.cwd
     this.#store = options.store
     this.#pi = options.pi
     this.#snapshot = {
@@ -486,6 +489,7 @@ export class AizenCore implements CorePort {
     ]
     const header = await this.#store.createGenerated({ cwd: this.#cwd, createdAt: at }, records)
     const sessionId = header.sessionId
+    this.#sessionInitialCwd = header.cwd
     this.#records = records
     this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
@@ -514,7 +518,18 @@ export class AizenCore implements CorePort {
   async #openSession(sessionId: string): Promise<void> {
     this.#sessionNamingAbort?.abort()
     const loaded = await this.#store.read(sessionId)
-    if (loaded.header.cwd !== this.#cwd) throw new Error("该会话不属于当前工作目录")
+    const previousCwd = this.#effectiveWorkingDirectory(loaded.header.cwd, loaded.records)
+    if (normalizeProjectPath(previousCwd) !== normalizeProjectPath(this.#cwd)) {
+      const record: SessionRecord = {
+        kind: "working_directory_changed",
+        recordId: crypto.randomUUID(),
+        at: new Date().toISOString(),
+        previousCwd,
+        currentCwd: this.#cwd,
+      }
+      await this.#store.append(sessionId, record)
+      loaded.records.push(record)
+    }
     const modelRecord = [...loaded.records].reverse().find((record) => record.kind === "model_changed")
     const viewRecord = [...loaded.records].reverse().find((record) => record.kind === "view_changed")
     const permissionRecord = [...loaded.records]
@@ -528,6 +543,7 @@ export class AizenCore implements CorePort {
       loaded.records.push(...recoveryRecords)
     }
     this.#records = loaded.records
+    this.#sessionInitialCwd = this.#originalWorkingDirectory(loaded.header.cwd, loaded.records)
     this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
     this.#sessionNamingAttempted = false
@@ -653,8 +669,10 @@ export class AizenCore implements CorePort {
     if (!model || viewId === undefined) throw new Error("当前会话设置不完整")
     const at = new Date().toISOString()
     const renamed = forceName || this.#records.some((record) => record.kind === "session_renamed")
+    const retained = structuredClone(this.#records.slice(0, this.#turnStartIndex(turnId)))
+    const previousCwd = this.#effectiveWorkingDirectory(this.#sessionInitialCwd, retained)
     return [
-      ...structuredClone(this.#records.slice(0, this.#turnStartIndex(turnId))),
+      ...retained,
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(model) },
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
       {
@@ -664,7 +682,28 @@ export class AizenCore implements CorePort {
         permissionMode: this.#snapshot.currentPermissionMode ?? "hybrid",
       },
       ...(renamed ? [{ kind: "session_renamed" as const, recordId: crypto.randomUUID(), at, name }] : []),
+      ...(normalizeProjectPath(previousCwd) === normalizeProjectPath(this.#cwd)
+        ? []
+        : [
+            {
+              kind: "working_directory_changed" as const,
+              recordId: crypto.randomUUID(),
+              at,
+              previousCwd,
+              currentCwd: this.#cwd,
+            },
+          ]),
     ]
+  }
+
+  #effectiveWorkingDirectory(initialCwd: string, records: SessionRecord[]): string {
+    const latest = [...records].reverse().find((record) => record.kind === "working_directory_changed")
+    return latest?.kind === "working_directory_changed" ? latest.currentCwd : initialCwd
+  }
+
+  #originalWorkingDirectory(initialCwd: string, records: SessionRecord[]): string {
+    const first = records.find((record) => record.kind === "working_directory_changed")
+    return first?.kind === "working_directory_changed" ? first.previousCwd : initialCwd
   }
 
   /**
@@ -695,6 +734,7 @@ export class AizenCore implements CorePort {
     const records = this.#recordsBeforeTurn(turnId, name, true)
     const header = await this.#store.createGenerated({ cwd: this.#cwd, createdAt: at }, records)
     const sessionId = header.sessionId
+    this.#sessionInitialCwd = this.#originalWorkingDirectory(header.cwd, records)
     await this.#activateRecords(sessionId, records, name, true)
     this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
@@ -702,8 +742,7 @@ export class AizenCore implements CorePort {
 
   async #renameSession(sessionId: string, name: string): Promise<void> {
     const normalizedName = name.trim()
-    const loaded = await this.#store.read(sessionId)
-    if (loaded.header.cwd !== this.#cwd) throw new Error("该会话不属于当前工作目录")
+    await this.#store.read(sessionId)
     const record: SessionRecord = {
       kind: "session_renamed",
       recordId: crypto.randomUUID(),

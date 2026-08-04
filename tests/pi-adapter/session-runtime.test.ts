@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { SessionRecord } from "../../packages/core/session-format.ts"
+import { convertToLlm, serializeConversation, SessionManager } from "@earendil-works/pi-coding-agent"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { startMockServer } from "../utils/mock-server.ts"
 
@@ -138,6 +139,43 @@ describe("pi 内存会话", () => {
     await expect(runtime.restore({ cwd: directory, model, view: { viewId: null }, records })).resolves.toBeDefined()
     expect(await captureRequest(runtime, model)).toContain("历史消息")
     await runtime.dispose()
+  })
+
+  test("目录变化记录作为可压缩的自定义消息恢复", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const records: SessionRecord[] = [
+      {
+        kind: "working_directory_changed",
+        recordId: "cwd-change",
+        at: "2026-07-23T10:00:00.000Z",
+        previousCwd: "E:\\old",
+        currentCwd: directory,
+      },
+    ]
+
+    await runtime.restore({ cwd: directory, model, view: { viewId: null }, records })
+    const request = JSON.parse(await captureRequest(runtime, model)) as {
+      body: { messages: Array<{ content: Array<{ text?: string }> }> }
+    }
+    expect(request.body.messages[0]?.content[0]?.text).toBe(
+      `Working directory changed from "E:\\old" to "${directory}".`,
+    )
+    await runtime.dispose()
+  })
+
+  test("pi压缩会纳入工作目录变化自定义消息", () => {
+    const manager = SessionManager.inMemory("D:\\new")
+    manager.appendCustomMessageEntry(
+      "working-directory-change",
+      'Working directory changed from "E:\\old" to "D:\\new".',
+      true,
+    )
+    const serialized = serializeConversation(convertToLlm(manager.buildSessionContext().messages))
+    expect(serialized).toContain('[User]: Working directory changed from "E:\\old" to "D:\\new".')
   })
 
   test("恢复时排除仅当轮输入并保留助手和工具结果", async () => {

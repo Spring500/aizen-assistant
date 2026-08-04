@@ -3,12 +3,14 @@ import type { EditableModelConfig, EditableProviderConfig, ModelConfigSnapshot }
 import type { ViewOption } from "./view-store.ts"
 import type { AuthPromptOption, AuthProviderOption, ModelOption, ModelRuntimeInfo } from "./pi-port.ts"
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
+import { workingDirectoryChangeText } from "./session-projection.ts"
 import type { HumanReviewRequest, PermissionMode } from "./tool-permissions/types.ts"
 import type { SessionSummary } from "./session-store.ts"
 
 export type CoreStatus = "idle" | "running" | "aborting" | "authenticating" | "error"
 
 export type TranscriptEntry =
+  | { type: "environment"; recordId: string; text: string }
   | { type: "input"; turnId: string; items: TurnInputItem[] }
   | { type: "message"; turnId: string; message: MessageRecord["message"] }
   | { type: "turn_end"; turnId: string; outcome: "completed" | "aborted" | "failed" }
@@ -143,6 +145,12 @@ export interface CorePort {
 export function recordsToTranscript(records: SessionRecord[]): TranscriptEntry[] {
   const entries: TranscriptEntry[] = []
   for (const record of records) {
+    if (record.kind === "working_directory_changed")
+      entries.push({
+        type: "environment",
+        recordId: record.recordId,
+        text: workingDirectoryChangeText(record.previousCwd, record.currentCwd),
+      })
     if (record.kind === "turn_started") entries.push({ type: "input", turnId: record.turnId, items: record.items })
     if (record.kind === "message") entries.push({ type: "message", turnId: record.turnId, message: record.message })
     if (record.kind === "turn_finished")

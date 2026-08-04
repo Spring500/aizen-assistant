@@ -205,7 +205,14 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
 
   const blocks: DisplayBlock[] = []
   for (const [entryIndex, entry] of snapshot.transcript.entries()) {
-    if (entry.type === "input") {
+    if (entry.type === "environment") {
+      blocks.push({
+        kind: "plain",
+        id: `environment-${entry.recordId}`,
+        turnId: `environment-${entry.recordId}`,
+        content: entry.text,
+      })
+    } else if (entry.type === "input") {
       for (const [itemIndex, item] of entry.items.entries()) {
         const text = item.parts
           .filter((part) => part.kind === "text")

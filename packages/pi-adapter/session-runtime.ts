@@ -44,7 +44,7 @@ import type {
 import { PiModelRuntimeError } from "../core/pi-port.ts"
 import type { AizenToolRegistration } from "../core/tool-registry.ts"
 import type { JsonValue, ModelReference, SessionRecord } from "../core/session-format.ts"
-import { projectVisibleSessionRecords } from "../core/session-projection.ts"
+import { projectVisibleSessionRecords, workingDirectoryChangeText } from "../core/session-projection.ts"
 import type { ToolAuthorization, ToolPermissionRequest } from "../core/tool-permissions/types.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
 import { permissionFailureMessage } from "./permission-failure.ts"
@@ -999,6 +999,16 @@ export class PiSessionRuntime implements PiPort {
         this.#registerEntry(
           record.recordId,
           sessionManager.appendModelChange(record.model.providerId, record.model.modelId),
+        )
+      } else if (record.kind === "working_directory_changed") {
+        this.#registerEntry(
+          record.recordId,
+          sessionManager.appendCustomMessageEntry(
+            "working-directory-change",
+            workingDirectoryChangeText(record.previousCwd, record.currentCwd),
+            true,
+            { previousCwd: record.previousCwd, currentCwd: record.currentCwd },
+          ),
         )
       } else if (record.kind === "turn_started") {
         for (const mapped of turnInputToPi(

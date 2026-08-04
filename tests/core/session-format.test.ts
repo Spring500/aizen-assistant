@@ -10,7 +10,7 @@ const header = {
 }
 
 describe("会话格式", () => {
-  test("接受文件头和七类记录", () => {
+  test("接受文件头和八类记录", () => {
     const records: unknown[] = [
       header,
       {
@@ -30,6 +30,13 @@ describe("会话格式", () => {
         recordId: "r2",
         at: "2026-07-23T10:00:01.000Z",
         viewId: null,
+      },
+      {
+        kind: "working_directory_changed",
+        recordId: "r2-cwd",
+        at: "2026-07-23T10:00:01.500Z",
+        previousCwd: "E:\\project",
+        currentCwd: "D:\\project",
       },
       {
         kind: "turn_started",

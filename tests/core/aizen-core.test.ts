@@ -657,6 +657,63 @@ describe("核心编排", () => {
     await restored.dispose()
   })
 
+  test("目录变化时记录提示并正常打开和重命名", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const original = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
+    await original.dispatch({ type: "create_session", model, viewId: null })
+    const sessionId = original.getSnapshot().currentSessionId ?? ""
+    await original.dispatch({ type: "send_prompt", text: "第一轮" })
+    await original.dispose()
+
+    const movedPi = new ReloadingModelFakePi()
+    const moved = new AizenCore({ cwd: "D:\\project", store, pi: movedPi })
+    expect(await moved.dispatch({ type: "open_session", sessionId })).toEqual({ ok: true })
+    expect(await moved.dispatch({ type: "rename_session", sessionId, name: "迁移会话" })).toEqual({ ok: true })
+    const loaded = await store.read(sessionId)
+    expect(loaded.records.filter((record) => record.kind === "working_directory_changed")).toEqual([
+      expect.objectContaining({ previousCwd: "E:\\project", currentCwd: "D:\\project" }),
+    ])
+    expect(movedPi.restoreCalls.at(-1)?.records).toContainEqual(
+      expect.objectContaining({
+        kind: "working_directory_changed",
+        previousCwd: "E:\\project",
+        currentCwd: "D:\\project",
+      }),
+    )
+    expect(moved.getSnapshot().transcript).toContainEqual(
+      expect.objectContaining({
+        type: "environment",
+        text: 'Working directory changed from "E:\\project" to "D:\\project".',
+      }),
+    )
+    await moved.dispose()
+  })
+
+  test("规范化后相同的目录不产生变更记录", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    await store.createWithRecords(
+      {
+        sessionId: "same-path",
+        cwd: "E:\\Project\\AizenAssistant\\",
+        createdAt: "2026-07-23T10:00:00.000Z",
+      },
+      [
+        { kind: "model_changed", recordId: "model", at: "2026-07-23T10:00:00.000Z", model },
+        { kind: "view_changed", recordId: "view", at: "2026-07-23T10:00:00.000Z", viewId: null },
+      ],
+    )
+    const core = new AizenCore({ cwd: "e:/project/aizenassistant", store, pi: new FakePi() })
+    expect(await core.dispatch({ type: "open_session", sessionId: "same-path" })).toEqual({ ok: true })
+    expect((await store.read("same-path")).records.some((record) => record.kind === "working_directory_changed")).toBe(
+      false,
+    )
+    await core.dispose()
+  })
+
   test("新建、发送多轮并从文件恢复", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
@@ -715,7 +772,7 @@ describe("核心编排", () => {
       .transcript.find(
         (entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第二轮")),
       )
-    if (!secondTurn) throw new Error("缺少第二轮")
+    if (secondTurn?.type !== "input") throw new Error("缺少第二轮")
     expect(await core.dispatch({ type: "rewind", turnId: secondTurn.turnId })).toEqual({ ok: true })
     expect(JSON.stringify((await store.read(sessionId)).records)).not.toContain("第二轮")
     expect(core.getSnapshot().runtimeIssue?.kind).toBe("model")
@@ -779,7 +836,7 @@ describe("核心编排", () => {
       .transcript.find(
         (entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第二轮")),
       )
-    if (!secondTurn) throw new Error("缺少第二轮")
+    if (secondTurn?.type !== "input") throw new Error("缺少第二轮")
 
     expect(await core.dispatch({ type: "rewind", turnId: secondTurn.turnId })).toEqual({ ok: true })
     const loaded = await store.read(sessionId)
@@ -799,6 +856,78 @@ describe("核心编排", () => {
     await reopened.dispose()
   })
 
+  test("回退跨越目录变化时保留当前目录", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const first = new AizenCore({ cwd: "A", store, pi: new FakePi() })
+    await first.dispatch({ type: "create_session", model, viewId: null })
+    const sessionId = first.getSnapshot().currentSessionId ?? ""
+    await first.dispatch({ type: "send_prompt", text: "第一轮" })
+    await first.dispose()
+
+    const second = new AizenCore({ cwd: "B", store, pi: new FakePi() })
+    await second.dispatch({ type: "open_session", sessionId })
+    await second.dispatch({ type: "send_prompt", text: "第二轮" })
+    await second.dispose()
+
+    const current = new AizenCore({ cwd: "C", store, pi: new FakePi() })
+    await current.dispatch({ type: "open_session", sessionId })
+    await current.dispatch({ type: "send_prompt", text: "第三轮" })
+    const firstTurn = current
+      .getSnapshot()
+      .transcript.find(
+        (entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第一轮")),
+      )
+    if (firstTurn?.type !== "input") throw new Error("缺少第一轮")
+
+    expect(await current.dispatch({ type: "rewind", turnId: firstTurn.turnId })).toEqual({ ok: true })
+    const changes = (await store.read(sessionId)).records.filter(
+      (record) => record.kind === "working_directory_changed",
+    )
+    expect(changes).toEqual([expect.objectContaining({ previousCwd: "A", currentCwd: "C" })])
+    expect(JSON.stringify((await store.read(sessionId)).records)).not.toContain("第二轮")
+    expect(JSON.stringify((await store.read(sessionId)).records)).not.toContain("第三轮")
+    await current.dispose()
+  })
+
+  test("分支跨越目录变化时继承当前目录", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const original = new AizenCore({ cwd: "A", store, pi: new FakePi() })
+    await original.dispatch({ type: "create_session", model, viewId: null })
+    const sourceId = original.getSnapshot().currentSessionId ?? ""
+    await original.dispatch({ type: "send_prompt", text: "第一轮" })
+    await original.dispatch({ type: "send_prompt", text: "第二轮" })
+    await original.dispose()
+
+    const moved = new AizenCore({ cwd: "C", store, pi: new FakePi() })
+    await moved.dispatch({ type: "open_session", sessionId: sourceId })
+    const secondTurn = moved
+      .getSnapshot()
+      .transcript.find(
+        (entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第二轮")),
+      )
+    if (secondTurn?.type !== "input") throw new Error("缺少第二轮")
+    expect(await moved.dispatch({ type: "fork_session", turnId: secondTurn.turnId })).toEqual({ ok: true })
+    const forkId = moved.getSnapshot().currentSessionId ?? ""
+    expect((await store.read(forkId)).records.filter((record) => record.kind === "working_directory_changed")).toEqual([
+      expect.objectContaining({ previousCwd: "A", currentCwd: "C" }),
+    ])
+    await moved.dispose()
+
+    const reopened = new AizenCore({ cwd: "C", store, pi: new FakePi() })
+    await reopened.dispatch({ type: "open_session", sessionId: forkId })
+    const firstTurn = reopened.getSnapshot().transcript.find((entry) => entry.type === "input")
+    if (firstTurn?.type !== "input") throw new Error("缺少第一轮")
+    expect(await reopened.dispatch({ type: "rewind", turnId: firstTurn.turnId })).toEqual({ ok: true })
+    expect((await store.read(forkId)).records.filter((record) => record.kind === "working_directory_changed")).toEqual([
+      expect.objectContaining({ previousCwd: "A", currentCwd: "C" }),
+    ])
+    await reopened.dispose()
+  })
+
   test("分支生成新会话并使用源名称副本", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
@@ -815,7 +944,7 @@ describe("核心编排", () => {
       .transcript.find(
         (entry) => entry.type === "input" && entry.items.some((item) => JSON.stringify(item).includes("第二轮")),
       )
-    if (!secondTurn) throw new Error("缺少第二轮")
+    if (secondTurn?.type !== "input") throw new Error("缺少第二轮")
 
     expect(await core.dispatch({ type: "fork_session", turnId: secondTurn.turnId })).toEqual({ ok: true })
     const forkId = core.getSnapshot().currentSessionId ?? ""
