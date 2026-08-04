@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { validateToolRegistrations, type AizenToolRegistration } from "../../packages/core/tool-registry.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 function registration(name = "demo", validatorName = name): AizenToolRegistration {
   return {

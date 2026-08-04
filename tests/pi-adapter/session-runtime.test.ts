@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -6,6 +7,8 @@ import type { SessionRecord } from "../../packages/core/session-format.ts"
 import { convertToLlm, serializeConversation, SessionManager } from "@earendil-works/pi-coding-agent"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { startMockServer } from "../utils/mock-server.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const directories: string[] = []
 

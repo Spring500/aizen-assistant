@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { dataDirectoryFromExecutable, projectDirectoryName, resolveDataDirectory } from "../../packages/core/paths.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 describe("数据路径", () => {
   test("生产数据目录位于 exe 同目录", () => {

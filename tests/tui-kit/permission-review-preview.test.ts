@@ -1,6 +1,9 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import type { HumanReviewRequest } from "../../packages/core/tool-permissions/types.ts"
 import { permissionParameterPreview } from "../../packages/tui-kit/permission-review-preview.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 function request(command: string): HumanReviewRequest {
   return {

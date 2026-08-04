@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { existsSync } from "node:fs"
 import { mkdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { removeTemporaryDirectory } from "./temporary-directory.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 test("统一接口递归删除临时目录且重复删除视为成功", async () => {
   const path = join(tmpdir(), `aizen-remove-${crypto.randomUUID()}`)

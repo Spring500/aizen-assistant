@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { setAizenTerminalTitle } from "../../packages/tui-kit/renderer.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 test("终端标题过滤控制字符并限制长度", () => {
   let actual = ""

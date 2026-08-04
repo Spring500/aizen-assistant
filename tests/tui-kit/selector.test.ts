@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 test("选择器把当前项说明放入统一说明区并限制为三行", async () => {
   const setup = await createTestRenderer({ width: 24, height: 16 })

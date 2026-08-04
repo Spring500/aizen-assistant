@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { modelWithPreferredThinkingLevel, sessionSettingsItems } from "../../apps/tui/session-settings.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const model = {
   providerId: "anthropic",

@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { validatePackageConfig, validatePrivatePaths } from "../../scripts/repo/validate-config.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 describe("validatePackageConfig", () => {
   test("接受精确版本和内部 workspace 协议", () => {

@@ -1,4 +1,7 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 60_000 })
 
 async function runScenario(name: string): Promise<void> {
   const child = Bun.spawn([process.execPath, "run", "tests/app/interactive-scenario.ts", name], {
@@ -22,4 +25,4 @@ test("真实完整 TUI 交互场景", async () => {
   await runScenario("throwing-create")
   await runScenario("recover-prompt")
   await runScenario("recover-view-prompt")
-}, 60000)
+})

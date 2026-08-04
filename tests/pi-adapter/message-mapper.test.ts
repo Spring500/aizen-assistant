@@ -1,6 +1,9 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import type { MessageRecord, TurnStartedRecord } from "../../packages/core/session-format.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "../../packages/pi-adapter/message-mapper.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 describe("pi 消息转换", () => {
   test("转换长期输入和仅当轮输入", () => {

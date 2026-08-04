@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { parseSessionLine, type SessionRecord } from "../../packages/core/session-format.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const header = {
   kind: "session",

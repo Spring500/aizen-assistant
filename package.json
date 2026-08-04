@@ -14,11 +14,11 @@
     "format:check": "biome format .",
     "lint": "biome lint .",
     "typecheck": "tsc --noEmit",
-    "test": "bun test",
+    "test": "bun test --timeout 0",
     "dev:tui": "bun run scripts/dev/run-tui.ts",
     "build:tui": "bun build --compile --target=bun-windows-x64 --outfile dist/aizen-tui.exe apps/tui/main.ts",
     "build:pi-http-probe": "bun build --compile --target=bun-windows-x64 --outfile dist/pi-http-probe.exe tests/distribution/pi-http-probe.ts",
-    "verify": "bun run check:config && bun run format:check && bun run lint && bun run typecheck && bun run build:tui && bun run build:pi-http-probe && bun test && bun run tests/distribution/verify-tui.ts && bun run tests/distribution/verify-pi-http.ts",
+    "verify": "bun run check:config && bun run format:check && bun run lint && bun run typecheck && bun run build:tui && bun run build:pi-http-probe && bun test --timeout 0 --bail=1 && bun run tests/distribution/verify-tui.ts && bun run tests/distribution/verify-pi-http.ts",
     "postinstall": "git config core.hooksPath .githooks",
     "hooks:test": "bun run scripts/repo/test-pre-push.ts"
   },

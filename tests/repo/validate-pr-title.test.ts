@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { validatePrTitle } from "../../scripts/repo/validate-pr-title.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 describe("validatePrTitle", () => {
   test("接受约定格式和中文说明", () => {
