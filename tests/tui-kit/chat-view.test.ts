@@ -67,6 +67,36 @@ async function setupRepl(width = 100, height = 20) {
   })
 }
 
+test("销毁会等待排队更新并拒绝后续写入", async () => {
+  const setup = await setupRepl()
+  const view = createChatView(setup.renderer)
+  try {
+    const updating = view.update(
+      snapshot({
+        transcript: [
+          {
+            type: "input",
+            turnId: "closing",
+            items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "关闭前更新" }] }],
+          },
+        ],
+      }),
+    )
+    setup.renderer.resize(80, 20)
+    const destroying = view.destroy()
+
+    await expect(Promise.all([updating, destroying])).resolves.toBeDefined()
+    expect(view.header.isDestroyed).toBe(true)
+    expect(view.live.isDestroyed).toBe(true)
+    expect(view.status.isDestroyed).toBe(true)
+    await expect(view.update(snapshot({ streamingText: "关闭后更新" }))).resolves.toBeUndefined()
+    await expect(view.destroy()).resolves.toBeUndefined()
+    await Bun.sleep(100)
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("状态栏视图模型根据运行状态生成统一内容", () => {
   const current = snapshot({
     status: "running",
@@ -232,7 +262,7 @@ test("完成的助手正文按 Markdown 格式写入历史", async () => {
     expect(history).not.toContain("```ts")
     expect(history).not.toContain("$E = mc^2$")
     expect(history).not.toContain("$$")
-    view.destroy()
+    await view.destroy()
   } finally {
     setup.renderer.destroy()
   }
@@ -267,7 +297,7 @@ test("历史块包含同底色的上下留白并记录思考内容", async () =>
     const output = setup.externalOutput.takeText()
     expect(output).toContain("▼ 思考")
     expect(output.replace(/\r?\n/g, "")).toContain("内部分析内容")
-    view.destroy()
+    await view.destroy()
   } finally {
     setup.renderer.destroy()
   }
@@ -294,7 +324,7 @@ test("resize 会按新宽度全量回放历史", async () => {
     await Bun.sleep(100)
     await setup.renderOnce()
     expect(setup.externalOutput.takeText()).toContain("resize 内容")
-    view.destroy()
+    await view.destroy()
   } finally {
     setup.renderer.destroy()
   }

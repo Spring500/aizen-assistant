@@ -88,7 +88,7 @@ test("选择器可用 Esc 取消并清理界面", async () => {
 test("聊天界面中的启动选择器清晰可见", async () => {
   const setup = await createTestRenderer({ width: 80, height: 20 })
   try {
-    createChatView(setup.renderer)
+    const view = createChatView(setup.renderer)
     const editor = createChatEditor(setup.renderer, {
       onSubmit: () => {},
       onAbort: () => {},
@@ -111,6 +111,7 @@ test("聊天界面中的启动选择器清晰可见", async () => {
     setup.renderer.keyInput.emit("keypress", new KeyEvent(parsed))
     await pending
     editor.destroy()
+    await view.destroy()
   } finally {
     setup.renderer.destroy()
   }

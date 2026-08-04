@@ -1530,7 +1530,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     } finally {
       overlays.dispose()
       editor.destroy()
-      view.destroy()
+      await view.destroy()
       if (!options.testing) destroyRenderer(renderer)
     }
   }

@@ -82,14 +82,17 @@ error: TextBuffer is destroyed
 - resize 回调在 75 ms 后执行；调用栈明确指向该回调，而不是核心订阅中的普通 `view.update()`。
 - 同一提交的第二次尝试通过，完整 TUI 测试耗时 9.672 秒；最终无缓存工作流也通过，耗时 7.422 秒。因此问题具有时序敏感性，尚无证据表明缓存内容改变了运行行为。
 
-#### 待办与需要补充的诊断
+#### 已修复
 
-- [ ] 将初始页面的固定 `Bun.sleep(20)` 改为有明确超时和最终帧输出的 `waitForText()`，区分“初始化较慢”和“页面状态错误”。
-- [ ] 为 `ChatView` 增加仅测试启用的生命周期事件记录：resize 收到时间、计时器编号、调度/取消/进入/退出、`destroy()` 开始与结束、最后一次 `update()`。
-- [ ] 在 resize 回调和公开更新方法中加入销毁状态保护，并用测试证明销毁后不会访问 OpenTUI renderable；实现前先确认这不会掩盖真实的应用生命周期错误。
-- [ ] 在子场景失败时输出当前交互阶段、应用是否已退出、renderer 尺寸和最后一帧，不只输出最终断言。
-- [ ] 在 Windows CI 上对 `invalid-model` 子场景至少连续运行 100 次，并单独记录失败率；随后再运行完整五场景压力测试。
-- [ ] 确认 OpenTUI `0.4.5` 对测试 renderer 的 resize 和 renderable 销毁契约；如需改变适配层行为，依据锁定版本源码和类型声明处理。
+- `ChatView` 的 snapshot 更新、折叠更新和 resize 回放已进入同一操作队列。
+- `destroy()` 已改为异步生命周期：先进入 closing、拒绝新操作并解绑 resize，再等待已启动操作，最后销毁 OpenTUI renderable 和 Markdown 样式资源。
+- 应用退出会等待 `view.destroy()` 完成；footer 写入同时检查生命周期和 OpenTUI `isDestroyed` 状态。
+- 已增加“更新进行中销毁、关闭后拒绝更新、重复销毁”的回归测试。
+
+#### 待办
+
+- [ ] 在 Windows CI 连续运行 10 次，确认不再出现 `TextBuffer is destroyed`。
+- [ ] 若仍复现，保留对应 Run、Attempt 和完整调用栈并重新评估其他 OpenTUI 生命周期来源。
 
 ### Windows 独占句柄测试在等待 holder 就绪时偶发超时
 
