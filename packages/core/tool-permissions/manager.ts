@@ -48,6 +48,7 @@ type PreparedAuthorization =
 function gapArguments(request: ToolPermissionRequest): ToolPermissionRequest["arguments"] {
   const input = request.arguments
   if (!input || typeof input !== "object" || Array.isArray(input)) return input
+  if (request.toolName === "bash") return input
   if (request.toolName === "read")
     return {
       path: input.path ?? null,

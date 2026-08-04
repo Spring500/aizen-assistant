@@ -306,6 +306,41 @@ describe("ToolPermissionManager", () => {
     expect(records).toHaveLength(1)
   })
 
+  test("Bash记录完整命令，文件工具只记录内容规模", async () => {
+    const registry = new ToolPermissionRegistry()
+    const gap = { code: "demo.gap", kind: "rule-miss" as const, summary: "测试缺口" }
+    registry.register({
+      toolName: "bash",
+      validate: async () => ({ type: "allow", assessment: { ...assessment, coverageGaps: [gap] } }),
+    })
+    registry.register({
+      toolName: "write",
+      validate: async () => ({ type: "allow", assessment: { ...assessment, coverageGaps: [gap] } }),
+    })
+    const records: Array<{ toolName: string; arguments: unknown }> = []
+    const manager = new ToolPermissionManager({
+      registry,
+      aiReviewer: { review: async () => ({ type: "allow", reason: "不应调用" }) },
+      humanReviewer: { review: async (request) => ({ batchId: request.batchId, answers: [] }) },
+      gapRecorder: {
+        record: async (record) => void records.push({ toolName: record.toolName, arguments: record.arguments }),
+      },
+    })
+    await manager.authorize({ ...base, toolName: "bash", arguments: { command: "find ." } })
+    await manager.authorize({
+      ...base,
+      toolName: "write",
+      arguments: { path: "secret.ts", content: "不要写入记录" },
+    })
+    expect(records).toEqual([
+      { toolName: "bash", arguments: { command: "find ." } },
+      {
+        toolName: "write",
+        arguments: { path: "secret.ts", contentCharacters: 6, contentLines: 1 },
+      },
+    ])
+  })
+
   test("完全开放模式在验证器缺失、异常和记录失败时仍自动放行", async () => {
     const errors: string[] = []
     const missing = new ToolPermissionManager({
