@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { TextAttributes, type CliRenderer, type OptimizedBuffer } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { defaultAppPreferences } from "../../packages/core/app-preferences-store.ts"
 import type { CoreSnapshot } from "../../packages/core/types.ts"
@@ -20,6 +21,37 @@ function snapshot(overrides: Partial<CoreSnapshot> = {}): CoreSnapshot {
     streamingThinking: "",
     ...overrides,
   }
+}
+
+type QueuedCommit = { snapshot: OptimizedBuffer }
+
+type CapturedSpan = {
+  text: string
+  fg: ReturnType<OptimizedBuffer["getSpanLines"]>[number]["spans"][number]["fg"]
+  bg: ReturnType<OptimizedBuffer["getSpanLines"]>[number]["spans"][number]["bg"]
+  attributes: number
+}
+
+function takeScrollbackSpans(renderer: CliRenderer): CapturedSpan[] {
+  const queue = Reflect.get(renderer, "externalOutputQueue") as { claim(): QueuedCommit[] }
+  const commits = queue.claim()
+  try {
+    return commits.flatMap((commit) =>
+      commit.snapshot
+        .getSpanLines()
+        .flatMap((line) => line.spans)
+        .map((span) => ({ text: span.text.trim(), fg: span.fg, bg: span.bg, attributes: span.attributes }))
+        .filter((span) => span.text),
+    )
+  } finally {
+    for (const commit of commits) commit.snapshot.destroy()
+  }
+}
+
+function spanByText(spans: CapturedSpan[], text: string): CapturedSpan {
+  const span = spans.find((item) => item.text === text)
+  if (!span) throw new Error(`未找到终端样式片段：${text}`)
+  return span
 }
 
 async function setupRepl(width = 100, height = 20) {
@@ -50,7 +82,7 @@ test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态"
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
-    view.update(
+    await view.update(
       snapshot({
         status: "running",
         currentModel: {
@@ -91,7 +123,7 @@ test("聊天视图展示工作目录变化", async () => {
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
-    view.update(
+    await view.update(
       snapshot({
         transcript: [
           {
@@ -109,11 +141,105 @@ test("聊天视图展示工作目录变化", async () => {
   }
 })
 
+test("完成的助手正文按 Markdown 格式写入历史", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    await view.update(
+      snapshot({
+        preferences: structuredClone(defaultAppPreferences),
+        transcript: [
+          {
+            type: "message",
+            turnId: "markdown-turn",
+            message: {
+              role: "assistant",
+              parts: [
+                {
+                  kind: "text",
+                  text: [
+                    "# 一级标题",
+                    "",
+                    "## 二级标题",
+                    "",
+                    "### 三级标题",
+                    "",
+                    "#### 四级标题",
+                    "",
+                    "##### 五级标题",
+                    "",
+                    "###### 六级标题",
+                    "",
+                    "这是 **重点**，包含 `行内代码`。",
+                    "",
+                    "```ts",
+                    "const answer: number = 42",
+                    "```",
+                    "",
+                    "行内公式 $E = mc^2$。",
+                    "",
+                    "$$",
+                    "\\sum_{i=0}^{n} x_i",
+                    "$$",
+                  ].join("\n"),
+                },
+              ],
+              source: { providerId: "test", modelId: "model", api: "a" },
+              stopReason: "stop",
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+        ],
+      }),
+    )
+    const spans = takeScrollbackSpans(setup.renderer)
+    const history = spans.map((span) => span.text).join("")
+    const headingExpectations = [
+      ["一级标题", [244, 114, 182, 255]],
+      ["二级标题", [34, 211, 238, 255]],
+      ["三级标题", [167, 139, 250, 255]],
+      ["四级标题", [196, 181, 253, 255]],
+      ["五级标题", [216, 180, 254, 255]],
+      ["六级标题", [233, 213, 255, 255]],
+    ] as const
+    const strong = spanByText(spans, "重点")
+    const keyword = spanByText(spans, "const")
+    const codeType = spanByText(spans, "number")
+    const codeNumber = spanByText(spans, "42")
+    const inlineFormula = spanByText(spans, "E = mc²")
+    const blockFormula = spanByText(spans, "∑ᵢ₌₀ⁿ xᵢ")
+
+    for (const [text, color] of headingExpectations) {
+      const heading = spanByText(spans, text)
+      expect(heading.fg.toInts()).toEqual([...color])
+      expect(heading.attributes & TextAttributes.BOLD).toBe(TextAttributes.BOLD)
+    }
+    expect(strong.attributes & TextAttributes.BOLD).toBe(TextAttributes.BOLD)
+    expect(keyword.fg.toInts()).toEqual([244, 114, 182, 255])
+    expect(keyword.attributes & TextAttributes.BOLD).toBe(TextAttributes.BOLD)
+    expect(codeType.fg.toInts()).toEqual([96, 165, 250, 255])
+    expect(codeNumber.fg.toInts()).toEqual([250, 204, 21, 255])
+    expect(keyword.bg.toInts()).toEqual([41, 44, 49, 255])
+    expect(inlineFormula.fg.toInts()).toEqual([251, 146, 60, 255])
+    expect(blockFormula.fg.toInts()).toEqual([250, 204, 21, 255])
+    expect(blockFormula.bg.toInts()).toEqual([41, 44, 49, 255])
+    expect(history).not.toContain("#一级标题")
+    expect(history).not.toContain("**重点**")
+    expect(history).not.toContain("`行内代码`")
+    expect(history).not.toContain("```ts")
+    expect(history).not.toContain("$E = mc^2$")
+    expect(history).not.toContain("$$")
+    view.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("历史块包含同底色的上下留白并记录思考内容", async () => {
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
-    view.update(
+    await view.update(
       snapshot({
         preferences: {
           ...structuredClone(defaultAppPreferences),
@@ -148,7 +274,7 @@ test("resize 会按新宽度全量回放历史", async () => {
   const setup = await setupRepl(80, 20)
   try {
     const view = createChatView(setup.renderer)
-    view.update(
+    await view.update(
       snapshot({
         transcript: [
           {
@@ -175,7 +301,7 @@ test("footer 显示回复耗时、生成 token 和上下文用量", async () => 
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
-    view.update(
+    await view.update(
       snapshot({
         status: "running",
         responseMetrics: { startedAt: Date.now(), elapsedSeconds: 7, outputTokens: 42 },
@@ -202,7 +328,7 @@ test("工具调用时也显示当前回复耗时", async () => {
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
-    view.update(
+    await view.update(
       snapshot({
         status: "running",
         responseMetrics: { startedAt: Date.now(), elapsedSeconds: 9, outputTokens: 0 },
@@ -261,7 +387,7 @@ test("工具组和工具详情分别由布尔开关控制", async () => {
         },
       },
     ]
-    view.update(
+    await view.update(
       snapshot({
         preferences: {
           ...structuredClone(defaultAppPreferences),
@@ -275,7 +401,7 @@ test("工具组和工具详情分别由布尔开关控制", async () => {
     expect(collapsed).toContain("▶1个工具调用：bash")
     expect(collapsed).not.toContain("运行测试")
 
-    view.update(
+    await view.update(
       snapshot({
         preferences: {
           ...structuredClone(defaultAppPreferences),
@@ -299,7 +425,7 @@ test("同一轮内跨助手消息的连续工具调用合并为一个工具组",
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
-    view.update(
+    await view.update(
       snapshot({
         preferences: {
           ...structuredClone(defaultAppPreferences),
@@ -456,7 +582,7 @@ test("历史没有变化时不重复写入 scrollback", async () => {
         },
       ],
     })
-    view.update(current)
+    await view.update(current)
     await setup.renderOnce()
     const firstOutput = setup.externalOutput.takeText().replace(/\s+/g, "")
     expect(firstOutput).toContain("[你]旧轮次用户消息")
@@ -468,7 +594,7 @@ test("历史没有变化时不重复写入 scrollback", async () => {
     expect(firstOutput).toContain("1m2s")
     expect(firstOutput).toContain("allpassed")
 
-    view.update({ ...current, status: "running", streamingText: "working" })
+    await view.update({ ...current, status: "running", streamingText: "working" })
     await setup.renderOnce()
     expect(setup.externalOutput.take()).toHaveLength(0)
     expect(setup.captureCharFrame()).toContain("working")

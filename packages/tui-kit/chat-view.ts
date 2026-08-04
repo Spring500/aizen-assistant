@@ -1,17 +1,23 @@
 import {
   BoxRenderable,
+  CodeRenderable,
   type CliRenderer,
   CliRenderEvents,
   createTextAttributes,
+  type MarkdownOptions,
+  MarkdownRenderable,
   parseColor,
   type RenderContext,
   StyledText,
+  SyntaxStyle,
   type TextChunk,
   TextRenderable,
+  infoStringToFiletype,
 } from "@opentui/core"
 import type { FoldPreferences } from "../core/app-preferences-store.ts"
 import type { Timing, ToolCallPart, ToolMessage } from "../core/session-format.ts"
 import type { CoreSnapshot } from "../core/types.ts"
+import { isMathCodeBlock, prepareMarkdownForTerminal } from "./markdown.ts"
 import { systemColors } from "./theme.ts"
 
 export type ChatView = {
@@ -19,9 +25,9 @@ export type ChatView = {
   live: TextRenderable
   status: TextRenderable
   destroy(): void
-  update(snapshot: CoreSnapshot): void
+  update(snapshot: CoreSnapshot): Promise<void>
   getFoldPreferences(): FoldPreferences
-  setFoldPreferences(fold: FoldPreferences): void
+  setFoldPreferences(fold: FoldPreferences): Promise<void>
 }
 
 type ToolDisplay = {
@@ -51,6 +57,110 @@ const blockColors = {
   tool: "#292c31",
   toolGroup: "#292c31",
 } as const
+
+type AssistantMarkdownStyles = {
+  markdown: SyntaxStyle
+  code: SyntaxStyle
+}
+
+function createAssistantMarkdownStyles(): AssistantMarkdownStyles {
+  const markdownBackground = blockColors.assistant
+  const codeBackground = blockColors.tool
+  return {
+    markdown: SyntaxStyle.fromStyles({
+      default: { fg: "#f3f4f6", bg: markdownBackground },
+      conceal: { fg: systemColors.secondary, bg: markdownBackground, dim: true },
+      "markup.heading": { fg: systemColors.header, bg: markdownBackground, bold: true },
+      "markup.heading.1": { fg: "#f472b6", bg: markdownBackground, bold: true },
+      "markup.heading.2": { fg: "#22d3ee", bg: markdownBackground, bold: true },
+      "markup.heading.3": { fg: "#a78bfa", bg: markdownBackground, bold: true },
+      "markup.heading.4": { fg: "#c4b5fd", bg: markdownBackground, bold: true },
+      "markup.heading.5": { fg: "#d8b4fe", bg: markdownBackground, bold: true },
+      "markup.heading.6": { fg: "#e9d5ff", bg: markdownBackground, bold: true, dim: true },
+      "markup.strong": { fg: "#f3f4f6", bg: markdownBackground, bold: true },
+      "markup.italic": { fg: "#f3f4f6", bg: markdownBackground, italic: true },
+      "markup.strikethrough": { fg: "#f3f4f6", bg: markdownBackground, dim: true },
+      "markup.raw": { fg: systemColors.live, bg: markdownBackground },
+      "markup.link": { fg: systemColors.sessionStatus, bg: markdownBackground, underline: true },
+      "markup.link.label": { fg: systemColors.sessionStatus, bg: markdownBackground, underline: true },
+      "markup.link.url": { fg: systemColors.secondary, bg: markdownBackground, underline: true },
+      "markup.quote": { fg: systemColors.secondary, bg: markdownBackground, italic: true },
+      "markup.list": { fg: systemColors.header, bg: markdownBackground, bold: true },
+      "punctuation.special": { fg: systemColors.secondary, bg: markdownBackground },
+    }),
+    code: SyntaxStyle.fromStyles({
+      default: { fg: "#d1d5db", bg: codeBackground },
+      keyword: { fg: "#f472b6", bg: codeBackground, bold: true },
+      string: { fg: "#86efac", bg: codeBackground },
+      number: { fg: "#facc15", bg: codeBackground },
+      boolean: { fg: "#facc15", bg: codeBackground, bold: true },
+      comment: { fg: "#9ca3af", bg: codeBackground, italic: true, dim: true },
+      type: { fg: "#60a5fa", bg: codeBackground },
+      "type.builtin": { fg: "#60a5fa", bg: codeBackground, bold: true },
+      function: { fg: "#c4b5fd", bg: codeBackground },
+      "function.call": { fg: "#c4b5fd", bg: codeBackground },
+      "function.method": { fg: "#c4b5fd", bg: codeBackground },
+      "function.method.call": { fg: "#c4b5fd", bg: codeBackground },
+      property: { fg: "#67e8f9", bg: codeBackground },
+      "variable.builtin": { fg: "#fb923c", bg: codeBackground },
+      "variable.member": { fg: "#67e8f9", bg: codeBackground },
+      operator: { fg: "#f9a8d4", bg: codeBackground },
+      "punctuation.bracket": { fg: systemColors.secondary, bg: codeBackground },
+      "punctuation.delimiter": { fg: systemColors.secondary, bg: codeBackground },
+    }),
+  }
+}
+
+function createAssistantMarkdownRenderer(
+  context: RenderContext,
+  id: string,
+  content: string,
+  styles: AssistantMarkdownStyles,
+): MarkdownRenderable {
+  const renderNode: NonNullable<MarkdownOptions["renderNode"]> & { codeBlockOnly?: boolean } = (token) => {
+    if (token.type !== "code") return undefined
+    if (isMathCodeBlock(token)) {
+      return new TextRenderable(context, {
+        id: `${id}-formula`,
+        content: token.text,
+        width: "100%",
+        height: "auto",
+        wrapMode: "word",
+        fg: "#facc15",
+        bg: blockColors.tool,
+        paddingLeft: 2,
+        paddingRight: 2,
+      })
+    }
+    const filetype = infoStringToFiletype(token.lang ?? "")
+    return new CodeRenderable(context, {
+      id: `${id}-code`,
+      content: token.text,
+      syntaxStyle: styles.code,
+      width: "100%",
+      wrapMode: "word",
+      fg: "#d1d5db",
+      bg: blockColors.tool,
+      paddingLeft: 1,
+      paddingRight: 1,
+      drawUnstyledText: true,
+      ...(filetype ? { filetype } : {}),
+    })
+  }
+  renderNode.codeBlockOnly = true
+
+  return new MarkdownRenderable(context, {
+    id,
+    content: prepareMarkdownForTerminal(content),
+    syntaxStyle: styles.markdown,
+    width: "100%",
+    fg: "#f3f4f6",
+    bg: blockColors.assistant,
+    streaming: false,
+    tableOptions: { widthMode: "content" },
+    renderNode,
+  })
+}
 
 function objectValue(value: unknown): Record<string, unknown> | undefined {
   return value !== null && typeof value === "object" && !Array.isArray(value)
@@ -354,6 +464,7 @@ function createHistoryBlock(
   index: number,
   block: DisplayBlock,
   fold: FoldPreferences,
+  assistantMarkdownStyles: AssistantMarkdownStyles,
 ): BoxRenderable {
   const rootId = `history-entry-${index}`
   if (block.kind === "plain") {
@@ -372,11 +483,16 @@ function createHistoryBlock(
     const isExpanded = !isThinking || fold.thinkingExpanded
     const label = isThinking ? "思考" : "助手"
     const meta = timingText(block.timing)
-    const content = isExpanded
-      ? `▼ ${label}${meta ? `  ${meta}` : ""}\n${block.content}`
-      : `▶ ${label} ${oneLine(block.content).slice(0, 80)}...${meta ? `  ${meta}` : ""}`
     const root = makeBox(context, rootId, color)
-    root.add(makeText(context, `${rootId}-text`, content, color))
+    if (!isExpanded || isThinking) {
+      const content = isExpanded
+        ? `▼ ${label}${meta ? `  ${meta}` : ""}\n${block.content}`
+        : `▶ ${label} ${oneLine(block.content).slice(0, 80)}...${meta ? `  ${meta}` : ""}`
+      root.add(makeText(context, `${rootId}-text`, content, color))
+      return root
+    }
+    root.add(makeText(context, `${rootId}-header`, `▼ ${label}${meta ? `  ${meta}` : ""}`, color))
+    root.add(createAssistantMarkdownRenderer(context, `${rootId}-markdown`, block.content, assistantMarkdownStyles))
     return root
   }
 
@@ -461,6 +577,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
   renderer.root.add(live)
   renderer.root.add(status)
 
+  const assistantMarkdownStyles = createAssistantMarkdownStyles()
   let blocks: DisplayBlock[] = []
   let fold: FoldPreferences = {
     thinkingExpanded: false,
@@ -471,26 +588,28 @@ export function createChatView(renderer: CliRenderer): ChatView {
   let latestSnapshot: CoreSnapshot | undefined
   let notice = ""
   let resizeTimer: ReturnType<typeof setTimeout> | undefined
+  let historySyncQueue = Promise.resolve()
   let destroyed = false
 
   const renderedFingerprints = () => blocks.map((block) => JSON.stringify({ block, fold }))
 
-  const commitBlocks = (startIndex: number) => {
+  const commitBlocks = async (startIndex: number) => {
     if (startIndex >= blocks.length) return
     const surface = renderer.createScrollbackSurface()
     try {
       for (let index = startIndex; index < blocks.length; index += 1) {
         const block = blocks[index] as DisplayBlock
-        surface.root.add(createHistoryBlock(surface.renderContext, index, block, fold))
+        surface.root.add(createHistoryBlock(surface.renderContext, index, block, fold, assistantMarkdownStyles))
       }
-      surface.render()
+      await surface.settle()
       surface.commitRows(0, surface.height)
     } finally {
       surface.destroy()
     }
   }
 
-  const syncHistory = (forceReplay = false) => {
+  const syncHistory = async (forceReplay = false) => {
+    if (destroyed) return
     const nextFingerprints = renderedFingerprints()
     if (
       !forceReplay &&
@@ -502,7 +621,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
       !forceReplay &&
       nextFingerprints.length >= committedFingerprints.length &&
       committedFingerprints.every((value, index) => nextFingerprints[index] === value)
-    if (canAppend) commitBlocks(committedFingerprints.length)
+    if (canAppend) await commitBlocks(committedFingerprints.length)
     else {
       try {
         renderer.resetSplitFooterForReplay({ clearSavedLines: true })
@@ -511,9 +630,16 @@ export function createChatView(renderer: CliRenderer): ChatView {
         if (!(error instanceof Error) || error.message !== "resetSplitFooterForReplay requires an active terminal")
           throw error
       }
-      commitBlocks(0)
+      await commitBlocks(0)
     }
+    if (destroyed) return
     committedFingerprints = nextFingerprints
+  }
+
+  const queueHistorySync = (forceReplay = false) => {
+    const operation = historySyncQueue.then(() => syncHistory(forceReplay))
+    historySyncQueue = operation.catch(() => {})
+    return operation
   }
 
   const refreshFooter = () => {
@@ -534,8 +660,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
     resizeTimer = setTimeout(() => {
       resizeTimer = undefined
       if (!latestSnapshot) return
-      syncHistory(true)
-      refreshFooter()
+      void queueHistorySync(true).then(refreshFooter)
     }, 75)
   }
   renderer.on(CliRenderEvents.RESIZE, onResize)
@@ -552,24 +677,28 @@ export function createChatView(renderer: CliRenderer): ChatView {
       header.destroy()
       live.destroy()
       status.destroy()
+      void historySyncQueue.finally(() => {
+        assistantMarkdownStyles.markdown.destroy()
+        assistantMarkdownStyles.code.destroy()
+      })
     },
-    update(snapshot) {
+    async update(snapshot) {
       if (destroyed) return
       latestSnapshot = snapshot
       notice = ""
       fold = { ...snapshot.preferences.fold }
       blocks = displayBlocks(snapshot)
-      syncHistory()
       refreshFooter()
+      await queueHistorySync()
     },
     getFoldPreferences() {
       return { ...fold }
     },
-    setFoldPreferences(next) {
+    async setFoldPreferences(next) {
       if (destroyed) return
       fold = { ...next }
       notice = "已应用折叠设置，并全量回放会话"
-      syncHistory(true)
+      await queueHistorySync(true)
       refreshFooter()
     },
   }
