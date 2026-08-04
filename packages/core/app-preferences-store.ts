@@ -18,15 +18,13 @@ export type AgentPreferences = {
 }
 
 export type FoldPreferences = {
-  userTurns: number
-  assistantTurns: number
-  thinkingTurns: number
-  toolGroupTurns: number
-  toolDetailTurns: number
+  thinkingExpanded: boolean
+  toolGroupExpanded: boolean
+  toolDetailsExpanded: boolean
 }
 
 export type AppPreferences = {
-  version: 1
+  version: 2
   newSession: {
     model?: ModelReference
     viewId: ViewId
@@ -37,15 +35,13 @@ export type AppPreferences = {
 }
 
 export const defaultFoldPreferences: FoldPreferences = {
-  userTurns: 0,
-  assistantTurns: 3,
-  thinkingTurns: 1,
-  toolGroupTurns: 1,
-  toolDetailTurns: 1,
+  thinkingExpanded: false,
+  toolGroupExpanded: false,
+  toolDetailsExpanded: false,
 }
 
 export const defaultAppPreferences: AppPreferences = {
-  version: 1,
+  version: 2,
   newSession: { viewId: null, permissionMode: "hybrid" },
   agents: { sessionNaming: {}, permissionReview: {} },
   fold: defaultFoldPreferences,
@@ -60,7 +56,12 @@ function exact(value: Record<string, unknown>, keys: string[], label: string): v
   for (const key of Object.keys(value)) if (!keys.includes(key)) throw new Error(`${label} 包含未知字段：${key}`)
 }
 
-function turns(value: unknown, label: string): number {
+function booleanValue(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") throw new Error(`${label} 必须是布尔值`)
+  return value
+}
+
+function legacyTurns(value: unknown, label: string): number {
   if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label} 必须是非负安全整数`)
   return value as number
 }
@@ -95,11 +96,33 @@ function modelReference(value: unknown): ModelReference {
   }
 }
 
-/** 校验并规范化应用偏好，防止无效配置进入核心和界面。 */
+function foldPreferences(value: unknown, version: 1 | 2): FoldPreferences {
+  const fold = object(value, "fold")
+  if (version === 1) {
+    exact(fold, ["userTurns", "assistantTurns", "thinkingTurns", "toolGroupTurns", "toolDetailTurns"], "fold")
+    legacyTurns(fold.userTurns, "fold.userTurns")
+    legacyTurns(fold.assistantTurns, "fold.assistantTurns")
+    return {
+      thinkingExpanded: legacyTurns(fold.thinkingTurns, "fold.thinkingTurns") === 0,
+      toolGroupExpanded: legacyTurns(fold.toolGroupTurns, "fold.toolGroupTurns") === 0,
+      toolDetailsExpanded: legacyTurns(fold.toolDetailTurns, "fold.toolDetailTurns") === 0,
+    }
+  }
+  exact(fold, ["thinkingExpanded", "toolGroupExpanded", "toolDetailsExpanded"], "fold")
+  return {
+    thinkingExpanded: booleanValue(fold.thinkingExpanded, "fold.thinkingExpanded"),
+    toolGroupExpanded: booleanValue(fold.toolGroupExpanded, "fold.toolGroupExpanded"),
+    toolDetailsExpanded: booleanValue(fold.toolDetailsExpanded, "fold.toolDetailsExpanded"),
+  }
+}
+
+/** 校验并规范化应用偏好；版本 1 的轮次范围会迁移为统一展开开关。 */
 export function parseAppPreferences(value: unknown): AppPreferences {
   const source = object(value, "preferences.json")
   exact(source, ["version", "newSession", "agents", "fold"], "preferences.json")
-  if (source.version !== 1) throw new Error(`不支持的 preferences.json 版本：${String(source.version)}`)
+  if (source.version !== 1 && source.version !== 2)
+    throw new Error(`不支持的 preferences.json 版本：${String(source.version)}`)
+  const version = source.version
   const newSession = object(source.newSession, "newSession")
   exact(newSession, ["model", "viewId", "permissionMode"], "newSession")
   if (newSession.viewId !== null && typeof newSession.viewId !== "string")
@@ -111,23 +134,8 @@ export function parseAppPreferences(value: unknown): AppPreferences {
   const permissionReview =
     agents.permissionReview === undefined ? {} : object(agents.permissionReview, "agents.permissionReview")
   exact(permissionReview, ["model"], "agents.permissionReview")
-  const fold = object(source.fold, "fold")
-  exact(fold, ["userTurns", "assistantTurns", "thinkingTurns", "toolGroupTurns", "toolDetailTurns"], "fold")
-  const parsedFold: FoldPreferences = {
-    userTurns: turns(fold.userTurns, "fold.userTurns"),
-    assistantTurns: turns(fold.assistantTurns, "fold.assistantTurns"),
-    thinkingTurns: turns(fold.thinkingTurns, "fold.thinkingTurns"),
-    toolGroupTurns: turns(fold.toolGroupTurns, "fold.toolGroupTurns"),
-    toolDetailTurns: turns(fold.toolDetailTurns, "fold.toolDetailTurns"),
-  }
-  if (
-    parsedFold.toolDetailTurns === 0
-      ? parsedFold.toolGroupTurns !== 0
-      : parsedFold.toolGroupTurns !== 0 && parsedFold.toolDetailTurns > parsedFold.toolGroupTurns
-  )
-    throw new Error("工具详情展开轮次不能大于工具组")
   return {
-    version: 1,
+    version: 2,
     newSession: {
       ...(newSession.model === undefined ? {} : { model: modelReference(newSession.model) }),
       viewId: newSession.viewId as ViewId,
@@ -149,7 +157,7 @@ export function parseAppPreferences(value: unknown): AppPreferences {
             },
           }),
     },
-    fold: parsedFold,
+    fold: foldPreferences(source.fold, version),
   }
 }
 

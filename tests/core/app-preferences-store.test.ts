@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -28,13 +28,13 @@ describe("应用偏好存储", () => {
         viewId: "view",
         permissionMode: "hybrid" as const,
       },
-      fold: { ...defaultAppPreferences.fold, assistantTurns: 5 },
+      fold: { ...defaultAppPreferences.fold, thinkingExpanded: true },
     }
     await store.write(preferences)
     expect(await store.read()).toEqual(preferences)
   })
 
-  test("兼容缺少 Agent 设置的既有偏好", async () => {
+  test("迁移版本 1 的轮次折叠配置并兼容缺少 Agent 设置", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-preferences-"))
     directories.push(directory)
     const file = join(directory, "preferences.json")
@@ -43,10 +43,19 @@ describe("应用偏好存储", () => {
       JSON.stringify({
         version: 1,
         newSession: { viewId: null },
-        fold: defaultAppPreferences.fold,
+        fold: { userTurns: 0, assistantTurns: 3, thinkingTurns: 0, toolGroupTurns: 2, toolDetailTurns: 0 },
       }),
     )
-    expect((await new AppPreferencesStore(file).read()).agents).toEqual({ sessionNaming: {} })
+    const preferences = await new AppPreferencesStore(file).read()
+    expect(preferences.version).toBe(2)
+    expect(preferences.agents).toEqual({ sessionNaming: {} })
+    expect(preferences.fold).toEqual({
+      thinkingExpanded: true,
+      toolGroupExpanded: false,
+      toolDetailsExpanded: true,
+    })
+    await new AppPreferencesStore(file).write(preferences)
+    expect(JSON.parse(await readFile(file, "utf8"))).toMatchObject({ version: 2, fold: preferences.fold })
   })
 
   test("会话命名偏好只保存供应商和模型标识", () => {
@@ -70,18 +79,18 @@ describe("应用偏好存储", () => {
     ).toThrow("未知字段")
   })
 
-  test("工具详情范围不得超过工具组", () => {
+  test("折叠设置只接受三个布尔开关", () => {
     expect(() =>
       parseAppPreferences({
         ...defaultAppPreferences,
-        fold: { ...defaultAppPreferences.fold, toolGroupTurns: 2, toolDetailTurns: 3 },
+        fold: { ...defaultAppPreferences.fold, thinkingExpanded: 1 },
       }),
-    ).toThrow("工具详情展开轮次不能大于工具组")
+    ).toThrow("fold.thinkingExpanded 必须是布尔值")
     expect(() =>
       parseAppPreferences({
         ...defaultAppPreferences,
-        fold: { ...defaultAppPreferences.fold, toolGroupTurns: 2, toolDetailTurns: 0 },
+        fold: { ...defaultAppPreferences.fold, userExpanded: true },
       }),
-    ).toThrow("工具详情展开轮次不能大于工具组")
+    ).toThrow("未知字段")
   })
 })

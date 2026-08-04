@@ -78,10 +78,10 @@ class NamingFakePi extends FakePi {
 async function configuredCore(root: string, pi: PiPort, store = new SessionStore(join(root, "sessions"))) {
   const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
   await preferencesStore.write({
-    version: 1,
+    version: 2,
     newSession: { viewId: null, permissionMode: "hybrid" },
     agents: { sessionNaming: { model: { providerId: "test", modelId: "title-model" } }, permissionReview: {} },
-    fold: { userTurns: 0, assistantTurns: 3, thinkingTurns: 1, toolGroupTurns: 1, toolDetailTurns: 1 },
+    fold: { thinkingExpanded: false, toolGroupExpanded: false, toolDetailsExpanded: false },
   })
   const core = new AizenCore({ cwd: "E:\\project", store, pi, preferencesStore })
   await core.dispatch({ type: "load_preferences" })
@@ -275,10 +275,10 @@ describe("核心编排", () => {
     directories.push(root)
     const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
     await preferencesStore.write({
-      version: 1,
+      version: 2,
       newSession: { viewId: null, permissionMode: "hybrid" },
       agents: { sessionNaming: {}, permissionReview: {} },
-      fold: { userTurns: 2, assistantTurns: 4, thinkingTurns: 1, toolGroupTurns: 3, toolDetailTurns: 1 },
+      fold: { thinkingExpanded: true, toolGroupExpanded: false, toolDetailsExpanded: true },
     })
     const core = new AizenCore({
       cwd: "E:\\project",
@@ -288,7 +288,7 @@ describe("核心编排", () => {
     })
 
     expect(await core.dispatch({ type: "create_session", model, viewId: null })).toEqual({ ok: true })
-    expect((await preferencesStore.read()).fold.assistantTurns).toBe(4)
+    expect((await preferencesStore.read()).fold.thinkingExpanded).toBe(true)
     expect((await preferencesStore.read()).newSession.model).toEqual(model)
     await core.dispose()
   })
