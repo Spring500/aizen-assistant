@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
@@ -34,7 +34,7 @@ describe("应用偏好存储", () => {
     expect(await store.read()).toEqual(preferences)
   })
 
-  test("迁移版本 1 的轮次折叠配置并兼容缺少 Agent 设置", async () => {
+  test("拒绝版本 1 的轮次折叠配置", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-preferences-"))
     directories.push(directory)
     const file = join(directory, "preferences.json")
@@ -46,16 +46,9 @@ describe("应用偏好存储", () => {
         fold: { userTurns: 0, assistantTurns: 3, thinkingTurns: 0, toolGroupTurns: 2, toolDetailTurns: 0 },
       }),
     )
-    const preferences = await new AppPreferencesStore(file).read()
-    expect(preferences.version).toBe(2)
-    expect(preferences.agents).toEqual({ sessionNaming: {} })
-    expect(preferences.fold).toEqual({
-      thinkingExpanded: true,
-      toolGroupExpanded: false,
-      toolDetailsExpanded: true,
-    })
-    await new AppPreferencesStore(file).write(preferences)
-    expect(JSON.parse(await readFile(file, "utf8"))).toMatchObject({ version: 2, fold: preferences.fold })
+    await expect(new AppPreferencesStore(file).read()).rejects.toThrow(
+      "preferences.json 配置错误：不支持的 preferences.json 版本：1",
+    )
   })
 
   test("会话命名偏好只保存供应商和模型标识", () => {

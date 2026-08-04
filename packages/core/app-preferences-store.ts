@@ -61,11 +61,6 @@ function booleanValue(value: unknown, label: string): boolean {
   return value
 }
 
-function legacyTurns(value: unknown, label: string): number {
-  if (!Number.isSafeInteger(value) || (value as number) < 0) throw new Error(`${label} 必须是非负安全整数`)
-  return value as number
-}
-
 function agentModelReference(value: unknown, label: string): AgentModelReference {
   const source = object(value, label)
   exact(source, ["providerId", "modelId"], label)
@@ -96,18 +91,8 @@ function modelReference(value: unknown): ModelReference {
   }
 }
 
-function foldPreferences(value: unknown, version: 1 | 2): FoldPreferences {
+function foldPreferences(value: unknown): FoldPreferences {
   const fold = object(value, "fold")
-  if (version === 1) {
-    exact(fold, ["userTurns", "assistantTurns", "thinkingTurns", "toolGroupTurns", "toolDetailTurns"], "fold")
-    legacyTurns(fold.userTurns, "fold.userTurns")
-    legacyTurns(fold.assistantTurns, "fold.assistantTurns")
-    return {
-      thinkingExpanded: legacyTurns(fold.thinkingTurns, "fold.thinkingTurns") === 0,
-      toolGroupExpanded: legacyTurns(fold.toolGroupTurns, "fold.toolGroupTurns") === 0,
-      toolDetailsExpanded: legacyTurns(fold.toolDetailTurns, "fold.toolDetailTurns") === 0,
-    }
-  }
   exact(fold, ["thinkingExpanded", "toolGroupExpanded", "toolDetailsExpanded"], "fold")
   return {
     thinkingExpanded: booleanValue(fold.thinkingExpanded, "fold.thinkingExpanded"),
@@ -116,13 +101,11 @@ function foldPreferences(value: unknown, version: 1 | 2): FoldPreferences {
   }
 }
 
-/** 校验并规范化应用偏好；版本 1 的轮次范围会迁移为统一展开开关。 */
+/** 校验并规范化应用偏好，防止旧版本或无效配置进入核心和界面。 */
 export function parseAppPreferences(value: unknown): AppPreferences {
   const source = object(value, "preferences.json")
   exact(source, ["version", "newSession", "agents", "fold"], "preferences.json")
-  if (source.version !== 1 && source.version !== 2)
-    throw new Error(`不支持的 preferences.json 版本：${String(source.version)}`)
-  const version = source.version
+  if (source.version !== 2) throw new Error(`不支持的 preferences.json 版本：${String(source.version)}`)
   const newSession = object(source.newSession, "newSession")
   exact(newSession, ["model", "viewId", "permissionMode"], "newSession")
   if (newSession.viewId !== null && typeof newSession.viewId !== "string")
@@ -157,7 +140,7 @@ export function parseAppPreferences(value: unknown): AppPreferences {
             },
           }),
     },
-    fold: foldPreferences(source.fold, version),
+    fold: foldPreferences(source.fold),
   }
 }
 
