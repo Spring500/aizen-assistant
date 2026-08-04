@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test"
+import { TextAttributes, type CliRenderer, type OptimizedBuffer } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { defaultAppPreferences } from "../../packages/core/app-preferences-store.ts"
 import type { CoreSnapshot } from "../../packages/core/types.ts"
@@ -20,6 +21,37 @@ function snapshot(overrides: Partial<CoreSnapshot> = {}): CoreSnapshot {
     streamingThinking: "",
     ...overrides,
   }
+}
+
+type QueuedCommit = { snapshot: OptimizedBuffer }
+
+type CapturedSpan = {
+  text: string
+  fg: ReturnType<OptimizedBuffer["getSpanLines"]>[number]["spans"][number]["fg"]
+  bg: ReturnType<OptimizedBuffer["getSpanLines"]>[number]["spans"][number]["bg"]
+  attributes: number
+}
+
+function takeScrollbackSpans(renderer: CliRenderer): CapturedSpan[] {
+  const queue = Reflect.get(renderer, "externalOutputQueue") as { claim(): QueuedCommit[] }
+  const commits = queue.claim()
+  try {
+    return commits.flatMap((commit) =>
+      commit.snapshot
+        .getSpanLines()
+        .flatMap((line) => line.spans)
+        .map((span) => ({ text: span.text.trim(), fg: span.fg, bg: span.bg, attributes: span.attributes }))
+        .filter((span) => span.text),
+    )
+  } finally {
+    for (const commit of commits) commit.snapshot.destroy()
+  }
+}
+
+function spanByText(spans: CapturedSpan[], text: string): CapturedSpan {
+  const span = spans.find((item) => item.text === text)
+  if (!span) throw new Error(`未找到终端样式片段：${text}`)
+  return span
 }
 
 async function setupRepl(width = 100, height = 20) {
@@ -125,7 +157,31 @@ test("完成的助手正文按 Markdown 格式写入历史", async () => {
               parts: [
                 {
                   kind: "text",
-                  text: "# 标题\n\n这是 **重点**，包含 `代码`。\n\n```ts\nconst answer = 42\n```",
+                  text: [
+                    "# 一级标题",
+                    "",
+                    "## 二级标题",
+                    "",
+                    "### 三级标题",
+                    "",
+                    "#### 四级标题",
+                    "",
+                    "##### 五级标题",
+                    "",
+                    "###### 六级标题",
+                    "",
+                    "这是 **重点**，包含 `行内代码`。",
+                    "",
+                    "```ts",
+                    "const answer: number = 42",
+                    "```",
+                    "",
+                    "行内公式 $E = mc^2$。",
+                    "",
+                    "$$",
+                    "\\sum_{i=0}^{n} x_i",
+                    "$$",
+                  ].join("\n"),
                 },
               ],
               source: { providerId: "test", modelId: "model", api: "a" },
@@ -136,17 +192,43 @@ test("完成的助手正文按 Markdown 格式写入历史", async () => {
         ],
       }),
     )
-    await setup.renderOnce()
-    const history = setup.externalOutput.takeText()
-    const compactHistory = history.replace(/\s+/g, "")
-    expect(history).toContain("▼ 助手")
-    expect(compactHistory).toContain("标题")
-    expect(compactHistory).toContain("这是重点，包含代码。")
-    expect(compactHistory).toContain("constanswer=42")
-    expect(compactHistory).not.toContain("#标题")
-    expect(compactHistory).not.toContain("**重点**")
-    expect(compactHistory).not.toContain("`代码`")
-    expect(compactHistory).not.toContain("```ts")
+    const spans = takeScrollbackSpans(setup.renderer)
+    const history = spans.map((span) => span.text).join("")
+    const headingExpectations = [
+      ["一级标题", [244, 114, 182, 255]],
+      ["二级标题", [34, 211, 238, 255]],
+      ["三级标题", [167, 139, 250, 255]],
+      ["四级标题", [196, 181, 253, 255]],
+      ["五级标题", [216, 180, 254, 255]],
+      ["六级标题", [233, 213, 255, 255]],
+    ] as const
+    const strong = spanByText(spans, "重点")
+    const keyword = spanByText(spans, "const")
+    const codeType = spanByText(spans, "number")
+    const codeNumber = spanByText(spans, "42")
+    const inlineFormula = spanByText(spans, "E = mc²")
+    const blockFormula = spanByText(spans, "∑ᵢ₌₀ⁿ xᵢ")
+
+    for (const [text, color] of headingExpectations) {
+      const heading = spanByText(spans, text)
+      expect(heading.fg.toInts()).toEqual([...color])
+      expect(heading.attributes & TextAttributes.BOLD).toBe(TextAttributes.BOLD)
+    }
+    expect(strong.attributes & TextAttributes.BOLD).toBe(TextAttributes.BOLD)
+    expect(keyword.fg.toInts()).toEqual([244, 114, 182, 255])
+    expect(keyword.attributes & TextAttributes.BOLD).toBe(TextAttributes.BOLD)
+    expect(codeType.fg.toInts()).toEqual([96, 165, 250, 255])
+    expect(codeNumber.fg.toInts()).toEqual([250, 204, 21, 255])
+    expect(keyword.bg.toInts()).toEqual([41, 44, 49, 255])
+    expect(inlineFormula.fg.toInts()).toEqual([251, 146, 60, 255])
+    expect(blockFormula.fg.toInts()).toEqual([250, 204, 21, 255])
+    expect(blockFormula.bg.toInts()).toEqual([41, 44, 49, 255])
+    expect(history).not.toContain("#一级标题")
+    expect(history).not.toContain("**重点**")
+    expect(history).not.toContain("`行内代码`")
+    expect(history).not.toContain("```ts")
+    expect(history).not.toContain("$E = mc^2$")
+    expect(history).not.toContain("$$")
     view.destroy()
   } finally {
     setup.renderer.destroy()

@@ -1,8 +1,10 @@
 import {
   BoxRenderable,
+  CodeRenderable,
   type CliRenderer,
   CliRenderEvents,
   createTextAttributes,
+  type MarkdownOptions,
   MarkdownRenderable,
   parseColor,
   type RenderContext,
@@ -10,10 +12,12 @@ import {
   SyntaxStyle,
   type TextChunk,
   TextRenderable,
+  infoStringToFiletype,
 } from "@opentui/core"
 import type { FoldPreferences } from "../core/app-preferences-store.ts"
 import type { Timing, ToolCallPart, ToolMessage } from "../core/session-format.ts"
 import type { CoreSnapshot } from "../core/types.ts"
+import { isMathCodeBlock, prepareMarkdownForTerminal } from "./markdown.ts"
 import { systemColors } from "./theme.ts"
 
 export type ChatView = {
@@ -54,17 +58,107 @@ const blockColors = {
   toolGroup: "#292c31",
 } as const
 
-function createAssistantMarkdownStyle(): SyntaxStyle {
-  return SyntaxStyle.fromStyles({
-    default: { fg: "#f3f4f6", bg: blockColors.assistant },
-    conceal: { fg: systemColors.secondary, bg: blockColors.assistant, dim: true },
-    "markup.heading": { fg: systemColors.header, bg: blockColors.assistant, bold: true },
-    "markup.strong": { fg: "#f3f4f6", bg: blockColors.assistant, bold: true },
-    "markup.italic": { fg: "#f3f4f6", bg: blockColors.assistant, italic: true },
-    "markup.raw": { fg: systemColors.live, bg: blockColors.assistant },
-    "markup.link": { fg: systemColors.sessionStatus, bg: blockColors.assistant, underline: true },
-    "markup.quote": { fg: systemColors.secondary, bg: blockColors.assistant, italic: true },
-    "markup.list": { fg: systemColors.header, bg: blockColors.assistant, bold: true },
+type AssistantMarkdownStyles = {
+  markdown: SyntaxStyle
+  code: SyntaxStyle
+}
+
+function createAssistantMarkdownStyles(): AssistantMarkdownStyles {
+  const markdownBackground = blockColors.assistant
+  const codeBackground = blockColors.tool
+  return {
+    markdown: SyntaxStyle.fromStyles({
+      default: { fg: "#f3f4f6", bg: markdownBackground },
+      conceal: { fg: systemColors.secondary, bg: markdownBackground, dim: true },
+      "markup.heading": { fg: systemColors.header, bg: markdownBackground, bold: true },
+      "markup.heading.1": { fg: "#f472b6", bg: markdownBackground, bold: true },
+      "markup.heading.2": { fg: "#22d3ee", bg: markdownBackground, bold: true },
+      "markup.heading.3": { fg: "#a78bfa", bg: markdownBackground, bold: true },
+      "markup.heading.4": { fg: "#c4b5fd", bg: markdownBackground, bold: true },
+      "markup.heading.5": { fg: "#d8b4fe", bg: markdownBackground, bold: true },
+      "markup.heading.6": { fg: "#e9d5ff", bg: markdownBackground, bold: true, dim: true },
+      "markup.strong": { fg: "#f3f4f6", bg: markdownBackground, bold: true },
+      "markup.italic": { fg: "#f3f4f6", bg: markdownBackground, italic: true },
+      "markup.strikethrough": { fg: "#f3f4f6", bg: markdownBackground, dim: true },
+      "markup.raw": { fg: systemColors.live, bg: markdownBackground },
+      "markup.link": { fg: systemColors.sessionStatus, bg: markdownBackground, underline: true },
+      "markup.link.label": { fg: systemColors.sessionStatus, bg: markdownBackground, underline: true },
+      "markup.link.url": { fg: systemColors.secondary, bg: markdownBackground, underline: true },
+      "markup.quote": { fg: systemColors.secondary, bg: markdownBackground, italic: true },
+      "markup.list": { fg: systemColors.header, bg: markdownBackground, bold: true },
+      "punctuation.special": { fg: systemColors.secondary, bg: markdownBackground },
+    }),
+    code: SyntaxStyle.fromStyles({
+      default: { fg: "#d1d5db", bg: codeBackground },
+      keyword: { fg: "#f472b6", bg: codeBackground, bold: true },
+      string: { fg: "#86efac", bg: codeBackground },
+      number: { fg: "#facc15", bg: codeBackground },
+      boolean: { fg: "#facc15", bg: codeBackground, bold: true },
+      comment: { fg: "#9ca3af", bg: codeBackground, italic: true, dim: true },
+      type: { fg: "#60a5fa", bg: codeBackground },
+      "type.builtin": { fg: "#60a5fa", bg: codeBackground, bold: true },
+      function: { fg: "#c4b5fd", bg: codeBackground },
+      "function.call": { fg: "#c4b5fd", bg: codeBackground },
+      "function.method": { fg: "#c4b5fd", bg: codeBackground },
+      "function.method.call": { fg: "#c4b5fd", bg: codeBackground },
+      property: { fg: "#67e8f9", bg: codeBackground },
+      "variable.builtin": { fg: "#fb923c", bg: codeBackground },
+      "variable.member": { fg: "#67e8f9", bg: codeBackground },
+      operator: { fg: "#f9a8d4", bg: codeBackground },
+      "punctuation.bracket": { fg: systemColors.secondary, bg: codeBackground },
+      "punctuation.delimiter": { fg: systemColors.secondary, bg: codeBackground },
+    }),
+  }
+}
+
+function createAssistantMarkdownRenderer(
+  context: RenderContext,
+  id: string,
+  content: string,
+  styles: AssistantMarkdownStyles,
+): MarkdownRenderable {
+  const renderNode: NonNullable<MarkdownOptions["renderNode"]> & { codeBlockOnly?: boolean } = (token) => {
+    if (token.type !== "code") return undefined
+    if (isMathCodeBlock(token)) {
+      return new TextRenderable(context, {
+        id: `${id}-formula`,
+        content: token.text,
+        width: "100%",
+        height: "auto",
+        wrapMode: "word",
+        fg: "#facc15",
+        bg: blockColors.tool,
+        paddingLeft: 2,
+        paddingRight: 2,
+      })
+    }
+    const filetype = infoStringToFiletype(token.lang ?? "")
+    return new CodeRenderable(context, {
+      id: `${id}-code`,
+      content: token.text,
+      syntaxStyle: styles.code,
+      width: "100%",
+      wrapMode: "word",
+      fg: "#d1d5db",
+      bg: blockColors.tool,
+      paddingLeft: 1,
+      paddingRight: 1,
+      drawUnstyledText: true,
+      ...(filetype ? { filetype } : {}),
+    })
+  }
+  renderNode.codeBlockOnly = true
+
+  return new MarkdownRenderable(context, {
+    id,
+    content: prepareMarkdownForTerminal(content),
+    syntaxStyle: styles.markdown,
+    width: "100%",
+    fg: "#f3f4f6",
+    bg: blockColors.assistant,
+    streaming: false,
+    tableOptions: { widthMode: "content" },
+    renderNode,
   })
 }
 
@@ -370,7 +464,7 @@ function createHistoryBlock(
   index: number,
   block: DisplayBlock,
   fold: FoldPreferences,
-  assistantMarkdownStyle: SyntaxStyle,
+  assistantMarkdownStyles: AssistantMarkdownStyles,
 ): BoxRenderable {
   const rootId = `history-entry-${index}`
   if (block.kind === "plain") {
@@ -398,18 +492,7 @@ function createHistoryBlock(
       return root
     }
     root.add(makeText(context, `${rootId}-header`, `▼ ${label}${meta ? `  ${meta}` : ""}`, color))
-    root.add(
-      new MarkdownRenderable(context, {
-        id: `${rootId}-markdown`,
-        content: block.content,
-        syntaxStyle: assistantMarkdownStyle,
-        width: "100%",
-        fg: "#f3f4f6",
-        bg: color,
-        streaming: false,
-        tableOptions: { widthMode: "content" },
-      }),
-    )
+    root.add(createAssistantMarkdownRenderer(context, `${rootId}-markdown`, block.content, assistantMarkdownStyles))
     return root
   }
 
@@ -494,7 +577,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
   renderer.root.add(live)
   renderer.root.add(status)
 
-  const assistantMarkdownStyle = createAssistantMarkdownStyle()
+  const assistantMarkdownStyles = createAssistantMarkdownStyles()
   let blocks: DisplayBlock[] = []
   let fold: FoldPreferences = {
     thinkingExpanded: false,
@@ -516,7 +599,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
     try {
       for (let index = startIndex; index < blocks.length; index += 1) {
         const block = blocks[index] as DisplayBlock
-        surface.root.add(createHistoryBlock(surface.renderContext, index, block, fold, assistantMarkdownStyle))
+        surface.root.add(createHistoryBlock(surface.renderContext, index, block, fold, assistantMarkdownStyles))
       }
       await surface.settle()
       surface.commitRows(0, surface.height)
@@ -594,7 +677,10 @@ export function createChatView(renderer: CliRenderer): ChatView {
       header.destroy()
       live.destroy()
       status.destroy()
-      void historySyncQueue.finally(() => assistantMarkdownStyle.destroy())
+      void historySyncQueue.finally(() => {
+        assistantMarkdownStyles.markdown.destroy()
+        assistantMarkdownStyles.code.destroy()
+      })
     },
     async update(snapshot) {
       if (destroyed) return
