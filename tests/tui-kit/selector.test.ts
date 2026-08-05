@@ -1,9 +1,12 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 test("选择器把当前项说明放入统一说明区并限制为三行", async () => {
   const setup = await createTestRenderer({ width: 24, height: 16 })
@@ -85,7 +88,7 @@ test("选择器可用 Esc 取消并清理界面", async () => {
 test("聊天界面中的启动选择器清晰可见", async () => {
   const setup = await createTestRenderer({ width: 80, height: 20 })
   try {
-    createChatView(setup.renderer)
+    const view = createChatView(setup.renderer)
     const editor = createChatEditor(setup.renderer, {
       onSubmit: () => {},
       onAbort: () => {},
@@ -108,6 +111,7 @@ test("聊天界面中的启动选择器清晰可见", async () => {
     setup.renderer.keyInput.emit("keypress", new KeyEvent(parsed))
     await pending
     editor.destroy()
+    await view.destroy()
   } finally {
     setup.renderer.destroy()
   }

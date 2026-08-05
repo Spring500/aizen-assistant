@@ -139,6 +139,8 @@ export interface PiPort {
   refreshView(view: ViewRuntimeInput): Promise<void>
   switchView(view: ViewRuntimeInput, records: SessionRecord[]): Promise<ModelRuntimeInfo>
   prompt(input: PiPromptInput): Promise<void>
+  /** 使用当前模型压缩长期对话；可附加摘要关注点。 */
+  compact(customInstructions?: string): Promise<void>
   /** 使用独立模型请求为首条用户消息生成经过校验的会话标题。 */
   generateSessionTitle(input: PiSessionTitleInput): Promise<string>
   /** 设置经过联合注册的项目自有工具；adapter 负责转换到当前 Agent Loop。 */

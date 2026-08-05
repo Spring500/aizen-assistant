@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -6,6 +7,8 @@ import { AizenCore } from "../../packages/core/aizen-core.ts"
 import type { PiPort, PiPortEvent } from "../../packages/core/pi-port.ts"
 import type { ModelReference, SessionRecord } from "../../packages/core/session-format.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const directories: string[] = []
 const model: ModelReference = { providerId: "test", modelId: "model", api: "anthropic-messages" }
@@ -18,6 +21,7 @@ class RestorePi implements PiPort {
   switchView = async () => model
   generateSessionTitle = async () => "标题"
   prompt = async () => {}
+  compact = async (_customInstructions?: string) => {}
   abort = async () => {}
   listModels = async () => []
   reloadModelConfig = async () => {}

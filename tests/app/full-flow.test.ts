@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { rm } from "node:fs/promises"
 import { join } from "node:path"
 import { ActionQueue, dispatchOrPresent, sendPromptWithRecovery } from "../../apps/tui/action-runner.ts"
@@ -10,6 +11,8 @@ import { SessionStore } from "../../packages/core/session-store.ts"
 import type { CoreCommand, CoreEvent, CorePort, CoreSnapshot } from "../../packages/core/types.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
 import { copyAppFixture } from "../utils/app-fixture.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const roots: string[] = []
 const model: ModelReference = {
@@ -26,6 +29,7 @@ class FixturePi implements PiPort {
   switchView = async () => model
   generateSessionTitle = async () => "测试标题"
   prompt = async () => {}
+  compact = async (_customInstructions?: string) => {}
   abort = async () => {}
   listModels = async () => [{ ...model, name: "Fixture Model", available: true }]
   reloadModelConfig = async () => {}

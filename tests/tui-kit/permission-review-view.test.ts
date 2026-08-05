@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import type { HumanReviewRequest } from "../../packages/core/tool-permissions/types.ts"
@@ -7,6 +8,8 @@ import {
   createPermissionReviewView,
   type PermissionReviewAnswer,
 } from "../../packages/tui-kit/permission-review-view.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const renderers: Array<Awaited<ReturnType<typeof createTestRenderer>>> = []
 afterEach(() => {

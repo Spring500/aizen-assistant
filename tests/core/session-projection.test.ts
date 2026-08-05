@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import type { SessionRecord } from "../../packages/core/session-format.ts"
 import { projectVisibleSessionRecords, workingDirectoryChangeText } from "../../packages/core/session-projection.ts"
 import { recordsToTranscript } from "../../packages/core/types.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const at = "2026-08-04T00:00:00.000Z"
 const records: SessionRecord[] = [

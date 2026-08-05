@@ -12,7 +12,7 @@ export type MockRequestContext = {
 }
 
 export type MockResponse =
-  | { type: "text"; text: string }
+  | { type: "text"; text: string; inputTokens?: number; outputTokens?: number }
   | { type: "tool_call"; name: string; arguments: unknown; callId?: string }
   | { type: "tool_calls"; calls: Array<{ name: string; arguments: unknown; callId?: string }> }
   | { type: "http_error"; status: number; body?: unknown }
@@ -76,7 +76,10 @@ function buildSseBody(response: Exclude<MockResponse, { type: "http_error" }>, m
       role: "assistant",
       content: [],
       model,
-      usage: { input_tokens: 1, output_tokens: 1 },
+      usage: {
+        input_tokens: response.type === "text" ? (response.inputTokens ?? 1) : 1,
+        output_tokens: response.type === "text" ? (response.outputTokens ?? 1) : 1,
+      },
     },
   })
   if (response.type === "text") {
@@ -94,7 +97,7 @@ function buildSseBody(response: Exclude<MockResponse, { type: "http_error" }>, m
     body += sseEvent("message_delta", {
       type: "message_delta",
       delta: { stop_reason: "end_turn", stop_sequence: null },
-      usage: { output_tokens: 1 },
+      usage: { output_tokens: response.outputTokens ?? 1 },
     })
   } else {
     const calls = response.type === "tool_call" ? [response] : response.calls

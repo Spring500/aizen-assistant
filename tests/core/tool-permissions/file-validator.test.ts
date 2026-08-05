@@ -1,9 +1,12 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect } from "bun:test"
+import { createDiagnosticTest } from "../../utils/diagnostic-test.ts"
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ToolPermissionRequest } from "../../../packages/core/tool-permissions/types.ts"
 import { createFileValidator } from "../../../packages/core/tool-permissions/validators/file.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const directories: string[] = []
 afterEach(async () => Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))))

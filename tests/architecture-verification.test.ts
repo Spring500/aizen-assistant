@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "./utils/diagnostic-test.ts"
 import { InMemoryCredentialStore } from "@earendil-works/pi-ai"
 import {
   createAgentSession,
@@ -13,6 +14,8 @@ import { TextRenderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { PhotonImage } from "@silvia-odwyer/photon-node"
 import { startMockServer } from "./utils/mock-server.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 15_000 })
 
 /**
  * 架构可行性验证：一次性回答"pi SDK、OpenTUI、Photon 这几个第三方依赖，
@@ -255,4 +258,4 @@ test("架构可行性验证：pi SDK、内联扩展、内置视图、OpenTUI、P
   expect(report.photonWasm.passed).toBeTrue()
   expect(report.mockServer.passed).toBeTrue()
   expect(allChecksPassed(report)).toBeTrue()
-}, 15_000)
+})

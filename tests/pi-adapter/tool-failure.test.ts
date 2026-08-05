@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { normalizeToolFailure } from "../../packages/pi-adapter/tool-failure.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 test("Bash 中止保留部分输出并追加统一状态", () => {
   expect(normalizeToolFailure("bash", new Error("line one\nline two\n\nCommand aborted"))).toEqual({

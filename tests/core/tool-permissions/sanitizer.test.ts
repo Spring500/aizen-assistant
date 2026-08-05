@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../../utils/diagnostic-test.ts"
 import { sanitizePermissionAuditPayload } from "../../../packages/core/tool-permissions/sanitizer.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 test("权限记录隐藏完整详情、危险证据和第三方敏感字段", () => {
   const sanitized = sanitizePermissionAuditPayload(

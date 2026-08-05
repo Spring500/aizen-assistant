@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { exists, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -6,6 +7,8 @@ import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { startMockServer } from "../utils/mock-server.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 30_000 })
 
 const directories: string[] = []
 const workerPath = join(import.meta.dir, "tool-interruption-worker.ts")
@@ -247,5 +250,5 @@ for (const scenario of cases) {
       mock.stop()
       trace("清理完成")
     }
-  }, 30000)
+  })
 }

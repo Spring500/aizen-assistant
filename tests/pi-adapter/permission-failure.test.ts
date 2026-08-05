@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { permissionFailureMessage } from "../../packages/pi-adapter/permission-failure.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 test("审核拒绝向 Agent 附加实际发生的原因链", () => {
   expect(

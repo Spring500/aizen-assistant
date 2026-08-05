@@ -1,7 +1,10 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { BoxRenderable } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { createScrollableTextView } from "../../packages/tui-kit/scrollable-text-view.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const renderers: Array<Awaited<ReturnType<typeof createTestRenderer>>> = []
 afterEach(() => {

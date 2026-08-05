@@ -24,7 +24,7 @@ export type ChatView = {
   header: TextRenderable
   live: TextRenderable
   status: TextRenderable
-  destroy(): void
+  destroy(): Promise<void>
   update(snapshot: CoreSnapshot): Promise<void>
   getFoldPreferences(): FoldPreferences
   setFoldPreferences(fold: FoldPreferences): Promise<void>
@@ -550,6 +550,7 @@ function statusText(snapshot: CoreSnapshot): string {
   return {
     idle: "空闲",
     running: "处理中",
+    compacting: "正在压缩上下文",
     aborting: "正在中止",
     authenticating: "等待输入认证信息",
     refreshing: "正在刷新供应商模型",
@@ -589,8 +590,9 @@ export function createChatView(renderer: CliRenderer): ChatView {
   let latestSnapshot: CoreSnapshot | undefined
   let notice = ""
   let resizeTimer: ReturnType<typeof setTimeout> | undefined
-  let historySyncQueue = Promise.resolve()
-  let destroyed = false
+  let operationQueue = Promise.resolve()
+  let lifecycle: "active" | "closing" | "destroyed" = "active"
+  let destroyPromise: Promise<void> | undefined
 
   const renderedFingerprints = () => blocks.map((block) => JSON.stringify({ block, fold }))
 
@@ -610,7 +612,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
   }
 
   const syncHistory = async (forceReplay = false) => {
-    if (destroyed) return
+    if (lifecycle !== "active") return
     const nextFingerprints = renderedFingerprints()
     if (
       !forceReplay &&
@@ -633,18 +635,23 @@ export function createChatView(renderer: CliRenderer): ChatView {
       }
       await commitBlocks(0)
     }
-    if (destroyed) return
+    if (lifecycle !== "active") return
     committedFingerprints = nextFingerprints
   }
 
-  const queueHistorySync = (forceReplay = false) => {
-    const operation = historySyncQueue.then(() => syncHistory(forceReplay))
-    historySyncQueue = operation.catch(() => {})
-    return operation
+  const queueOperation = (operation: () => void | Promise<void>): Promise<void> => {
+    if (lifecycle !== "active") return Promise.resolve()
+    const result = operationQueue.then(async () => {
+      if (lifecycle !== "active") return
+      await operation()
+    })
+    operationQueue = result.catch(() => {})
+    return result
   }
 
   const refreshFooter = () => {
-    if (destroyed || !latestSnapshot) return
+    if (lifecycle !== "active" || !latestSnapshot || header.isDestroyed || live.isDestroyed || status.isDestroyed)
+      return
     header.content = "AizenAssistant | /fold 折叠设置"
     live.content = liveText(latestSnapshot)
     status.content = notice || statusText(latestSnapshot)
@@ -657,11 +664,14 @@ export function createChatView(renderer: CliRenderer): ChatView {
   }
 
   const onResize = () => {
+    if (lifecycle !== "active") return
     if (resizeTimer) clearTimeout(resizeTimer)
     resizeTimer = setTimeout(() => {
       resizeTimer = undefined
-      if (!latestSnapshot) return
-      void queueHistorySync(true).then(refreshFooter)
+      void queueOperation(async () => {
+        await syncHistory(true)
+        refreshFooter()
+      }).catch((error) => console.error("聊天视图 resize 回放失败", error))
     }, 75)
   }
   renderer.on(CliRenderEvents.RESIZE, onResize)
@@ -671,36 +681,44 @@ export function createChatView(renderer: CliRenderer): ChatView {
     live,
     status,
     destroy() {
-      destroyed = true
+      if (destroyPromise) return destroyPromise
+      lifecycle = "closing"
       latestSnapshot = undefined
-      if (resizeTimer) clearTimeout(resizeTimer)
+      if (resizeTimer) {
+        clearTimeout(resizeTimer)
+        resizeTimer = undefined
+      }
       renderer.off(CliRenderEvents.RESIZE, onResize)
-      header.destroy()
-      live.destroy()
-      status.destroy()
-      void historySyncQueue.finally(() => {
+      destroyPromise = operationQueue.then(() => {
+        if (!header.isDestroyed) header.destroy()
+        if (!live.isDestroyed) live.destroy()
+        if (!status.isDestroyed) status.destroy()
         assistantMarkdownStyles.markdown.destroy()
         assistantMarkdownStyles.code.destroy()
+        lifecycle = "destroyed"
       })
+      return destroyPromise
     },
-    async update(snapshot) {
-      if (destroyed) return
-      latestSnapshot = snapshot
-      notice = ""
-      fold = { ...snapshot.preferences.fold }
-      blocks = displayBlocks(snapshot)
-      refreshFooter()
-      await queueHistorySync()
+    update(snapshot) {
+      return queueOperation(async () => {
+        latestSnapshot = snapshot
+        notice = ""
+        fold = { ...snapshot.preferences.fold }
+        blocks = displayBlocks(snapshot)
+        refreshFooter()
+        await syncHistory()
+      })
     },
     getFoldPreferences() {
       return { ...fold }
     },
-    async setFoldPreferences(next) {
-      if (destroyed) return
-      fold = { ...next }
-      notice = "已应用折叠设置，并全量回放会话"
-      await queueHistorySync(true)
-      refreshFooter()
+    setFoldPreferences(next) {
+      return queueOperation(async () => {
+        fold = { ...next }
+        notice = "已应用折叠设置，并全量回放会话"
+        await syncHistory(true)
+        refreshFooter()
+      })
     },
   }
 }

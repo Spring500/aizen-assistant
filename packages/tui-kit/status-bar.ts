@@ -58,7 +58,8 @@ export function sessionStatusText(snapshot: CoreSnapshot): string | StyledText {
 
 export function shortcutText(context: ShortcutContext): string {
   const global = "Ctrl+C 退出"
-  if (context.status === "running" || context.status === "aborting") return `Esc 中止 | ${global}`
+  if (context.status === "running" || context.status === "compacting" || context.status === "aborting")
+    return `Esc 中止 | ${global}`
   if (context.status === "authenticating") return `Esc 取消认证 | ${global}`
   if (context.status === "refreshing") return `请等待刷新完成 | ${global}`
   if (!context.hasSession) return `↑/↓ 选择 | Enter 确认 | Esc 返回 | ${global}`

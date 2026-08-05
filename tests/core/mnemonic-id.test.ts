@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { WordTripletIdGenerator } from "../../packages/core/mnemonic-id.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 test("助记 ID 使用主谓宾三段格式", () => {
   const values = [21, 0, 3]

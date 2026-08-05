@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -8,6 +9,8 @@ import type { ModelReference } from "../../packages/core/session-format.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { startMockServer } from "../utils/mock-server.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 30_000 })
 
 const directories: string[] = []
 
@@ -132,7 +135,7 @@ test("真实 pi 链路完成两轮并恢复第三轮", async () => {
   } finally {
     mock.stop()
   }
-}, 30000)
+})
 
 test("真实 pi 链路将权限拒绝结果返回模型", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-"))
@@ -177,7 +180,7 @@ test("真实 pi 链路将权限拒绝结果返回模型", async () => {
   } finally {
     mock.stop()
   }
-}, 30000)
+})
 
 test("真实 pi 链路统一提交同一消息中的多工具人工审批", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-batch-"))
@@ -235,7 +238,7 @@ test("真实 pi 链路统一提交同一消息中的多工具人工审批", asyn
   } finally {
     mock.stop()
   }
-}, 30000)
+})
 
 test("批次提交后中止会保留已完成项并停止运行项", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-batch-abort-"))
@@ -360,7 +363,7 @@ test("批次提交后中止会保留已完成项并停止运行项", async () =>
   } finally {
     mock.stop()
   }
-}, 30000)
+})
 
 test("真实 pi 链路执行项目自有联合注册工具", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-registered-tool-"))
@@ -440,7 +443,7 @@ test("真实 pi 链路执行项目自有联合注册工具", async () => {
   } finally {
     mock.stop()
   }
-}, 30000)
+})
 
 test("真实 pi 链路并行完成主回复和工具式自动命名", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-"))
@@ -489,4 +492,4 @@ test("真实 pi 链路并行完成主回复和工具式自动命名", async () =
   } finally {
     mock.stop()
   }
-}, 30000)
+})

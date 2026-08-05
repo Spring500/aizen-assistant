@@ -1,5 +1,8 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { prepareMarkdownForTerminal } from "../../packages/tui-kit/markdown.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 test("终端 Markdown 把行内和块公式转换为 Unicode 近似形式", () => {
   const source = [

@@ -13,7 +13,7 @@ import { workingDirectoryChangeText } from "./session-projection.ts"
 import type { HumanReviewRequest, PermissionMode } from "./tool-permissions/types.ts"
 import type { SessionSummary } from "./session-store.ts"
 
-export type CoreStatus = "idle" | "running" | "aborting" | "authenticating" | "refreshing" | "error"
+export type CoreStatus = "idle" | "running" | "compacting" | "aborting" | "authenticating" | "refreshing" | "error"
 
 export type TranscriptEntry =
   | { type: "environment"; recordId: string; text: string }
@@ -86,6 +86,7 @@ export type CoreCommand =
   | { type: "rewind"; turnId: string }
   | { type: "fork_session"; turnId: string }
   | { type: "send_prompt"; text: string }
+  | { type: "compact"; customInstructions?: string }
   | { type: "abort" }
   | { type: "list_models" }
   | { type: "load_model_config" }
