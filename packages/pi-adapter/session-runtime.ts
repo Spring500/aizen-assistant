@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs"
 import { join } from "node:path"
+import { builtinModels } from "@earendil-works/pi-ai/providers/all"
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core"
 import {
   type Api,
@@ -26,8 +27,11 @@ import {
 } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 import { ModelConfigStore, type ModelThinkingConfig } from "../core/model-config-store.ts"
+import { PiProviderStore } from "../core/pi-provider-store.ts"
 import type {
   AuthProviderOption,
+  PiProviderOption,
+  ProviderAuthType,
   ModelOption,
   ModelRuntimeInfo,
   PiCreateInput,
@@ -51,10 +55,14 @@ import { permissionFailureMessage } from "./permission-failure.ts"
 import { PiPermissionReviewer } from "./permission-reviewer.ts"
 import { generateSessionTitle } from "./session-title-generator.ts"
 import { normalizeToolFailure } from "./tool-failure.ts"
+import { PiCredentialStore, PiModelsCacheStore } from "./pi-stores.ts"
+import { PiProviderRuntime } from "./provider-runtime.ts"
 
 export type PiSessionRuntimeOptions = {
   authPath: string
-  modelsPath: string | null
+  customProvidersPath: string | null
+  piProvidersPath?: string
+  piModelsCachePath?: string
 }
 
 const piThinkingLevels = ["minimal", "low", "medium", "high", "xhigh", "max"] as const
@@ -76,7 +84,7 @@ type PermissionBatchState = {
 }
 
 /**
- * 为当前内存会话复制模型配置，避免重新读取 models.json 时改动正在使用的对象。
+ * 为当前内存会话复制模型配置，避免重新读取 custom-providers.json 时改动正在使用的对象。
  * 请求开始后，pi 会把该对象、思考档位、消息和工具保存在本次请求使用的内存状态中。
  */
 function runtimeModel(model: Model<Api>, config: RuntimeThinkingConfig, baseUrl?: string): Model<Api> {
@@ -413,7 +421,9 @@ function registeredTools(
 
 export class PiSessionRuntime implements PiPort {
   readonly #modelRuntime: ModelRuntime
-  readonly #modelsPath: string | null
+  readonly #customProvidersPath: string | null
+  readonly #piProviderRuntime: PiProviderRuntime | undefined
+  readonly #piProviderStore: PiProviderStore | undefined
   readonly #listeners = new Set<(event: PiPortEvent) => void>()
   #thinkingConfigs = new Map<string, ModelThinkingConfig | null>()
   #modelBaseUrls = new Map<string, string>()
@@ -441,16 +451,38 @@ export class PiSessionRuntime implements PiPort {
   #toolTimings = new Map<string, { startedAt: number; finishedAt: number }>()
   #toolBatchSequence = 0
 
-  private constructor(modelRuntime: ModelRuntime, modelsPath: string | null) {
+  private constructor(
+    modelRuntime: ModelRuntime,
+    customProvidersPath: string | null,
+    piProviderRuntime?: PiProviderRuntime,
+    piProviderStore?: PiProviderStore,
+  ) {
     this.#modelRuntime = modelRuntime
-    this.#modelsPath = modelsPath
+    this.#customProvidersPath = customProvidersPath
+    this.#piProviderRuntime = piProviderRuntime
+    this.#piProviderStore = piProviderStore
   }
 
   static async create(options: PiSessionRuntimeOptions): Promise<PiSessionRuntime> {
-    const runtime = new PiSessionRuntime(
-      await ModelRuntime.create({ ...options, allowModelNetwork: false }),
-      options.modelsPath,
-    )
+    let runtime!: PiSessionRuntime
+    const modelRuntime = await ModelRuntime.create({
+      credentials: new PiCredentialStore(options.authPath),
+      modelsPath: options.customProvidersPath,
+      ...(options.piModelsCachePath ? { modelsStore: new PiModelsCacheStore(options.piModelsCachePath) } : {}),
+      allowModelNetwork: false,
+    })
+    const providerStore = options.piProvidersPath ? new PiProviderStore(options.piProvidersPath) : undefined
+    const providerRuntime = providerStore
+      ? new PiProviderRuntime(
+          builtinModels({
+            credentials: new PiCredentialStore(options.authPath),
+            ...(options.piModelsCachePath ? { modelsStore: new PiModelsCacheStore(options.piModelsCachePath) } : {}),
+          }),
+          providerStore,
+          (event) => runtime.#emit(event),
+        )
+      : undefined
+    runtime = new PiSessionRuntime(modelRuntime, options.customProvidersPath, providerRuntime, providerStore)
     await runtime.#reloadModelConfigs()
     return runtime
   }
@@ -481,6 +513,11 @@ export class PiSessionRuntime implements PiPort {
       throw new Error("生成或执行工具期间不能重建会话")
     const sourceModel = this.#modelRuntime.getModel(input.model.providerId, input.model.modelId)
     if (!sourceModel) throw new PiModelRuntimeError(`找不到模型：${input.model.providerId}/${input.model.modelId}`)
+    if (
+      this.#piProviderRuntime?.isBuiltin(input.model.providerId) &&
+      !(await this.#piProviderRuntime.isEnabled(input.model.providerId))
+    )
+      throw new PiModelRuntimeError(`pi 供应商未启用：${input.model.providerId}`)
     const modelKey = `${sourceModel.provider}\0${sourceModel.id}`
     const thinkingConfig = this.#thinkingConfigs.get(modelKey)
     const model = runtimeModel(sourceModel, thinkingConfig, this.#modelBaseUrls.get(modelKey))
@@ -830,7 +867,7 @@ export class PiSessionRuntime implements PiPort {
       throw new Error("生成或执行工具期间不能重新加载模型配置")
     await this.#modelRuntime.reloadConfig()
     const configError = this.#modelRuntime.getError()
-    if (configError) throw new Error(`models.json 配置错误：${configError}`)
+    if (configError) throw new Error(`custom-providers.json 配置错误：${configError}`)
     await this.#reloadModelConfigs()
     if (this.#modelConfigError) throw this.#modelConfigError
   }
@@ -840,6 +877,7 @@ export class PiSessionRuntime implements PiPort {
     const available = new Set(
       (await this.#modelRuntime.getAvailable()).map((model) => `${model.provider}\0${model.id}`),
     )
+    const enabledPiProviders = this.#piProviderRuntime ? await this.#piProviderRuntime.enabledProviderIds() : undefined
     return this.#modelRuntime.getModels().map((model) => {
       const configured = this.#thinkingConfigs.get(`${model.provider}\0${model.id}`)
       const builtin = configured === undefined
@@ -856,7 +894,12 @@ export class PiSessionRuntime implements PiPort {
             : {}),
         name: model.name,
         contextWindow: model.contextWindow,
-        available: available.has(`${model.provider}\0${model.id}`),
+        available:
+          available.has(`${model.provider}\0${model.id}`) &&
+          (enabledPiProviders === undefined ||
+            !this.#piProviderRuntime?.isBuiltin(model.provider) ||
+            enabledPiProviders.has(model.provider)),
+
         ...(configured
           ? {
               thinkingLevels: [...configured.thinkingLevels],
@@ -903,6 +946,28 @@ export class PiSessionRuntime implements PiPort {
     }))
   }
 
+  async listProviders(): Promise<PiProviderOption[]> {
+    if (!this.#piProviderRuntime) return []
+    return this.#piProviderRuntime.list()
+  }
+
+  async setProviderEnabled(providerId: string, enabled: boolean): Promise<void> {
+    if (!this.#piProviderRuntime || !this.#piProviderStore) throw new Error("当前运行模式不支持 pi 供应商管理")
+    if (!enabled && this.#session?.model?.provider === providerId)
+      throw new Error("不能停用当前会话正在使用的 pi 供应商")
+    await this.#piProviderRuntime.setEnabled(providerId, enabled)
+  }
+
+  async refreshProvider(providerId: string, signal?: AbortSignal): Promise<void> {
+    if (!this.#piProviderRuntime) throw new Error("当前运行模式不支持 pi 供应商管理")
+    await this.#piProviderRuntime.refresh(providerId, signal)
+  }
+
+  async loginProvider(providerId: string, authType: ProviderAuthType): Promise<void> {
+    if (!this.#piProviderRuntime) throw new Error("当前运行模式不支持 pi 供应商管理")
+    await this.#piProviderRuntime.login(providerId, authType)
+  }
+
   async loginApiKey(providerId: string): Promise<void> {
     if (this.#authAbortController) throw new Error("已有认证流程正在运行")
     const controller = new AbortController()
@@ -927,6 +992,7 @@ export class PiSessionRuntime implements PiPort {
   }
 
   answerAuthPrompt(promptId: string, value: string): void {
+    if (this.#piProviderRuntime?.answer(promptId, value)) return
     const pending = this.#authAnswers.get(promptId)
     if (!pending) throw new Error("当前没有等待回答的认证提示")
     this.#authAnswers.delete(promptId)
@@ -934,6 +1000,7 @@ export class PiSessionRuntime implements PiPort {
   }
 
   cancelAuth(): void {
+    this.#piProviderRuntime?.cancel()
     this.#authAbortController?.abort()
     for (const pending of this.#authAnswers.values()) pending.reject(new Error("认证已取消"))
     this.#authAnswers.clear()
@@ -990,7 +1057,7 @@ export class PiSessionRuntime implements PiPort {
   }
 
   /**
-   * 历史 model_changed 只保留“这里曾切换模型”的记录，不按当前 models.json
+   * 历史 model_changed 只保留“这里曾切换模型”的记录，不按当前 custom-providers.json
    * 校验其中的旧思考档位。只有下一次实际发送所用的模型和档位由 #start 严格校验。
    */
   #restoreEntries(sessionManager: SessionManager, records: SessionRecord[]): void {
@@ -1052,9 +1119,9 @@ export class PiSessionRuntime implements PiPort {
     this.#thinkingConfigs.clear()
     this.#modelBaseUrls.clear()
     this.#modelConfigError = undefined
-    if (!this.#modelsPath) return
+    if (!this.#customProvidersPath) return
     try {
-      const snapshot = await new ModelConfigStore(this.#modelsPath).read()
+      const snapshot = await new ModelConfigStore(this.#customProvidersPath).read()
       for (const provider of snapshot.providers) {
         for (const model of provider.models) {
           const modelKey = `${provider.id}\0${model.id}`

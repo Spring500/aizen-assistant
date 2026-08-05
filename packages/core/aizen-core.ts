@@ -128,6 +128,7 @@ export class AizenCore implements CorePort {
       preferences: structuredClone(defaultAppPreferences),
       views: [],
       authProviders: [],
+      piProviders: [],
       transcript: [],
       activeTools: [],
       pendingPermissionRequests: [],
@@ -212,6 +213,7 @@ export class AizenCore implements CorePort {
           break
         case "list_models":
           this.#snapshot.models = await this.#pi.listModels()
+          if (this.#pi.listProviders) this.#snapshot.piProviders = await this.#pi.listProviders()
           break
         case "load_model_config":
           this.#snapshot.modelConfig = await this.#requireModelConfigStore().read()
@@ -254,6 +256,39 @@ export class AizenCore implements CorePort {
           break
         case "list_auth_providers":
           this.#snapshot.authProviders = await this.#pi.listAuthProviders()
+          break
+        case "list_pi_providers":
+          if (!this.#pi.listProviders) throw new Error("当前运行模式不支持 pi 供应商管理")
+          this.#snapshot.piProviders = await this.#pi.listProviders()
+          break
+        case "set_pi_provider_enabled":
+          if (!this.#pi.setProviderEnabled) throw new Error("当前运行模式不支持 pi 供应商管理")
+          await this.#pi.setProviderEnabled(command.providerId, command.enabled)
+          this.#snapshot.piProviders = (await this.#pi.listProviders?.()) ?? []
+          if (this.#snapshot.currentSessionId) await this.#tryActivateCurrentRecords()
+          break
+        case "refresh_pi_provider":
+          if (!this.#pi.refreshProvider) throw new Error("当前运行模式不支持 pi 供应商管理")
+          this.#snapshot.status = "refreshing"
+          this.#notify()
+          try {
+            await this.#pi.refreshProvider(command.providerId)
+          } finally {
+            this.#snapshot.status = "idle"
+          }
+          this.#snapshot.models = await this.#pi.listModels()
+          this.#snapshot.piProviders = (await this.#pi.listProviders?.()) ?? []
+          break
+        case "login_pi_provider":
+          if (!this.#pi.loginProvider) throw new Error("当前运行模式不支持 pi 供应商管理")
+          this.#snapshot.status = "authenticating"
+          this.#notify()
+          try {
+            await this.#pi.loginProvider(command.providerId, command.authType)
+          } finally {
+            this.#snapshot.status = "idle"
+          }
+          this.#snapshot.piProviders = (await this.#pi.listProviders?.()) ?? []
           break
         case "create_session":
           await this.#createSession(
@@ -1140,7 +1175,16 @@ export class AizenCore implements CorePort {
         })
       return
     }
-    if (event.type === "text_delta") this.#snapshot.streamingText += event.delta
+    if (event.type === "auth_notice") {
+      for (const listener of this.#listeners)
+        listener({
+          type: "auth_notice",
+          message: event.message,
+          ...(event.links ? { links: event.links.map((link) => ({ ...link })) } : {}),
+          ...(event.deviceCode ? { deviceCode: { ...event.deviceCode } } : {}),
+        })
+      return
+    }
     if (event.type === "thinking_delta") this.#snapshot.streamingThinking += event.delta
     if (event.type === "usage_updated") {
       if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.outputTokens = event.outputTokens

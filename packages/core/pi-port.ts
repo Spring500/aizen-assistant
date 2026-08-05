@@ -44,6 +44,18 @@ export type AuthProviderOption = {
 
 export type AuthPromptOption = { id: string; label: string; description?: string }
 
+export type ProviderAuthType = "api_key" | "oauth"
+
+export type PiProviderOption = {
+  id: string
+  name: string
+  enabled: boolean
+  configured: boolean
+  authTypes: ProviderAuthType[]
+  modelCount: number
+  canRefresh: boolean
+}
+
 export type PiPortEvent =
   | { type: "text_delta"; delta: string }
   | { type: "thinking_delta"; delta: string }
@@ -71,7 +83,12 @@ export type PiPortEvent =
       placeholder?: string
       options?: AuthPromptOption[]
     }
-  | { type: "auth_notice"; message: string }
+  | {
+      type: "auth_notice"
+      message: string
+      links?: Array<{ url: string; label?: string }>
+      deviceCode?: { userCode: string; verificationUri: string; expiresInSeconds?: number }
+    }
 
 export type PiCreateInput = {
   cwd: string
@@ -141,6 +158,14 @@ export interface PiPort {
 
   listAuthProviders(): Promise<AuthProviderOption[]>
   loginApiKey(providerId: string): Promise<void>
+  /** 返回 pi 供应商管理所需的完整目录。 */
+  listProviders?(): Promise<PiProviderOption[]>
+  /** 持久化启用或停用 pi 供应商。 */
+  setProviderEnabled?(providerId: string, enabled: boolean): Promise<void>
+  /** 手动刷新一个 pi 供应商的动态模型目录。 */
+  refreshProvider?(providerId: string, signal?: AbortSignal): Promise<void>
+  /** 执行 pi 供应商指定的认证方式。 */
+  loginProvider?(providerId: string, authType: ProviderAuthType): Promise<void>
   answerAuthPrompt(promptId: string, value: string): void
   cancelAuth(): void
   subscribe(listener: (event: PiPortEvent) => void): () => void
