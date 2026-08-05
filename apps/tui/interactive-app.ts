@@ -20,6 +20,7 @@ import { readViewConfig, writeViewConfig, type ProjectSources } from "../../pack
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
+import { cycleMenu } from "../../packages/tui-kit/cycle-menu.ts"
 import { selectEditableItem } from "../../packages/tui-kit/editable-selector.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { editInline } from "../../packages/tui-kit/inline-input.ts"
@@ -419,73 +420,151 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
+  /**
+   * 视图操作页：停留在页面内完成全部操作。配置项用 ←/→ 直接循环切换并实时写入，
+   * 编辑文件与打开目录后回到原光标位置，只有移除/删除才会离开本页。
+   */
   async function manageView(viewId: string) {
     const viewItem = core.getSnapshot().views.find((item) => item.id === viewId)
     if (!viewItem) return
-    const action = await selectEditableItem(
-      overlays,
-      "view-action",
-      () => [
+    const read = await readViewConfig(viewItem.directory)
+    if (read.error) await showError("视图配置", read.error)
+    const config = read.config
+
+    const projectSourceOptions: ReadonlyArray<{ value: ProjectSources; label: string }> = [
+      { value: "none", label: "不读取" },
+      { value: "pi-default", label: "pi 默认" },
+      { value: "git-root", label: "git 根" },
+    ]
+    const projectSourceLabel = (value: ProjectSources) =>
+      projectSourceOptions.find((item) => item.value === value)?.label ?? value
+
+    await cycleMenu(overlays, "view-settings-page", {
+      title: `管理视图 · ${viewItem.name}`,
+      signal: interactionController.signal,
+      onError: (kind, message) => showError(kind === "cycle" ? "视图配置" : "操作失败", message),
+      rows: [
         {
-          name: `名称  ${viewItem.name}`,
-          description: "视图显示名称",
-          value: "edited",
-          edit: {
-            label: "名称  ",
-            value: viewItem.name,
-            validate: (value) => (value.trim() ? undefined : "视图名称不能为空"),
-            save: async (value) => {
-              await dispatchWithError({ type: "update_view", viewId, name: value.trim() }, "更新视图失败")
-              viewItem.name = value.trim()
-            },
+          kind: "cycle",
+          label: () => `项目上下文边界  [${projectSourceLabel(config.projectSources)}]`,
+          hint: "←/→ 切换；读取项目 AGENTS.md 与技能的冒泡边界",
+          cycle: async (direction) => {
+            const index = projectSourceOptions.findIndex((item) => item.value === config.projectSources)
+            const next =
+              projectSourceOptions[(index + direction + projectSourceOptions.length) % projectSourceOptions.length]
+            if (!next) return
+            config.projectSources = next.value
+            await writeViewConfig(viewItem.directory, config)
           },
         },
         {
-          name: `目录路径  ${viewItem.path}`,
-          description: "视图资源所在目录",
-          value: "edited",
-          edit: {
-            label: "目录路径  ",
-            value: viewItem.path,
-            validate: (value) => (value.trim() ? undefined : "目录路径不能为空"),
-            save: async (value) => {
-              await dispatchWithError({ type: "update_view", viewId, path: value.trim() }, "更新视图失败")
-              viewItem.path = value.trim()
-            },
+          kind: "cycle",
+          label: () => `个人技能  [${config.loadUserSkills ? "加载" : "不加载"}]`,
+          hint: "←/→ 切换；是否加载已安装的个人技能",
+          cycle: async () => {
+            config.loadUserSkills = !config.loadUserSkills
+            await writeViewConfig(viewItem.directory, config)
           },
         },
-        { name: "编辑 SYSTEM.md", description: "不存在时自动创建", value: "system" },
-        { name: "编辑 AGENTS.md", description: "不存在时自动创建", value: "agents" },
-        { name: "打开 Skills 目录", description: viewItem.directory, value: "skills" },
-        { name: "编辑行为配置", description: "项目上下文边界与个人技能开关", value: "config" },
-        { name: "移除注册", description: "保留视图目录和文件", value: "remove" },
-        { name: "删除视图目录", description: "同时删除注册和目录，需要再次确认", value: "delete" },
+        {
+          kind: "action",
+          label: () => `名称  ${viewItem.name}`,
+          hint: "Enter 重命名",
+          action: async () => {
+            const value = await promptText("view-name", "重命名视图", "名称  ", viewItem.name)
+            if (value === undefined) return false
+            const trimmed = value.trim()
+            if (!trimmed) {
+              await showError("视图名称", "名称不能为空")
+              return false
+            }
+            const result = await dispatchWithError({ type: "update_view", viewId, name: trimmed }, "更新视图失败")
+            if (result.ok) viewItem.name = trimmed
+            return false
+          },
+        },
+        {
+          kind: "action",
+          label: () => `目录路径  ${viewItem.path}`,
+          hint: "Enter 修改",
+          action: async () => {
+            const value = await promptText("view-path", "修改视图目录", "目录路径  ", viewItem.path)
+            if (value === undefined) return false
+            const trimmed = value.trim()
+            if (!trimmed) {
+              await showError("目录路径", "路径不能为空")
+              return false
+            }
+            const result = await dispatchWithError({ type: "update_view", viewId, path: trimmed }, "更新视图失败")
+            if (result.ok) viewItem.path = trimmed
+            return false
+          },
+        },
+        {
+          kind: "action",
+          label: () => "编辑 SYSTEM.md",
+          hint: "不存在时自动创建",
+          action: async () => {
+            const ensured = await dispatchWithError(
+              { type: "ensure_view_file", viewId, name: "SYSTEM.md" },
+              "创建视图文件失败",
+            )
+            if (ensured.ok) await openExternalEditor(join(viewItem.directory, "SYSTEM.md"))
+            return false
+          },
+        },
+        {
+          kind: "action",
+          label: () => "编辑 AGENTS.md",
+          hint: "不存在时自动创建",
+          action: async () => {
+            const ensured = await dispatchWithError(
+              { type: "ensure_view_file", viewId, name: "AGENTS.md" },
+              "创建视图文件失败",
+            )
+            if (ensured.ok) await openExternalEditor(join(viewItem.directory, "AGENTS.md"))
+            return false
+          },
+        },
+        {
+          kind: "action",
+          label: () => "打开 Skills 目录",
+          hint: viewItem.directory,
+          action: async () => {
+            await (options.testing?.openDirectory ?? openDirectory)(join(viewItem.directory, "skills"))
+            return false
+          },
+        },
+        {
+          kind: "action",
+          label: () => "移除注册",
+          hint: "保留视图目录和文件",
+          action: async () => {
+            await dispatchWithError({ type: "remove_view", viewId }, "移除视图失败")
+            return true
+          },
+        },
+        {
+          kind: "action",
+          label: () => "删除视图目录",
+          hint: "同时删除注册和目录，需要再次确认",
+          action: async () => {
+            const confirmed = await selectItem(
+              overlays,
+              "view-delete-confirm",
+              [
+                { name: "确认删除", description: viewItem.directory, value: true },
+                { name: "取消", description: "不做修改", value: false },
+              ],
+              { title: `永久删除视图 ${viewItem.name}？`, signal: interactionController.signal },
+            )
+            if (confirmed)
+              await dispatchWithError({ type: "remove_view", viewId, deleteDirectory: true }, "删除视图失败")
+            return true
+          },
+        },
       ],
-      { title: `管理视图 · ${viewItem.name}`, signal: interactionController.signal },
-    )
-    if (action === "edited") return manageView(viewId)
-    if (action === "system" || action === "agents") {
-      const name = action === "system" ? "SYSTEM.md" : "AGENTS.md"
-      const ensured = await dispatchWithError({ type: "ensure_view_file", viewId, name }, "创建视图文件失败")
-      if (ensured.ok) await openExternalEditor(join(viewItem.directory, name))
-    } else if (action === "skills") {
-      await (options.testing?.openDirectory ?? openDirectory)(join(viewItem.directory, "skills"))
-    } else if (action === "config") {
-      await editViewConfig(viewItem)
-    } else if (action === "remove") {
-      await dispatchWithError({ type: "remove_view", viewId }, "移除视图失败")
-    } else if (action === "delete") {
-      const confirmed = await selectItem(
-        overlays,
-        "view-delete-confirm",
-        [
-          { name: "确认删除", description: viewItem.directory, value: true },
-          { name: "取消", description: "不做修改", value: false },
-        ],
-        { title: `永久删除视图 ${viewItem.name}？`, signal: interactionController.signal },
-      )
-      if (confirmed) await dispatchWithError({ type: "remove_view", viewId, deleteDirectory: true }, "删除视图失败")
-    }
+    })
   }
 
   async function promptText(
@@ -506,42 +585,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     const value = await editInline(overlays, handle, { id: `${id}-input`, label, placeholder })
     handle.close(value)
     return value
-  }
-
-  async function editViewConfig(viewItem: { directory: string }): Promise<void> {
-    beginInteraction()
-    try {
-      const read = await readViewConfig(viewItem.directory)
-      if (read.error) await showError("视图配置", read.error)
-      const projectSources = await selectItem<ProjectSources>(
-        overlays,
-        "view-project-sources",
-        [
-          {
-            name: "不读取（当前）",
-            description: "不读取项目路径下的 AGENTS.md 和技能",
-            value: "none",
-          },
-          { name: "pi 默认", description: "AGENTS.md 冒泡到文件系统根，技能到 git 根", value: "pi-default" },
-          { name: "git 根", description: "AGENTS.md 与技能统一限定到 git 根", value: "git-root" },
-        ],
-        { title: "项目上下文边界", signal: interactionController.signal },
-      )
-      if (projectSources === undefined) return
-      const loadUserSkills = await selectItem<boolean>(
-        overlays,
-        "view-load-user-skills",
-        [
-          { name: "加载个人技能", description: "会话中加载已安装的个人技能", value: true },
-          { name: "不加载个人技能", description: "纯净视图，不混入个人技能", value: false },
-        ],
-        { title: "个人技能开关", signal: interactionController.signal },
-      )
-      if (loadUserSkills === undefined) return
-      await writeViewConfig(viewItem.directory, { projectSources, loadUserSkills })
-    } finally {
-      endInteraction()
-    }
   }
 
   async function manageSkills(): Promise<void> {
