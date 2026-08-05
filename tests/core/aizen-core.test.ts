@@ -1,6 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
@@ -13,10 +13,13 @@ import {
   type PiPortEvent,
   type PiRestoreInput,
   type PiSessionTitleInput,
+  type ResolvedViewResources,
 } from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
+import { SkillStore } from "../../packages/core/skill-store.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
+import { writeViewConfig } from "../../packages/core/view-config.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
@@ -210,6 +213,20 @@ class CompactingFakePi extends FakePi {
       listener({ type: "settled" })
     }
     this.prompts.push(input)
+  }
+}
+
+class RecordingViewFakePi extends FakePi {
+  views: ResolvedViewResources[] = []
+
+  override create = async (input: PiCreateInput) => {
+    this.views.push(input.view)
+    return model
+  }
+
+  override restore = async (input: PiRestoreInput) => {
+    this.views.push(input.view)
+    return model
   }
 }
 
@@ -1150,6 +1167,134 @@ describe("核心编排", () => {
     expect(finished).toMatchObject({ kind: "turn_finished", outcome: "failed" })
     expect(finished?.kind === "turn_finished" ? finished.error?.message : undefined).toBe("服务不可用")
     expect(core.getSnapshot().status).toBe("idle")
+    await core.dispose()
+  })
+})
+
+describe("视图装载资源组装", () => {
+  const model: ModelReference = {
+    providerId: "test",
+    modelId: "model",
+    api: "anthropic-messages",
+    thinkingLevel: "off",
+  }
+
+  /** 把固定仓库结构写到缓存目录的替身拉取，供用户层技能使用。 */
+  async function userSkillStore(root: string): Promise<SkillStore> {
+    const cacheDirectory = join(root, "user-cache")
+    const store = new SkillStore({
+      file: join(root, "skills.json"),
+      cacheDirectory,
+      fetchRepo: async (cacheDir: string) => {
+        await mkdir(join(cacheDir, "user", "userskill"), { recursive: true })
+        await writeFile(
+          join(cacheDir, "user", "userskill", "SKILL.md"),
+          "---\nname: userskill\ndescription: 用户技能\n---\n",
+        )
+      },
+    })
+    await store.discoverSource("https://example.com/skills.git")
+    await store.installSkill({
+      name: "userskill",
+      sourceUrl: "https://example.com/skills.git",
+      relPath: "user/userskill",
+    })
+    return store
+  }
+
+  test("无视图原生模式加载项目上下文与用户层技能", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const cwd = join(root, "project")
+    await mkdir(join(cwd, ".agents", "skills", "projskill"), { recursive: true })
+    await writeFile(join(cwd, "AGENTS.md"), "项目规则")
+    await writeFile(
+      join(cwd, ".agents", "skills", "projskill", "SKILL.md"),
+      "---\nname: projskill\ndescription: 项目技能\n---\n",
+    )
+    const pi = new RecordingViewFakePi()
+    const core = new AizenCore({
+      cwd,
+      store: new SessionStore(join(root, "sessions")),
+      pi,
+      skills: await userSkillStore(root),
+    })
+
+    expect(await core.dispatch({ type: "create_session", model, viewId: null })).toEqual({ ok: true })
+    const view = pi.views.at(-1)
+    expect(view?.viewId).toBeNull()
+    expect(view?.agentsFiles.map((file) => file.content)).toEqual(["项目规则"])
+    expect(view?.skillPaths.some((path) => path.replaceAll("\\", "/").includes(".agents/skills"))).toBe(true)
+    expect(view?.skillPaths.some((path) => path.endsWith("userskill"))).toBe(true)
+    await core.dispose()
+  })
+
+  test("视图按 projectSources 加载项目层，AGENTS.md 拼接在视图之后", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const cwd = join(root, "project")
+    await mkdir(cwd, { recursive: true })
+    const views = new ViewStore(join(root, "views.json"))
+    const view = await views.create({ id: "dev", name: "开发" })
+    await writeFile(join(view.directory, "AGENTS.md"), "视图规则")
+    await writeFile(join(cwd, "AGENTS.md"), "项目规则")
+    const pi = new RecordingViewFakePi()
+
+    const core = new AizenCore({ cwd, store: new SessionStore(join(root, "sessions")), pi, views })
+    expect(await core.dispatch({ type: "create_session", model, viewId: "dev" })).toEqual({ ok: true })
+    let resources = pi.views.at(-1)
+    expect(resources?.agentsFiles.map((file) => file.content)).toEqual(["视图规则"])
+    expect(resources?.skillPaths).toEqual([join(view.directory, "skills")])
+
+    await writeViewConfig(view.directory, { projectSources: "git-root", loadUserSkills: true })
+    expect(await core.dispatch({ type: "create_session", model, viewId: "dev" })).toEqual({ ok: true })
+    resources = pi.views.at(-1)
+    expect(resources?.agentsFiles.map((file) => file.content)).toEqual(["项目规则", "视图规则"])
+    await core.dispose()
+  })
+
+  test("loadUserSkills 关闭时视图不挂载用户层技能", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const cwd = join(root, "project")
+    await mkdir(cwd, { recursive: true })
+    const views = new ViewStore(join(root, "views.json"))
+    const view = await views.create({ id: "dev", name: "开发" })
+    await writeViewConfig(view.directory, { projectSources: "none", loadUserSkills: false })
+    const pi = new RecordingViewFakePi()
+
+    const core = new AizenCore({
+      cwd,
+      store: new SessionStore(join(root, "sessions")),
+      pi,
+      views,
+      skills: await userSkillStore(root),
+    })
+    expect(await core.dispatch({ type: "create_session", model, viewId: "dev" })).toEqual({ ok: true })
+    const resources = pi.views.at(-1)
+    expect(resources?.skillPaths.some((path) => path.includes("userskill"))).toBe(false)
+
+    await writeViewConfig(view.directory, { projectSources: "none", loadUserSkills: true })
+    expect(await core.dispatch({ type: "create_session", model, viewId: "dev" })).toEqual({ ok: true })
+    expect(pi.views.at(-1)?.skillPaths.some((path) => path.includes("userskill"))).toBe(true)
+    await core.dispose()
+  })
+
+  test("视图配置非法时按默认值继续并报告，不阻塞创建会话", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const cwd = join(root, "project")
+    await mkdir(cwd, { recursive: true })
+    const views = new ViewStore(join(root, "views.json"))
+    const view = await views.create({ id: "dev", name: "开发" })
+    await writeFile(join(view.directory, "config.json"), "{")
+    const pi = new RecordingViewFakePi()
+
+    const core = new AizenCore({ cwd, store: new SessionStore(join(root, "sessions")), pi, views })
+    expect(await core.dispatch({ type: "create_session", model, viewId: "dev" })).toEqual({ ok: true })
+    const resources = pi.views.at(-1)
+    expect(resources?.skillPaths).toEqual([join(view.directory, "skills")])
+    expect(core.getSnapshot().lastError).toContain("config.json 配置错误")
     await core.dispose()
   })
 })

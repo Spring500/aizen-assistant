@@ -36,6 +36,10 @@ describe("视图配置", () => {
     const created = await store.create({ id: "dev", name: "开发" })
     expect(created.directory).toBe(join(root, "views", "dev"))
     expect(await readFile(join(created.directory, "AGENTS.md"), "utf8")).toContain("视图说明")
+    expect(JSON.parse(await readFile(join(created.directory, "config.json"), "utf8"))).toEqual({
+      projectSources: "none",
+      loadUserSkills: true,
+    })
     expect((await store.list())[0]).toMatchObject({ id: "dev", valid: true })
     await store.remove("dev")
     expect(await store.list()).toEqual([])

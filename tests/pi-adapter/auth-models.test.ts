@@ -168,7 +168,7 @@ describe("认证与模型", () => {
       const model = (await runtime.listModels()).find((item) => item.modelId === "claude-test")
       expect(model).toBeDefined()
       if (!model) return
-      await runtime.create({ cwd: directory, model, view: { viewId: null } })
+      await runtime.create({ cwd: directory, model, view: { viewId: null, agentsFiles: [], skillPaths: [] } })
       await runtime.prompt({
         recordId: crypto.randomUUID(),
         turnId: crypto.randomUUID(),
@@ -263,7 +263,7 @@ describe("认证与模型", () => {
           api: "openai-completions",
           thinkingLevel: "标准",
         },
-        view: { viewId: null },
+        view: { viewId: null, agentsFiles: [], skillPaths: [] },
       })
       await runtime.prompt({
         recordId: crypto.randomUUID(),
