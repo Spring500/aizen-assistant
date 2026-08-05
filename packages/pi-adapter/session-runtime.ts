@@ -1,5 +1,3 @@
-import { existsSync, readFileSync } from "node:fs"
-import { join } from "node:path"
 import { builtinModels } from "@earendil-works/pi-ai/providers/all"
 import type { AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core"
 import {

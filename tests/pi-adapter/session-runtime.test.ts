@@ -371,7 +371,7 @@ describe("pi 内存会话", () => {
     ]
     const events: PiPortEvent[] = []
     runtime.subscribe((event) => events.push(event))
-    await runtime.restore({ cwd: directory, model, view: { viewId: null }, records })
+    await runtime.restore({ cwd: directory, model, view: emptyView, records })
     await runtime.compact("保留目标")
     expect(events).toContainEqual({
       type: "compaction",
@@ -451,7 +451,7 @@ describe("pi 内存会话", () => {
     ]
     const events: PiPortEvent[] = []
     runtime.subscribe((event) => events.push(event))
-    await runtime.restore({ cwd: directory, model, view: { viewId: null }, records })
+    await runtime.restore({ cwd: directory, model, view: emptyView, records })
     await runtime.prompt({
       recordId: "new-user",
       turnId: "new-turn",
@@ -477,7 +477,7 @@ describe("pi 内存会话", () => {
       await restored.restore({
         cwd: directory,
         model,
-        view: { viewId: null },
+        view: emptyView,
         records: [
           ...records,
           {
@@ -569,7 +569,7 @@ describe("pi 内存会话", () => {
     ]
     const events: PiPortEvent[] = []
     runtime.subscribe((event) => events.push(event))
-    await runtime.restore({ cwd: directory, model, view: { viewId: null }, records })
+    await runtime.restore({ cwd: directory, model, view: emptyView, records })
     await runtime.prompt({
       recordId: "overflow-user",
       turnId: "overflow-turn",

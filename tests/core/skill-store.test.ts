@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { parseSkillsValue, SkillStore } from "../../packages/core/skill-store.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const directories: string[] = []
 afterEach(async () => Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))))

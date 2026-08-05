@@ -1,4 +1,5 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -7,6 +8,8 @@ import { createTestRenderer } from "@opentui/core/testing"
 import { runInteractiveApp } from "../../apps/tui/interactive-app.ts"
 import { defaultAppPreferences } from "../../packages/core/app-preferences-store.ts"
 import type { CoreCommand, CoreEvent, CorePort, CoreSnapshot } from "../../packages/core/types.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const model = {
   providerId: "anthropic",
