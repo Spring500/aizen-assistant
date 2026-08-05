@@ -53,7 +53,12 @@ export type InteractiveAppOptions = {
   cwd: string
   dataDirectory: string
   collectPermissionGaps?: boolean
-  testing?: { renderer: TuiRenderer; core: CorePort }
+  testing?: {
+    renderer: TuiRenderer
+    core: CorePort
+    /** 覆盖目录打开实现，供测试注入可预期的失败或替身。 */
+    openDirectory?: (path: string) => Promise<void>
+  }
 }
 
 const authPromptLabels: Record<string, string> = {
@@ -464,7 +469,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       const ensured = await dispatchWithError({ type: "ensure_view_file", viewId, name }, "创建视图文件失败")
       if (ensured.ok) await openExternalEditor(join(viewItem.directory, name))
     } else if (action === "skills") {
-      await openDirectory(join(viewItem.directory, "skills"))
+      await (options.testing?.openDirectory ?? openDirectory)(join(viewItem.directory, "skills"))
     } else if (action === "config") {
       await editViewConfig(viewItem)
     } else if (action === "remove") {
@@ -1820,7 +1825,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   try {
     await dispatchWithError({ type: "load_preferences" }, "读取应用偏好失败")
     while (!exiting && !core.getSnapshot().currentSessionId) {
-      await chooseSession()
+      // 启动流程里的交互错误只提示、不让整个应用崩溃；失败后回到会话选择，而不是退出进程。
+      try {
+        await chooseSession()
+      } catch (error) {
+        await showError("操作失败", error instanceof Error ? error.message : String(error))
+      }
       if (!core.getSnapshot().currentSessionId) await Bun.sleep(50)
     }
     while (!exiting) {
