@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { selectMultiple } from "../../packages/tui-kit/multi-select.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 function key(sequence: string): KeyEvent {
   const parsed = parseKeypress(sequence)

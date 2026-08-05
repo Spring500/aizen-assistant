@@ -1,7 +1,10 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { ModelRuntime } from "@earendil-works/pi-coding-agent"
 import { PiPermissionReviewer } from "../../packages/pi-adapter/permission-reviewer.ts"
 import { startMockServer, type MockServer } from "../utils/mock-server.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const servers: MockServer[] = []
 afterEach(() => {

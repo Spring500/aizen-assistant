@@ -11,13 +11,28 @@ permissions:
 jobs:
   verify:
     runs-on: windows-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      - run: bun run verify
+      - name: 准备测试诊断工具
+        shell: powershell
+        run: ./scripts/ci/setup-test-diagnostics.ps1
+      - name: 运行完整验证
+        run: bun run verify
+        env:
+          AIZEN_TEST_DIAGNOSTICS_DIR: ${{ runner.temp }}/aizen-test-diagnostics
+      - name: 上传测试超时诊断
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: test-timeout-diagnostics
+          path: ${{ runner.temp }}/aizen-test-diagnostics
+          if-no-files-found: ignore
+          retention-days: 7
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: aizen-tui-windows-x64

@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { CoreErrorQueue } from "../../packages/core/error-queue.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 describe("核心错误队列", () => {
   test("并发上报不丢失且界面显示最新项", async () => {

@@ -1,6 +1,9 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../../utils/diagnostic-test.ts"
 import type { ToolPermissionRequest } from "../../../packages/core/tool-permissions/types.ts"
 import { createBashValidator } from "../../../packages/core/tool-permissions/validators/bash.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 function request(command: string): ToolPermissionRequest {
   return {

@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import type { ProviderConfigEntry } from "../../packages/core/model-config-store.ts"
 import type { AuthProviderOption, ModelOption } from "../../packages/core/pi-port.ts"
 import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const base = {
   api: "openai-completions",

@@ -1,7 +1,10 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 function emitKey(renderer: Awaited<ReturnType<typeof createTestRenderer>>["renderer"], raw: string): void {
   const parsed = parseKeypress(raw)

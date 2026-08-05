@@ -1,4 +1,5 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -11,6 +12,8 @@ import type {
   ToolPermissionRequest,
 } from "../../packages/core/tool-permissions/types.ts"
 import type { PiPermissionHandler, PiPort, PiPortEvent, PiPromptInput } from "../../packages/core/pi-port.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const directories: string[] = []
 const model: ModelReference = { providerId: "test", modelId: "model", api: "anthropic-messages" }

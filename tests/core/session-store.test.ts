@@ -1,10 +1,13 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { appendFile, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { MnemonicIdGenerator } from "../../packages/core/mnemonic-id.ts"
 import { sessionFileName } from "../../packages/core/session-file-name.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const temporaryDirectories: string[] = []
 

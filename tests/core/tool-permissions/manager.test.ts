@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
+import { createDiagnosticTest } from "../../utils/diagnostic-test.ts"
 import { ToolPermissionManager } from "../../../packages/core/tool-permissions/manager.ts"
 import { ToolPermissionRegistry } from "../../../packages/core/tool-permissions/registry.ts"
 import type {
@@ -7,6 +8,8 @@ import type {
   ToolPermissionDecision,
   ToolPermissionRequest,
 } from "../../../packages/core/tool-permissions/types.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const base: ToolPermissionRequest = {
   sessionId: "session",

@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { parseArguments, usage } from "../../apps/tui/args.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 describe("TUI 参数", () => {
   test("接受数据目录和权限缺口收集开关", () => {

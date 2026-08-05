@@ -1,6 +1,9 @@
-import { expect, test } from "bun:test"
+import { expect } from "bun:test"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { join } from "node:path"
 import { developmentArguments } from "../../scripts/dev/run-tui.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 test("开发命令默认使用 worktree 内的本地数据目录", () => {
   const root = "E:\\project\\worktree"
