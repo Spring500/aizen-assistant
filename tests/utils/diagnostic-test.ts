@@ -145,9 +145,12 @@ async function reportTimeout(testName: string, state: DiagnosticState, dumpProce
   )
 }
 
-function bunOptions(options: DiagnosticTestOptions): TestOptions {
+function bunOptions(options: DiagnosticTestOptions, businessTimeoutMs: number): TestOptions {
   return {
-    timeout: 0,
+    // 不能设 timeout: 0——bun 会把 0 当作"deadline 已过期"，其 auto_killer 会杀掉
+    // 该测试 spawn 的子进程（打印 "killed N dangling process"）。设成业务超时的两倍
+    // （下限 30s），让业务超时（带诊断报告）先触发，同时避免 auto_killer 误伤。
+    timeout: Math.max(businessTimeoutMs * 2, 30_000),
     ...(options.retry === undefined ? {} : { retry: options.retry }),
     ...(options.repeats === undefined ? {} : { repeats: options.repeats }),
   }
@@ -198,7 +201,7 @@ export function createDiagnosticTest(fileOptions: DiagnosticTestFileOptions): Di
           if (timer) clearTimeout(timer)
         }
       },
-      bunOptions(options),
+      bunOptions(options, testTimeoutMs),
     )
   }
 }
