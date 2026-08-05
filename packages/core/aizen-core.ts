@@ -277,8 +277,11 @@ export class AizenCore implements CorePort {
         case "send_prompt":
           await this.#sendPrompt(command.text)
           break
+        case "compact":
+          await this.#compact(command.customInstructions)
+          break
         case "abort":
-          if (this.#snapshot.status === "running") {
+          if (this.#snapshot.status === "running" || this.#snapshot.status === "compacting") {
             this.#abortRequested = true
             this.#snapshot.status = "aborting"
             this.#notify()
@@ -379,7 +382,12 @@ export class AizenCore implements CorePort {
     try {
       this.#sessionNamingAbort?.abort()
       this.#cancelPendingPermissions("核心已经关闭")
-      if (this.#snapshot.status === "running" || this.#snapshot.status === "aborting") await this.#pi.abort()
+      if (
+        this.#snapshot.status === "running" ||
+        this.#snapshot.status === "compacting" ||
+        this.#snapshot.status === "aborting"
+      )
+        await this.#pi.abort()
     } catch (error) {
       failure = error
     } finally {
@@ -866,6 +874,24 @@ export class AizenCore implements CorePort {
       if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.elapsedSeconds = this.#elapsedSeconds()
       delete this.#snapshot.responseMetrics
       this.#currentTurnId = undefined
+      this.#notify()
+    }
+  }
+
+  /** 手动压缩不创建对话轮次，压缩记录由 adapter 事件沿用现有写入链路。 */
+  async #compact(customInstructions?: string): Promise<void> {
+    const sessionId = this.#snapshot.currentSessionId
+    if (!sessionId) throw new Error("请先新建或恢复会话")
+    if (this.#writeError) throw new Error(`会话持久化异常，请重新打开会话：${this.#writeError.message}`)
+    if (this.#snapshot.runtimeIssue) throw new Error(this.#snapshot.runtimeIssue.message)
+    this.#snapshot.status = "compacting"
+    this.#notify()
+    try {
+      await this.#pi.compact(customInstructions)
+      await this.#writeQueue
+      if (this.#writeError) throw this.#writeError
+    } finally {
+      this.#snapshot.status = "idle"
       this.#notify()
     }
   }

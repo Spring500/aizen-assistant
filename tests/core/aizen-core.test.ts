@@ -31,6 +31,10 @@ class FakePi implements PiPort {
   refreshView = async () => {}
   switchView = async () => model
   generateSessionTitle = async (_input: PiSessionTitleInput) => "测试标题"
+  compactInstructions: Array<string | undefined> = []
+  compact = async (customInstructions?: string) => {
+    this.compactInstructions.push(customInstructions)
+  }
   abort = async () => {}
   listModels = async () => [{ ...model, name: "测试模型", available: true }]
   reloadModelConfig = async () => {}
@@ -1032,6 +1036,35 @@ describe("核心编排", () => {
     expect(restored.getSnapshot().contextUsage?.used).toBe(15)
     await core.dispose()
     await restored.dispose()
+  })
+
+  test("手动压缩不创建轮次并等待压缩记录落盘", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const pi = new FakePi()
+    const core = new AizenCore({ cwd: "E:\\project", store, pi })
+
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    const sessionId = core.getSnapshot().currentSessionId ?? ""
+    pi.compact = async (customInstructions?: string) => {
+      pi.compactInstructions.push(customInstructions)
+      for (const listener of pi.listeners)
+        listener({ type: "compaction", summary: "摘要", firstKeptRecordId: "first", tokensBefore: 120000 })
+    }
+    expect(await core.dispatch({ type: "compact", customInstructions: "保留决策" })).toEqual({ ok: true })
+    const loaded = await store.read(sessionId)
+    expect(pi.compactInstructions).toEqual(["保留决策"])
+    expect(loaded.records.filter((record) => record.kind === "turn_started")).toHaveLength(0)
+    expect(loaded.records).toContainEqual(
+      expect.objectContaining({
+        kind: "compaction",
+        summary: "摘要",
+        firstKeptRecordId: "first",
+        tokensBefore: 120000,
+      }),
+    )
+    await core.dispose()
   })
 
   test("上下文压缩只保存核心记录 ID", async () => {

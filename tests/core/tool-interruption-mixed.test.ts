@@ -18,6 +18,7 @@ class RestorePi implements PiPort {
   switchView = async () => model
   generateSessionTitle = async () => "标题"
   prompt = async () => {}
+  compact = async (_customInstructions?: string) => {}
   abort = async () => {}
   listModels = async () => []
   reloadModelConfig = async () => {}

@@ -3,6 +3,7 @@ import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import type { PiPortEvent } from "../../packages/core/pi-port.ts"
 import type { SessionRecord } from "../../packages/core/session-format.ts"
 import { convertToLlm, serializeConversation, SessionManager } from "@earendil-works/pi-coding-agent"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
@@ -283,6 +284,291 @@ describe("pi 内存会话", () => {
     expect(request).not.toContain("意外中断输入")
     expect(request).not.toContain("意外中断输出")
     await runtime.dispose()
+  })
+
+  test("手动压缩生成核心边界事件并重建上下文", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find(
+      (item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6",
+    )
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const mock = await startMockServer()
+    mock.handle((request) => ({
+      type: "text",
+      text: JSON.stringify(request.system).includes("context summarization assistant") ? "压缩摘要" : "完成",
+    }))
+    runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+    const records: SessionRecord[] = [
+      {
+        kind: "turn_started",
+        recordId: "old-user",
+        turnId: "old-turn",
+        at: "2026-07-23T10:00:00.000Z",
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "旧目标" }] }],
+      },
+      {
+        kind: "message",
+        recordId: "old-assistant",
+        turnId: "old-turn",
+        at: "2026-07-23T10:00:01.000Z",
+        message: {
+          role: "assistant",
+          parts: [{ kind: "text", text: "旧回复" }],
+          source: { providerId: model.providerId, modelId: model.modelId, api: model.api },
+          stopReason: "stop",
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+      {
+        kind: "turn_finished",
+        recordId: "old-finished",
+        turnId: "old-turn",
+        at: "2026-07-23T10:00:02.000Z",
+        outcome: "completed",
+      },
+      {
+        kind: "turn_started",
+        recordId: "recent-user",
+        turnId: "recent-turn",
+        at: "2026-07-23T10:01:00.000Z",
+        viewId: null,
+        items: [
+          {
+            source: "user",
+            role: "user",
+            useLater: true,
+            parts: [{ kind: "text", text: `近期内容${"x".repeat(80000)}` }],
+          },
+        ],
+      },
+      {
+        kind: "turn_finished",
+        recordId: "recent-finished",
+        turnId: "recent-turn",
+        at: "2026-07-23T10:01:01.000Z",
+        outcome: "completed",
+      },
+    ]
+    const events: PiPortEvent[] = []
+    runtime.subscribe((event) => events.push(event))
+    await runtime.restore({ cwd: directory, model, view: { viewId: null }, records })
+    await runtime.compact("保留目标")
+    expect(events).toContainEqual({
+      type: "compaction",
+      summary: "压缩摘要",
+      firstKeptRecordId: "recent-user",
+      tokensBefore: expect.any(Number),
+    })
+    await runtime.dispose()
+    mock.stop()
+  })
+
+  test("达到pi默认阈值时先自动压缩再发送下一轮", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find(
+      (item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6",
+    )
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const mock = await startMockServer()
+    mock.handle((request) => ({
+      type: "text",
+      text: JSON.stringify(request.system).includes("context summarization assistant") ? "自动摘要" : "新回复",
+    }))
+    runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+    const records: SessionRecord[] = [
+      {
+        kind: "turn_started",
+        recordId: "old-user",
+        turnId: "old-turn",
+        at: "2026-07-23T10:00:00.000Z",
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "应被替代的旧消息" }] }],
+      },
+      {
+        kind: "message",
+        recordId: "old-assistant",
+        turnId: "old-turn",
+        at: "2026-07-23T10:00:01.000Z",
+        message: {
+          role: "assistant",
+          parts: [{ kind: "text", text: "旧回复" }],
+          source: { providerId: model.providerId, modelId: model.modelId, api: model.api },
+          stopReason: "stop",
+          usage: { input: model.contextWindow ?? 1000000, output: 1, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+      {
+        kind: "turn_finished",
+        recordId: "old-finished",
+        turnId: "old-turn",
+        at: "2026-07-23T10:00:02.000Z",
+        outcome: "completed",
+      },
+      {
+        kind: "turn_started",
+        recordId: "recent-user",
+        turnId: "recent-turn",
+        at: "2026-07-23T10:01:00.000Z",
+        viewId: null,
+        items: [
+          {
+            source: "user",
+            role: "user",
+            useLater: true,
+            parts: [{ kind: "text", text: `近期内容${"x".repeat(80000)}` }],
+          },
+        ],
+      },
+      {
+        kind: "turn_finished",
+        recordId: "recent-finished",
+        turnId: "recent-turn",
+        at: "2026-07-23T10:01:01.000Z",
+        outcome: "completed",
+      },
+    ]
+    const events: PiPortEvent[] = []
+    runtime.subscribe((event) => events.push(event))
+    await runtime.restore({ cwd: directory, model, view: { viewId: null }, records })
+    await runtime.prompt({
+      recordId: "new-user",
+      turnId: "new-turn",
+      viewId: null,
+      items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "新问题" }] }],
+    })
+    expect(events.some((event) => event.type === "compaction" && event.summary === "自动摘要")).toBe(true)
+    const requests = await mock.requests()
+    expect(requests).toHaveLength(2)
+    expect(JSON.stringify(requests[1])).toContain("自动摘要")
+    expect(JSON.stringify(requests[1])).not.toContain("应被替代的旧消息")
+    expect(JSON.stringify(requests[1])).toContain("新问题")
+    const compacted = events.find((event) => event.type === "compaction")
+    expect(compacted?.type).toBe("compaction")
+    await runtime.dispose()
+    if (compacted?.type === "compaction") {
+      const restored = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath: null })
+      await restored.setRuntimeApiKey(model.providerId, "test-key")
+      restored.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+      await restored.restore({
+        cwd: directory,
+        model,
+        view: { viewId: null },
+        records: [
+          ...records,
+          {
+            kind: "compaction",
+            recordId: "compaction-record",
+            at: "2026-07-23T10:02:00.000Z",
+            summary: compacted.summary,
+            firstKeptRecordId: compacted.firstKeptRecordId,
+            tokensBefore: compacted.tokensBefore,
+          },
+        ],
+      })
+      await restored.prompt({
+        recordId: "restored-user",
+        turnId: "restored-turn",
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "恢复后问题" }] }],
+      })
+      const restoredRequest = (await mock.requests()).at(-1)
+      expect(JSON.stringify(restoredRequest)).toContain("自动摘要")
+      expect(JSON.stringify(restoredRequest)).not.toContain("应被替代的旧消息")
+      expect(JSON.stringify(restoredRequest)).toContain("恢复后问题")
+      await restored.dispose()
+    }
+    mock.stop()
+  })
+
+  test("上下文溢出时压缩并只重试一次且保留当轮临时输入", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find(
+      (item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6",
+    )
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const mock = await startMockServer()
+    let conversationRequests = 0
+    mock.handle((request) => {
+      if (JSON.stringify(request.system).includes("context summarization assistant"))
+        return { type: "text", text: "溢出摘要" }
+      conversationRequests++
+      if (conversationRequests === 1)
+        return {
+          type: "http_error",
+          status: 400,
+          body: { type: "error", error: { type: "invalid_request_error", message: "prompt is too long" } },
+        }
+      return { type: "text", text: "重试成功" }
+    })
+    runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+    const records: SessionRecord[] = [
+      {
+        kind: "turn_started",
+        recordId: "old-user",
+        turnId: "old-turn",
+        at: "2026-07-23T10:00:00.000Z",
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "旧消息" }] }],
+      },
+      {
+        kind: "turn_finished",
+        recordId: "old-finished",
+        turnId: "old-turn",
+        at: "2026-07-23T10:00:01.000Z",
+        outcome: "completed",
+      },
+      {
+        kind: "turn_started",
+        recordId: "recent-user",
+        turnId: "recent-turn",
+        at: "2026-07-23T10:01:00.000Z",
+        viewId: null,
+        items: [
+          {
+            source: "user",
+            role: "user",
+            useLater: true,
+            parts: [{ kind: "text", text: `近期内容${"x".repeat(80000)}` }],
+          },
+        ],
+      },
+      {
+        kind: "turn_finished",
+        recordId: "recent-finished",
+        turnId: "recent-turn",
+        at: "2026-07-23T10:01:01.000Z",
+        outcome: "completed",
+      },
+    ]
+    const events: PiPortEvent[] = []
+    runtime.subscribe((event) => events.push(event))
+    await runtime.restore({ cwd: directory, model, view: { viewId: null }, records })
+    await runtime.prompt({
+      recordId: "overflow-user",
+      turnId: "overflow-turn",
+      viewId: null,
+      items: [
+        { source: "memory", role: "user", useLater: false, parts: [{ kind: "text", text: "仅本轮临时上下文" }] },
+        { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "溢出问题" }] },
+      ],
+    })
+    expect(conversationRequests).toBe(2)
+    expect(events.some((event) => event.type === "compaction" && event.summary === "溢出摘要")).toBe(true)
+    const requests = await mock.requests()
+    const retryRequest = requests.at(-1)
+    expect(JSON.stringify(retryRequest)).toContain("溢出摘要")
+    expect(JSON.stringify(retryRequest)).toContain("仅本轮临时上下文")
+    expect(JSON.stringify(retryRequest)).toContain("溢出问题")
+    expect(JSON.stringify(retryRequest)).not.toContain("旧消息")
+    await runtime.dispose()
+    mock.stop()
   })
 
   test("视图按轮重载 SYSTEM、AGENTS 和 Skill", async () => {
