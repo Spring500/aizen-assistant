@@ -553,6 +553,7 @@ function statusText(snapshot: CoreSnapshot): string {
     compacting: "正在压缩上下文",
     aborting: "正在中止",
     authenticating: "等待输入认证信息",
+    refreshing: "正在刷新供应商模型",
     error: "发生错误",
   }[snapshot.status]
 }

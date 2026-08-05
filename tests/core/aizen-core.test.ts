@@ -330,7 +330,7 @@ describe("核心编排", () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
     const pi = new RuntimeStateFakePi()
-    const config = new ModelConfigStore(join(root, "models.json"))
+    const config = new ModelConfigStore(join(root, "custom-providers.json"))
     const core = new AizenCore({
       cwd: "E:\\project",
       store: new SessionStore(join(root, "sessions")),
@@ -386,7 +386,7 @@ describe("核心编排", () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
     const pi = new ReloadingModelFakePi()
-    const config = new ModelConfigStore(join(root, "models.json"))
+    const config = new ModelConfigStore(join(root, "custom-providers.json"))
     const core = new AizenCore({
       cwd: "E:\\project",
       store: new SessionStore(join(root, "sessions")),

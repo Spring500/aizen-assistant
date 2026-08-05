@@ -1,13 +1,19 @@
 import type { AgentPreferences, AppPreferences, FoldPreferences } from "./app-preferences-store.ts"
 import type { EditableModelConfig, EditableProviderConfig, ModelConfigSnapshot } from "./model-config-store.ts"
 import type { ViewOption } from "./view-store.ts"
-import type { AuthPromptOption, AuthProviderOption, ModelOption, ModelRuntimeInfo } from "./pi-port.ts"
+import type {
+  AuthPromptOption,
+  AuthProviderOption,
+  ModelOption,
+  ModelRuntimeInfo,
+  PiProviderOption,
+} from "./pi-port.ts"
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
 import { workingDirectoryChangeText } from "./session-projection.ts"
 import type { HumanReviewRequest, PermissionMode } from "./tool-permissions/types.ts"
 import type { SessionSummary } from "./session-store.ts"
 
-export type CoreStatus = "idle" | "running" | "compacting" | "aborting" | "authenticating" | "error"
+export type CoreStatus = "idle" | "running" | "compacting" | "aborting" | "authenticating" | "refreshing" | "error"
 
 export type TranscriptEntry =
   | { type: "environment"; recordId: string; text: string }
@@ -58,6 +64,7 @@ export type CoreSnapshot = {
   preferences: AppPreferences
   views: ViewOption[]
   authProviders: AuthProviderOption[]
+  piProviders?: PiProviderOption[]
   transcript: TranscriptEntry[]
   activeTools: ActiveTool[]
   responseMetrics?: ResponseMetrics
@@ -112,6 +119,10 @@ export type CoreCommand =
   | { type: "ensure_view_file"; viewId: string; name: "SYSTEM.md" | "AGENTS.md" }
   | { type: "remove_view"; viewId: string; deleteDirectory?: boolean }
   | { type: "list_auth_providers" }
+  | { type: "list_pi_providers" }
+  | { type: "set_pi_provider_enabled"; providerId: string; enabled: boolean }
+  | { type: "refresh_pi_provider"; providerId: string }
+  | { type: "login_pi_provider"; providerId: string; authType: "api_key" | "oauth" }
   | { type: "login_api_key"; providerId: string }
   | { type: "answer_auth_prompt"; promptId: string; value: string }
   | { type: "cancel_auth" }
@@ -126,6 +137,12 @@ export type CoreEvent =
       message: string
       placeholder?: string
       options?: AuthPromptOption[]
+    }
+  | {
+      type: "auth_notice"
+      message: string
+      links?: Array<{ url: string; label?: string }>
+      deviceCode?: { userCode: string; verificationUri: string; expiresInSeconds?: number }
     }
 
 export type CoreError = {

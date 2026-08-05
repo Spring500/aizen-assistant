@@ -3,6 +3,7 @@ import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { PiProviderStore } from "../../packages/core/pi-provider-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
@@ -13,12 +14,27 @@ afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
 
+describe("pi 供应商启用配置", () => {
+  test("不存在时默认全部禁用并按排序保存启用状态", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aizen-pi-providers-"))
+    directories.push(directory)
+    const store = new PiProviderStore(join(directory, "pi-providers.json"))
+    expect(await store.read()).toEqual({ enabled: [] })
+    await store.setEnabled("openai", true)
+    await store.setEnabled("anthropic", true)
+    expect(await store.read()).toEqual({ enabled: ["anthropic", "openai"] })
+    expect(JSON.parse(await readFile(join(directory, "pi-providers.json"), "utf8"))).toEqual({
+      enabled: ["anthropic", "openai"],
+    })
+  })
+})
+
 describe("认证与模型", () => {
   test("API 密钥登录通过提示事件写入指定 auth.json", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
     directories.push(directory)
     const authPath = join(directory, "auth.json")
-    const runtime = await PiSessionRuntime.create({ authPath, modelsPath: null })
+    const runtime = await PiSessionRuntime.create({ authPath, customProvidersPath: null })
     const prompts: Array<{ promptType: string }> = []
     runtime.subscribe((event) => {
       if (event.type === "auth_prompt") {
@@ -37,7 +53,7 @@ describe("认证与模型", () => {
   test("可取消正在等待的认证提示", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
     directories.push(directory)
-    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath: null })
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), customProvidersPath: null })
     runtime.subscribe((event) => {
       if (event.type === "auth_prompt") runtime.cancelAuth()
     })
@@ -49,7 +65,7 @@ describe("认证与模型", () => {
   test("多步骤认证保留选择项并继续输入密钥", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
     directories.push(directory)
-    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath: null })
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), customProvidersPath: null })
     const prompts: Array<{ promptType: string; options?: string[] }> = []
     runtime.subscribe((event) => {
       if (event.type !== "auth_prompt") return
@@ -71,12 +87,12 @@ describe("认证与模型", () => {
     await runtime.dispose()
   })
 
-  test("models.json 可增加第三方服务商和模型", async () => {
+  test("custom-providers.json 可增加第三方服务商和模型", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
     directories.push(directory)
-    const modelsPath = join(directory, "models.json")
+    const customProvidersPath = join(directory, "custom-providers.json")
     await writeFile(
-      modelsPath,
+      customProvidersPath,
       JSON.stringify({
         providers: {
           example: {
@@ -88,7 +104,7 @@ describe("认证与模型", () => {
         },
       }),
     )
-    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath })
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), customProvidersPath })
 
     expect(await runtime.listAuthProviders()).toContainEqual({
       id: "example",
@@ -110,7 +126,7 @@ describe("认证与模型", () => {
   test("请求使用模型 Base URL 覆写并保留供应商认证", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
     directories.push(directory)
-    const modelsPath = join(directory, "models.json")
+    const customProvidersPath = join(directory, "custom-providers.json")
     const requests: string[] = []
     const server = Bun.serve({
       port: 0,
@@ -129,7 +145,7 @@ describe("认证与模型", () => {
       },
     })
     await writeFile(
-      modelsPath,
+      customProvidersPath,
       JSON.stringify({
         providers: {
           example: {
@@ -146,7 +162,7 @@ describe("认证与模型", () => {
         },
       }),
     )
-    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath })
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), customProvidersPath })
     try {
       await runtime.setRuntimeApiKey("example", "test-key")
       const model = (await runtime.listModels()).find((item) => item.modelId === "claude-test")
@@ -169,9 +185,9 @@ describe("认证与模型", () => {
   test("第三方模型向用户暴露自身档位名和默认档位", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
     directories.push(directory)
-    const modelsPath = join(directory, "models.json")
+    const customProvidersPath = join(directory, "custom-providers.json")
     await writeFile(
-      modelsPath,
+      customProvidersPath,
       JSON.stringify({
         providers: {
           example: {
@@ -190,7 +206,7 @@ describe("认证与模型", () => {
         },
       }),
     )
-    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath })
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), customProvidersPath })
 
     expect((await runtime.listModels()).find((item) => item.modelId === "thinking-model")).toMatchObject({
       thinkingLevel: "B",
@@ -203,7 +219,7 @@ describe("认证与模型", () => {
   test("发送请求时将Aizen档位转换为模型自身档位参数", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
     directories.push(directory)
-    const modelsPath = join(directory, "models.json")
+    const customProvidersPath = join(directory, "custom-providers.json")
     const requests: Array<Record<string, unknown>> = []
     const server = Bun.serve({
       port: 0,
@@ -219,7 +235,7 @@ describe("认证与模型", () => {
       },
     })
     await writeFile(
-      modelsPath,
+      customProvidersPath,
       JSON.stringify({
         providers: {
           example: {
@@ -236,7 +252,7 @@ describe("认证与模型", () => {
         },
       }),
     )
-    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath })
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), customProvidersPath })
     try {
       await runtime.setRuntimeApiKey("example", "test-key")
       await runtime.create({

@@ -78,7 +78,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     ? undefined
     : await PiSessionRuntime.create({
         authPath: join(options.dataDirectory, "auth.json"),
-        modelsPath: join(options.dataDirectory, "models.json"),
+        customProvidersPath: join(options.dataDirectory, "custom-providers.json"),
+        piProvidersPath: join(options.dataDirectory, "pi-providers.json"),
+        piModelsCachePath: join(options.dataDirectory, "cache", "pi-models-cache.json"),
       })
   const store = new SessionStore(join(options.dataDirectory, "sessions", projectDirectoryName(options.cwd)), {
     indexPath: join(options.dataDirectory, "cache", "session-index.json"),
@@ -89,7 +91,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       cwd: options.cwd,
       store,
       pi: pi as PiSessionRuntime,
-      modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "models.json")),
+      modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "custom-providers.json")),
       preferencesStore: new AppPreferencesStore(join(options.dataDirectory, "preferences.json")),
       views: new ViewStore(join(options.dataDirectory, "views.json")),
       ...(options.collectPermissionGaps
@@ -264,7 +266,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       if ((event.snapshot.pendingPermissionRequests ?? []).length === 0) permissionReview = undefined
     } else if (event.type === "permission_request") {
       void openPermissionReview()
-    } else if (event.promptType === "select") {
+    } else if (event.type === "auth_prompt" && event.promptType === "select") {
       editor.input.blur()
       void selectItem(
         overlays,
@@ -287,7 +289,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           })
         else await core.dispatch({ type: "cancel_auth" })
       })
-    } else {
+    } else if (event.type === "auth_notice") {
+      const link = event.links?.[0]
+      void showError(
+        "pi 供应商认证",
+        `${event.message}${event.deviceCode ? `\n访问地址：${event.deviceCode.verificationUri}\n设备码：${event.deviceCode.userCode}` : ""}${link ? `\n${link.url}` : ""}`,
+      )
+    } else if (event.type === "auth_prompt") {
       editor.input.blur()
       const label =
         event.promptType === "secret"
@@ -551,6 +559,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           snapshot.models,
           snapshot.authProviders,
           snapshot.modelConfig?.providers ?? [],
+          snapshot.piProviders ?? [],
         )
         const preferred = preferredProviderId
           ? providers.find((provider) => provider.id === preferredProviderId)
@@ -558,7 +567,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         preferredProviderId = undefined
         const provider =
           preferred ??
-          (await selectItem<(typeof providers)[number] | "__authenticate__" | "__manage__">(
+          (await selectItem<(typeof providers)[number] | "__manage_pi__" | "__manage_custom__">(
             overlays,
             "model-provider-selector",
             [
@@ -568,24 +577,24 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
                 value: item,
               })),
               {
-                name: "管理供应商和模型",
-                description: "新增、编辑或删除 models.json 配置",
-                value: "__manage__" as const,
+                name: "管理自定义供应商和模型",
+                description: "新增、编辑或删除 custom-providers.json 配置",
+                value: "__manage_custom__" as const,
               },
               {
-                name: "认证其它供应商",
-                description: "显示尚未认证的供应商",
-                value: "__authenticate__" as const,
+                name: "管理 pi 供应商",
+                description: "启用、停用、认证或刷新 pi 供应商",
+                value: "__manage_pi__" as const,
               },
             ],
             { title: "选择供应商", signal: interactionController.signal },
           ))
-        if (provider === "__manage__") {
+        if (provider === "__manage_custom__") {
           preferredProviderId = await manageModels("select")
           continue
         }
-        if (provider === "__authenticate__") {
-          preferredProviderId = await authenticateProvider()
+        if (provider === "__manage_pi__") {
+          await managePiProviders()
           continue
         }
         if (!provider) return undefined
@@ -1111,6 +1120,84 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
+  async function managePiProviders(): Promise<void> {
+    if (!core.getSnapshot().piProviders) return
+    beginInteraction()
+    try {
+      while (!exiting) {
+        const listed = await dispatchWithError({ type: "list_pi_providers" }, "读取 pi 供应商失败")
+        if (!listed.ok) return
+        const providers = core.getSnapshot().piProviders ?? []
+        const selected = await selectItem<string | "__back__">(
+          overlays,
+          "pi-provider-manager",
+          [
+            ...providers.map((provider) => ({
+              name: `${provider.enabled ? "✓" : "○"} ${provider.name}`,
+              description: `${provider.id} · ${provider.configured ? "已认证" : "未认证"} · ${provider.modelCount} 个模型`,
+              value: provider.id,
+            })),
+            { name: "返回", description: "返回上一级", value: "__back__" as const },
+          ],
+          { title: "管理 pi 供应商", signal: interactionController.signal },
+        )
+        if (!selected || selected === "__back__") return
+        const provider = providers.find((item) => item.id === selected)
+        if (!provider) continue
+        const action = await selectItem<"toggle" | "login" | "refresh" | "back">(
+          overlays,
+          "pi-provider-action",
+          [
+            { name: provider.enabled ? "停用供应商" : "启用供应商", description: "保存启用状态", value: "toggle" },
+            ...(provider.authTypes.length > 0
+              ? [
+                  {
+                    name: provider.configured ? "重新认证" : "认证",
+                    description: "执行 pi 认证流程",
+                    value: "login" as const,
+                  },
+                ]
+              : []),
+            ...(provider.canRefresh
+              ? [{ name: "刷新供应商", description: "联网刷新模型目录，期间阻塞其它操作", value: "refresh" as const }]
+              : []),
+            { name: "返回", description: "返回供应商列表", value: "back" },
+          ],
+          { title: provider.name, signal: interactionController.signal },
+        )
+        if (action === "toggle") {
+          await dispatchWithError(
+            { type: "set_pi_provider_enabled", providerId: provider.id, enabled: !provider.enabled },
+            "保存 pi 供应商状态失败",
+          )
+        } else if (action === "login") {
+          const authType =
+            provider.authTypes.length === 1
+              ? provider.authTypes[0]
+              : await selectItem<"api_key" | "oauth">(
+                  overlays,
+                  "pi-provider-auth-type",
+                  provider.authTypes.map((type) => ({
+                    name: type === "oauth" ? "OAuth 登录" : "API Key 登录",
+                    description: "使用 pi 供应商提供的认证流程",
+                    value: type,
+                  })),
+                  { title: "选择认证方式", signal: interactionController.signal },
+                )
+          if (authType)
+            await dispatchWithError(
+              { type: "login_pi_provider", providerId: provider.id, authType },
+              "pi 供应商认证失败",
+            )
+        } else if (action === "refresh") {
+          await dispatchWithError({ type: "refresh_pi_provider", providerId: provider.id }, "刷新 pi 供应商失败")
+        }
+      }
+    } finally {
+      endInteraction()
+    }
+  }
+
   async function manageModels(
     mode: "standalone" | "select" = "standalone",
     initialProviderId?: string,
@@ -1127,10 +1214,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         providerId = undefined
         const selected =
           directProvider ??
-          (await selectItem<ProviderConfigEntry | "add">(
+          (await selectItem<ProviderConfigEntry | "add" | "__pi__">(
             overlays,
             "model-config-providers",
             [
+              { name: "管理 pi 供应商", description: "启用、停用、认证或刷新 pi 供应商", value: "__pi__" as const },
               ...config.providers.map((provider) => ({
                 name: provider.editable ? provider.name : `${provider.name}（只读）`,
                 description: `${provider.models.length} 个模型${provider.readonlyReason ? ` · ${provider.readonlyReason}` : ""}`,
@@ -1141,6 +1229,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             { title: "管理供应商和模型", signal: interactionController.signal },
           ))
         if (!selected) return undefined
+        if (selected === "__pi__") {
+          await managePiProviders()
+          continue
+        }
         if (selected === "add") {
           const edited = await editProvider()
           if (edited) {

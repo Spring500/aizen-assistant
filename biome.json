@@ -8,7 +8,7 @@
       "!!.worktrees",
       "!!**/node_modules",
       "!!**/dist",
-      "!!tests/fixtures/app/invalid-model/models.json"
+      "!!tests/fixtures/app/invalid-model/custom-providers.json"
     ]
   },
   "formatter": {

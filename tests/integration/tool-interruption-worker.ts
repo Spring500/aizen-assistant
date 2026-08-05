@@ -95,7 +95,7 @@ class CheckpointSessionStore extends SessionStore {
 async function main(): Promise<void> {
   const input = JSON.parse(process.argv[2] ?? "{}") as Scenario
   trace(input.checkpoint, "启动")
-  const pi = await PiSessionRuntime.create({ authPath: join(input.root, "auth.json"), modelsPath: null })
+  const pi = await PiSessionRuntime.create({ authPath: join(input.root, "auth.json"), customProvidersPath: null })
   trace(input.checkpoint, "pi runtime 已创建")
   await pi.setRuntimeApiKey("anthropic", "test-key")
   trace(input.checkpoint, "运行时认证已配置")

@@ -1,5 +1,5 @@
 import type { ProviderConfigEntry } from "../core/model-config-store.ts"
-import type { AuthProviderOption, ModelOption } from "../core/pi-port.ts"
+import type { AuthProviderOption, ModelOption, PiProviderOption } from "../core/pi-port.ts"
 
 export type ModelProviderChoice = {
   id: string
@@ -14,9 +14,11 @@ export function modelProviderChoices(
   models: ModelOption[],
   authProviders: AuthProviderOption[],
   configuredProviders: ProviderConfigEntry[],
+  piProviders: PiProviderOption[] = [],
 ): ModelProviderChoice[] {
   const auth = new Map(authProviders.map((provider) => [provider.id, provider]))
   const custom = new Map(configuredProviders.map((provider) => [provider.id, provider]))
+  const pi = new Map(piProviders.filter((provider) => provider.enabled).map((provider) => [provider.id, provider]))
   const available = new Map<string, ModelOption[]>()
   for (const model of models) {
     if (!model.available) continue
@@ -25,22 +27,27 @@ export function modelProviderChoices(
     else available.set(model.providerId, [model])
   }
 
-  const ids = new Set([...custom.keys(), ...available.keys()])
+  const ids = new Set([...custom.keys(), ...pi.keys(), ...available.keys()])
+
   return Array.from(ids, (id) => {
     const authProvider = auth.get(id)
     const customProvider = custom.get(id)
+    const piProvider = pi.get(id)
+    if (customProvider === undefined && piProvider === undefined && !available.has(id)) return undefined
     return {
       id,
-      name: customProvider?.name ?? authProvider?.name ?? id,
+      name: customProvider?.name ?? piProvider?.name ?? authProvider?.name ?? id,
       custom: customProvider !== undefined,
-      configured: authProvider?.configured ?? false,
-      supportsApiKey: authProvider?.supportsApiKey ?? false,
+      configured: piProvider?.configured ?? authProvider?.configured ?? false,
+      supportsApiKey: piProvider?.authTypes.includes("api_key") ?? authProvider?.supportsApiKey ?? false,
       models: (available.get(id) ?? []).sort((left, right) => left.name.localeCompare(right.name)),
     }
-  }).sort((left, right) => {
-    if (left.custom !== right.custom) return left.custom ? -1 : 1
-    return left.name.localeCompare(right.name)
   })
+    .filter((provider): provider is ModelProviderChoice => provider !== undefined)
+    .sort((left, right) => {
+      if (left.custom !== right.custom) return left.custom ? -1 : 1
+      return left.name.localeCompare(right.name)
+    })
 }
 
 export function unconfiguredAuthProviders(authProviders: AuthProviderOption[]): AuthProviderOption[] {

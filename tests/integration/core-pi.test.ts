@@ -64,7 +64,7 @@ test("真实 pi 链路完成两轮并恢复第三轮", async () => {
   const mock = await traceStage("启动 mock server", () => startMockServer("完成"))
   try {
     const pi = await traceStage("创建首次 pi runtime", () =>
-      PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null }),
+      PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null }),
     )
     await traceStage("配置首次 runtime 认证", () => pi.setRuntimeApiKey("anthropic", "test-key"))
     const models = await traceStage("读取首次 runtime 模型", () => pi.listModels())
@@ -103,7 +103,7 @@ test("真实 pi 链路完成两轮并恢复第三轮", async () => {
     )
 
     const restoredPi = await traceStage("创建恢复 pi runtime", () =>
-      PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null }),
+      PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null }),
     )
     await traceStage("配置恢复 runtime 认证", () => restoredPi.setRuntimeApiKey("anthropic", "test-key"))
     restoredPi.setModelBaseUrl(option.providerId, option.modelId, mock.url)
@@ -142,7 +142,7 @@ test("真实 pi 链路将权限拒绝结果返回模型", async () => {
   directories.push(root)
   const mock = await startMockServer()
   try {
-    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })
     await pi.setRuntimeApiKey("anthropic", "test-key")
     const models = await pi.listModels()
     const option = models.find((item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6")
@@ -187,7 +187,7 @@ test("真实 pi 链路统一提交同一消息中的多工具人工审批", asyn
   directories.push(root)
   const mock = await startMockServer()
   try {
-    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })
     await pi.setRuntimeApiKey("anthropic", "test-key")
     const models = await pi.listModels()
     const option = models.find((item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6")
@@ -247,7 +247,7 @@ test("批次提交后中止会保留已完成项并停止运行项", async () =>
   let slowStarted = false
   let slowAborted = false
   try {
-    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })
     await pi.setRuntimeApiKey("anthropic", "test-key")
     const models = await pi.listModels()
     const option = models.find((item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6")
@@ -370,7 +370,7 @@ test("真实 pi 链路执行项目自有联合注册工具", async () => {
   directories.push(root)
   const mock = await startMockServer()
   try {
-    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })
     await pi.setRuntimeApiKey("anthropic", "test-key")
     const models = await pi.listModels()
     const option = models.find((item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6")
@@ -451,7 +451,7 @@ test("真实 pi 链路并行完成主回复和工具式自动命名", async () =
   const mock = await startMockServer()
   try {
     mock.handleModel("claude-sonnet-4-6", () => ({ type: "text", text: "主回复完成" }))
-    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+    const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })
     await pi.setRuntimeApiKey("anthropic", "test-key")
     const models = await pi.listModels()
     const chat = models.find((item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6")
