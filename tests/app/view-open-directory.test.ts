@@ -149,6 +149,9 @@ test("视图配置项在页面内用左右键切换并实时写入", async () =>
   const app = await enterViewPage(core, root)
   try {
     await app.waitFor("项目上下文边界  [不读取]")
+    // 循环行：显示 ←/→ 切换，隐藏 Enter 执行
+    expect(app.setup.captureCharFrame()).toContain("←/→ 切换")
+    expect(app.setup.captureCharFrame()).not.toContain("Enter 执行")
     // 选中第一项（项目上下文边界），按右循环：none -> pi-default -> git-root
     await app.pressKey("\x1b[C")
     await app.waitFor("项目上下文边界  [pi 默认]")
@@ -166,6 +169,11 @@ test("视图配置项在页面内用左右键切换并实时写入", async () =>
       projectSources: "git-root",
       loadUserSkills: false,
     })
+    // 移到动作行（名称）后：隐藏 ←/→ 切换，显示 Enter 执行
+    await app.pressKey("\x1b[B")
+    await app.waitFor("名称  标准视图")
+    expect(app.setup.captureCharFrame()).not.toContain("←/→ 切换")
+    expect(app.setup.captureCharFrame()).toContain("Enter 执行")
     expect(await app.isAlive()).toBe(true)
   } finally {
     await app.teardown()

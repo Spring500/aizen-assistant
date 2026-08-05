@@ -90,6 +90,7 @@ export function cycleMenu(manager: OverlayManager | CliRenderer, id: string, opt
       }
       const current = options.rows[selected]
       handle.setDescription(current ? `${current.label()}　${current.hint}` : "")
+      updateActions()
     }
     const move = (delta: number) => {
       selected = Math.max(0, Math.min(options.rows.length - 1, selected + delta))
@@ -114,24 +115,36 @@ export function cycleMenu(manager: OverlayManager | CliRenderer, id: string, opt
         await options.onError("cycle", error instanceof Error ? error.message : String(error))
       }
     }
-    handle.setActions([
-      {
-        id: "move",
-        key: { name: "up" },
-        alternateKeys: [{ name: "down" }],
-        label: "↑↓ 选择",
-        run: (key) => move(key.name === "up" ? -1 : 1),
-      },
-      {
-        id: "cycle",
-        key: { name: "left" },
-        alternateKeys: [{ name: "right" }],
-        label: "←/→ 切换",
-        run: (key) => void cycleSelected(key.name === "left" ? -1 : 1),
-      },
-      { id: "select", key: { name: "return" }, label: "Enter 执行", run: () => void runSelected() },
-      { id: "cancel", key: { name: "escape" }, label: "Esc 返回", run: finish },
-    ])
+    /** 快捷键提示只对当前行有意义的操作显示。 */
+    const updateActions = () => {
+      const isCycle = options.rows[selected]?.kind === "cycle"
+      const isAction = options.rows[selected]?.kind === "action"
+      handle.setActions([
+        {
+          id: "move",
+          key: { name: "up" },
+          alternateKeys: [{ name: "down" }],
+          label: "↑↓ 选择",
+          run: (key) => move(key.name === "up" ? -1 : 1),
+        },
+        {
+          id: "cycle",
+          key: { name: "left" },
+          alternateKeys: [{ name: "right" }],
+          label: "←/→ 切换",
+          applicable: isCycle,
+          run: (key) => void cycleSelected(key.name === "left" ? -1 : 1),
+        },
+        {
+          id: "select",
+          key: { name: "return" },
+          label: "Enter 执行",
+          applicable: isAction,
+          run: () => void runSelected(),
+        },
+        { id: "cancel", key: { name: "escape" }, label: "Esc 返回", run: finish },
+      ])
+    }
     render()
   })
 }
