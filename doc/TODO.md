@@ -10,6 +10,5 @@ Bash 的 stdout/stderr 当前只在进程内流式显示，工具结束后才生
 
 本期已实现视图行为配置（`config.json` 的 `projectSources` 与 `loadUserSkills`）、三层资源组装与全局技能管理（`/skills` 引入、发现、安装、更新、卸载）。剩余工作：
 
-- **视图模板分享**：为"视图目录整体迁移"提供显式导入/导出流程，配合全局技能按需重新拉取。
 - **Perforce 工作区支持**：为使用 Perforce 管理的项目，把"当前工作区根"作为上下文加载边界（类比 git 仓库根）；依赖本机 `p4` CLI 与服务端可达，需在 `projectSources` 中新增一档。
 - **isomorphic-git 的 Bun/Windows 兼容性验证**：`git-fetch.ts` 使用 isomorphic-git 的 node http 适配器，需在真实分发环境确认 clone/fetch 行为。
