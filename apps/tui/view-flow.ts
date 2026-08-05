@@ -5,7 +5,7 @@ export function viewSelectionItems(views: ViewOption[]): SelectorItem<string | n
   return [
     {
       name: "无视图",
-      description: "原生模式：内建提示词 + 个人技能 + 项目上下文",
+      description: "原生模式：内建提示词 + 全局技能 + 项目上下文",
       value: null,
     },
     ...views

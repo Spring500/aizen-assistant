@@ -66,7 +66,7 @@ test("完整业务链路：空配置仍列出无视图并创建会话", async ()
   expect(await views.list()).toEqual([])
   const choices = viewSelectionItems(await views.list())
   expect(choices).toEqual([
-    { name: "无视图", description: "原生模式：内建提示词 + 个人技能 + 项目上下文", value: null },
+    { name: "无视图", description: "原生模式：内建提示词 + 全局技能 + 项目上下文", value: null },
   ])
 
   const core = new AizenCore({ cwd: root, store: new SessionStore(join(root, "sessions")), pi: new FixturePi(), views })

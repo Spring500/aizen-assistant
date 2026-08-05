@@ -130,7 +130,7 @@ test("管理视图里打开目录失败只提示错误，应用保持存活", as
     throw new Error("模拟打开目录失败")
   })
   try {
-    // 页面行序：项目上下文边界/个人技能/名称/目录路径/编辑SYSTEM/编辑AGENTS/打开Skills
+    // 页面行序：工作路径上下文加载范围/加载全局技能/名称/目录路径/编辑SYSTEM/编辑AGENTS/打开Skills
     for (let index = 0; index < 6; index++) await app.pressKey("\x1b[B")
     await app.pressKey("\r")
     expect(await app.isAlive()).toBe(true)
@@ -148,29 +148,29 @@ test("视图配置项在页面内用左右键切换并实时写入", async () =>
   const core = new ViewsCore(viewDir)
   const app = await enterViewPage(core, root)
   try {
-    await app.waitFor("AGENTS.md 与 Skill 加载范围  [不加载]")
+    await app.waitFor("工作路径上下文加载范围  [不加载]")
     // 循环行：显示 ←/→ 切换，隐藏 Enter 执行
     expect(app.setup.captureCharFrame()).toContain("←/→ 切换")
     expect(app.setup.captureCharFrame()).not.toContain("Enter 执行")
     // 按右按范围逐档扩大：不加载 -> 仅工作目录 -> git 仓库根 -> pi 默认
     await app.pressKey("\x1b[C")
-    await app.waitFor("AGENTS.md 与 Skill 加载范围  [仅工作目录]")
+    await app.waitFor("工作路径上下文加载范围  [仅工作目录]")
     await app.pressKey("\x1b[C")
-    await app.waitFor("AGENTS.md 与 Skill 加载范围  [git 仓库根]")
+    await app.waitFor("工作路径上下文加载范围  [git 仓库根]")
     expect(JSON.parse(await readFile(join(viewDir, "config.json"), "utf8"))).toEqual({
       projectSources: "git-root",
       loadUserSkills: true,
     })
     await app.pressKey("\x1b[C")
-    await app.waitFor("AGENTS.md 与 Skill 加载范围  [pi 默认]")
+    await app.waitFor("工作路径上下文加载范围  [pi 默认]")
     expect(JSON.parse(await readFile(join(viewDir, "config.json"), "utf8"))).toEqual({
       projectSources: "pi-default",
       loadUserSkills: true,
     })
-    // 移到第二项（个人技能）按右：加载 -> 不加载
+    // 移到第二项（加载全局技能）按右：是 -> 否
     await app.pressKey("\x1b[B")
     await app.pressKey("\x1b[C")
-    await app.waitFor("个人技能  [不加载]")
+    await app.waitFor("加载全局技能  [否]")
     expect(JSON.parse(await readFile(join(viewDir, "config.json"), "utf8"))).toEqual({
       projectSources: "pi-default",
       loadUserSkills: false,

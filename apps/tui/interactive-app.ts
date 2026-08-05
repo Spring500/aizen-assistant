@@ -432,13 +432,13 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     const config = read.config
 
     const projectSourceOptions: ReadonlyArray<{ value: ProjectSources; label: string; hint: string }> = [
-      { value: "none", label: "不加载", hint: "不加载工作路径的 AGENTS.md 与 Skill" },
-      { value: "cwd", label: "仅工作目录", hint: "只加载当前工作目录的 AGENTS.md 与 Skill" },
-      { value: "git-root", label: "git 仓库根", hint: "加载工作目录及仓库内上级目录的 AGENTS.md 与 Skill" },
+      { value: "none", label: "不加载", hint: "只用视图自身的文档与技能，不加载工作路径的" },
+      { value: "cwd", label: "仅工作目录", hint: "额外加载当前工作目录的 AGENTS.md 与 Skill" },
+      { value: "git-root", label: "git 仓库根", hint: "额外加载工作目录及仓库内上级目录的 AGENTS.md 与 Skill" },
       {
         value: "pi-default",
         label: "pi 默认",
-        hint: "AGENTS.md 沿上级目录到文件系统根；Skill 到 git 仓库根",
+        hint: "额外加载：AGENTS.md 到文件系统根、Skill 到 git 仓库根",
       },
     ]
     const projectSourceLabel = (value: ProjectSources) =>
@@ -453,7 +453,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       rows: [
         {
           kind: "cycle",
-          label: () => `AGENTS.md 与 Skill 加载范围  [${projectSourceLabel(config.projectSources)}]`,
+          label: () => `工作路径上下文加载范围  [${projectSourceLabel(config.projectSources)}]`,
           hint: () => projectSourceHint(config.projectSources),
           cycle: async (direction) => {
             const index = projectSourceOptions.findIndex((item) => item.value === config.projectSources)
@@ -466,8 +466,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         },
         {
           kind: "cycle",
-          label: () => `个人技能  [${config.loadUserSkills ? "加载" : "不加载"}]`,
-          hint: () => "是否加载已安装的个人技能",
+          label: () => `加载全局技能  [${config.loadUserSkills ? "是" : "否"}]`,
+          hint: () => "是否加载已安装的全局技能",
           cycle: async () => {
             config.loadUserSkills = !config.loadUserSkills
             await writeViewConfig(viewItem.directory, config)
@@ -700,7 +700,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       }
       return
     }
-    await showError("技能已安装", `${input.name} 已加入个人技能`)
+    await showError("技能已安装", `${input.name} 已加入全局技能`)
   }
 
   async function manageInstalledSkill(name: string): Promise<void> {
@@ -709,7 +709,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       "installed-skill-action",
       [
         { name: "更新", description: "按来源仓库重新拉取该技能", value: "update" },
-        { name: "卸载", description: "从个人技能移除并清理不再使用的缓存", value: "remove" },
+        { name: "卸载", description: "从全局技能移除并清理不再使用的缓存", value: "remove" },
       ],
       { title: `技能 ${name}`, signal: interactionController.signal },
     )
