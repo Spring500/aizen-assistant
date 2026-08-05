@@ -24,6 +24,10 @@ describe("视图行为配置", () => {
       projectSources: "none",
       loadUserSkills: true,
     })
+    expect(parseViewConfigValue({ projectSources: "cwd", loadUserSkills: true })).toEqual({
+      projectSources: "cwd",
+      loadUserSkills: true,
+    })
     expect(() => parseViewConfigValue({ projectSources: "自定义", loadUserSkills: true })).toThrow("projectSources")
     expect(() => parseViewConfigValue({ projectSources: "none", loadUserSkills: "yes" })).toThrow("loadUserSkills")
     expect(() => parseViewConfigValue({ projectSources: "none", loadUserSkills: true, extra: true })).toThrow(

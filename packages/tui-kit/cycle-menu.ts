@@ -6,14 +6,15 @@ export type CycleRow = {
   kind: "cycle"
   /** 动态标签：循环切换后会重新读取当前值。 */
   label: () => string
-  hint: string
+  /** 动态提示：说明当前值的实际效果。 */
+  hint: () => string
   cycle: (direction: 1 | -1) => Promise<void>
 }
 
 export type ActionRow = {
   kind: "action"
   label: () => string
-  hint: string
+  hint: () => string
   /** 返回 true 表示关闭菜单；抛错会交给 onError 显示。 */
   action: () => Promise<boolean>
 }
@@ -89,7 +90,7 @@ export function cycleMenu(manager: OverlayManager | CliRenderer, id: string, opt
         renderable.content = `${itemIndex === selected ? "▶ " : "  "}${item.label()}`
       }
       const current = options.rows[selected]
-      handle.setDescription(current ? `${current.label()}　${current.hint}` : "")
+      handle.setDescription(current ? `${current.label()}　${current.hint()}` : "")
       updateActions()
     }
     const move = (delta: number) => {

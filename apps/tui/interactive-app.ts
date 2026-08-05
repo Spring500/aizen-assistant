@@ -431,13 +431,20 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     if (read.error) await showError("视图配置", read.error)
     const config = read.config
 
-    const projectSourceOptions: ReadonlyArray<{ value: ProjectSources; label: string }> = [
-      { value: "none", label: "不读取" },
-      { value: "pi-default", label: "pi 默认" },
-      { value: "git-root", label: "git 根" },
+    const projectSourceOptions: ReadonlyArray<{ value: ProjectSources; label: string; hint: string }> = [
+      { value: "none", label: "不加载", hint: "不加载工作路径的 AGENTS.md 与 Skill" },
+      { value: "cwd", label: "仅工作目录", hint: "只加载当前工作目录的 AGENTS.md 与 Skill" },
+      { value: "git-root", label: "git 仓库根", hint: "加载工作目录及仓库内上级目录的 AGENTS.md 与 Skill" },
+      {
+        value: "pi-default",
+        label: "pi 默认",
+        hint: "AGENTS.md 沿上级目录到文件系统根；Skill 到 git 仓库根",
+      },
     ]
     const projectSourceLabel = (value: ProjectSources) =>
       projectSourceOptions.find((item) => item.value === value)?.label ?? value
+    const projectSourceHint = (value: ProjectSources) =>
+      projectSourceOptions.find((item) => item.value === value)?.hint ?? ""
 
     await cycleMenu(overlays, "view-settings-page", {
       title: `管理视图 · ${viewItem.name}`,
@@ -446,8 +453,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       rows: [
         {
           kind: "cycle",
-          label: () => `项目上下文边界  [${projectSourceLabel(config.projectSources)}]`,
-          hint: "←/→ 切换；读取项目 AGENTS.md 与技能的冒泡边界",
+          label: () => `AGENTS.md 与 Skill 加载范围  [${projectSourceLabel(config.projectSources)}]`,
+          hint: () => projectSourceHint(config.projectSources),
           cycle: async (direction) => {
             const index = projectSourceOptions.findIndex((item) => item.value === config.projectSources)
             const next =
@@ -460,7 +467,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         {
           kind: "cycle",
           label: () => `个人技能  [${config.loadUserSkills ? "加载" : "不加载"}]`,
-          hint: "←/→ 切换；是否加载已安装的个人技能",
+          hint: () => "是否加载已安装的个人技能",
           cycle: async () => {
             config.loadUserSkills = !config.loadUserSkills
             await writeViewConfig(viewItem.directory, config)
@@ -469,7 +476,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         {
           kind: "action",
           label: () => `名称  ${viewItem.name}`,
-          hint: "Enter 重命名",
+          hint: () => "Enter 重命名",
           action: async () => {
             const value = await promptText("view-name", "重命名视图", "名称  ", viewItem.name)
             if (value === undefined) return false
@@ -486,7 +493,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         {
           kind: "action",
           label: () => `目录路径  ${viewItem.path}`,
-          hint: "Enter 修改",
+          hint: () => "Enter 修改",
           action: async () => {
             const value = await promptText("view-path", "修改视图目录", "目录路径  ", viewItem.path)
             if (value === undefined) return false
@@ -503,7 +510,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         {
           kind: "action",
           label: () => "编辑 SYSTEM.md",
-          hint: "不存在时自动创建",
+          hint: () => "不存在时自动创建",
           action: async () => {
             const ensured = await dispatchWithError(
               { type: "ensure_view_file", viewId, name: "SYSTEM.md" },
@@ -516,7 +523,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         {
           kind: "action",
           label: () => "编辑 AGENTS.md",
-          hint: "不存在时自动创建",
+          hint: () => "不存在时自动创建",
           action: async () => {
             const ensured = await dispatchWithError(
               { type: "ensure_view_file", viewId, name: "AGENTS.md" },
@@ -529,7 +536,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         {
           kind: "action",
           label: () => "打开 Skills 目录",
-          hint: viewItem.directory,
+          hint: () => viewItem.directory,
           action: async () => {
             await (options.testing?.openDirectory ?? openDirectory)(join(viewItem.directory, "skills"))
             return false
@@ -538,7 +545,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         {
           kind: "action",
           label: () => "移除注册",
-          hint: "保留视图目录和文件",
+          hint: () => "保留视图目录和文件",
           action: async () => {
             await dispatchWithError({ type: "remove_view", viewId }, "移除视图失败")
             return true
@@ -547,7 +554,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         {
           kind: "action",
           label: () => "删除视图目录",
-          hint: "同时删除注册和目录，需要再次确认",
+          hint: () => "同时删除注册和目录，需要再次确认",
           action: async () => {
             const confirmed = await selectItem(
               overlays,

@@ -13,7 +13,7 @@ AizenAssistant 是一个面向重度 Coding Agent 用户的本地 Coding Agent �
 - `skills/`：视图自带的 Skill（随视图目录迁移）；
 - `config.json`：行为配置（项目上下文边界、个人技能开关）。
 
-每个视图可通过 `config.json` 决定是否额外读取当前项目路径下的 `AGENTS.md` 与 Skill，以及冒泡边界（`none` / `pi-default` / `git-root`），并控制是否加载个人技能。"无视图"是原生模式：内建提示词 + 个人技能 + 项目上下文，提供接近原生 Agent 的使用体验。
+每个视图可通过 `config.json` 决定是否加载当前工作路径的 AGENTS.md 与 Skill，以及加载范围（`none` 不加载 / `cwd` 仅工作目录 / `git-root` 到 git 仓库根 / `pi-default` 按 pi 默认），并控制是否加载个人技能。"无视图"是原生模式：内建提示词 + 个人技能 + 项目上下文，提供接近原生 Agent 的使用体验。
 
 ### 个人技能管理
 

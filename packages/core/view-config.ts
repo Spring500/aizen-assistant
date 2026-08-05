@@ -3,8 +3,14 @@ import { join } from "node:path"
 
 import { atomicWriteFile } from "./file-transaction.ts"
 
-/** 项目上下文冒泡边界；"none" 表示完全不读取项目路径下的 AGENTS.md 与 skill。 */
-export type ProjectSources = "none" | "pi-default" | "git-root"
+/**
+ * 项目路径下 AGENTS.md 与 Skill 的加载范围：
+ * - "none"：不加载；
+ * - "cwd"：只加载当前工作目录；
+ * - "git-root"：加载工作目录及仓库内上级目录；
+ * - "pi-default"：AGENTS.md 沿上级目录到文件系统根，Skill 到 git 仓库根。
+ */
+export type ProjectSources = "none" | "cwd" | "pi-default" | "git-root"
 
 export type ViewConfig = {
   projectSources: ProjectSources
@@ -29,8 +35,13 @@ export function parseViewConfigValue(value: unknown): ViewConfig {
   const source = object(value, "config.json")
   exact(source, ["projectSources", "loadUserSkills"], "config.json")
   const projectSources = source.projectSources
-  if (projectSources !== "none" && projectSources !== "pi-default" && projectSources !== "git-root")
-    throw new Error("config.json.projectSources 必须是 none、pi-default 或 git-root")
+  if (
+    projectSources !== "none" &&
+    projectSources !== "cwd" &&
+    projectSources !== "pi-default" &&
+    projectSources !== "git-root"
+  )
+    throw new Error("config.json.projectSources 必须是 none、cwd、pi-default 或 git-root")
   const loadUserSkills = source.loadUserSkills
   if (typeof loadUserSkills !== "boolean") throw new Error("config.json.loadUserSkills 必须是布尔值")
   return { projectSources, loadUserSkills }

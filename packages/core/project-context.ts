@@ -5,9 +5,10 @@ import type { ProjectSources } from "./view-config.ts"
 
 /**
  * 项目路径资源发现。AA 自管全部项目层加载（pi 的 noContextFiles / noSkills
- * 保持关闭），因此这里的边界由我们控制：
- * - "pi-default"：AGENTS.md 冒泡到文件系统根；skills 的 .agents 冒泡到 git 根（无 git 时到文件系统根）。
- * - "git-root"：统一限定到 git 根；无 git 仓库时退化为 pi-default 行为。
+ * 保持关闭），因此这里的加载范围由我们控制：
+ * - "cwd"：只加载当前工作目录；
+ * - "git-root"：AGENTS.md 到 git 根；skills 到 git 根（无 git 时到文件系统根）；
+ * - "pi-default"：AGENTS.md 冒泡到文件系统根；skills 与 git-root 一致。
  */
 export type ProjectBoundary = Exclude<ProjectSources, "none">
 
@@ -45,7 +46,7 @@ export function loadProjectAgentsFiles(cwd: string, boundary: ProjectBoundary): 
         files.unshift({ path, content: readFileSync(path, "utf8") })
       }
     }
-    if (root && dir === root) break
+    if (boundary === "cwd" || (root && dir === root)) break
     const parent = dirname(dir)
     if (parent === dir) break
     dir = parent
@@ -55,10 +56,10 @@ export function loadProjectAgentsFiles(cwd: string, boundary: ProjectBoundary): 
 
 /**
  * 收集项目路径下的 skill 目录（<cwd>/.pi/skills 与祖先目录的 .agents/skills）。
- * 与 pi 一致：.agents/skills 始终在 git 根停下（无 git 时到文件系统根），
- * 因此两档边界在 skills 上的行为一致，边界只作用于 AGENTS.md。
+ * "cwd" 只读当前工作目录；pi-default 与 git-root 在 skills 上均到 git 根
+ * （无 git 时到文件系统根），边界只作用于 AGENTS.md 与是否读上级目录。
  */
-export function loadProjectSkillPaths(cwd: string, _boundary: ProjectBoundary): string[] {
+export function loadProjectSkillPaths(cwd: string, boundary: ProjectBoundary): string[] {
   const resolvedCwd = resolve(cwd)
   const root = findGitRoot(resolvedCwd)
   const paths: string[] = []
@@ -68,7 +69,7 @@ export function loadProjectSkillPaths(cwd: string, _boundary: ProjectBoundary): 
   while (true) {
     const agentsSkills = join(dir, ".agents", "skills")
     if (existsSync(agentsSkills)) paths.push(agentsSkills)
-    if (root && dir === root) break
+    if (boundary === "cwd" || (root && dir === root)) break
     const parent = dirname(dir)
     if (parent === dir) break
     dir = parent

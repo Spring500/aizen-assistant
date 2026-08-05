@@ -49,6 +49,27 @@ describe("项目路径资源", () => {
     expect(loadProjectAgentsFiles(inner, "pi-default").map((file) => file.content)).toEqual(["根规则", "内层规则"])
   })
 
+  test("cwd 边界只读取当前工作目录", async () => {
+    const root = await temporaryDirectory()
+    const repo = join(root, "repo")
+    const inner = join(repo, "a", "b")
+    await mkdir(join(repo, ".git"), { recursive: true })
+    await mkdir(inner, { recursive: true })
+    await writeFile(join(root, "AGENTS.md"), "根规则")
+    await writeFile(join(repo, "AGENTS.md"), "仓库规则")
+    await writeFile(join(inner, "AGENTS.md"), "内层规则")
+
+    expect(loadProjectAgentsFiles(inner, "cwd").map((file) => file.content)).toEqual(["内层规则"])
+    // skills 同样只读当前工作目录
+    await mkdir(join(inner, ".pi", "skills"), { recursive: true })
+    await mkdir(join(repo, ".agents", "skills"), { recursive: true })
+    expect(loadProjectSkillPaths(inner, "cwd").map(toPosix)).toEqual([toPosix(join(inner, ".pi", "skills"))])
+    expect(loadProjectSkillPaths(inner, "git-root").map(toPosix)).toEqual([
+      toPosix(join(inner, ".pi", "skills")),
+      toPosix(join(repo, ".agents", "skills")),
+    ])
+  })
+
   test("收集项目 skill 目录：cwd 的 .pi/skills 与祖先的 .agents/skills", async () => {
     const root = await temporaryDirectory()
     const repo = join(root, "repo")
