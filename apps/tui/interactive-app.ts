@@ -12,9 +12,11 @@ import type {
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
+import { SkillStore, type DiscoveredSkill, type InstalledSkill } from "../../packages/core/skill-store.ts"
 import { JsonlPermissionGapRecorder } from "../../packages/core/tool-permissions/gap-recorder.ts"
 import type { CorePort } from "../../packages/core/types.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
+import { readViewConfig, writeViewConfig, type ProjectSources } from "../../packages/core/view-config.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
@@ -85,6 +87,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const store = new SessionStore(join(options.dataDirectory, "sessions", projectDirectoryName(options.cwd)), {
     indexPath: join(options.dataDirectory, "cache", "session-index.json"),
   })
+  const skills = new SkillStore({
+    file: join(options.dataDirectory, "skills.json"),
+    cacheDirectory: join(options.dataDirectory, "skill-sources"),
+  })
   const core =
     options.testing?.core ??
     new AizenCore({
@@ -94,6 +100,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "custom-providers.json")),
       preferencesStore: new AppPreferencesStore(join(options.dataDirectory, "preferences.json")),
       views: new ViewStore(join(options.dataDirectory, "views.json")),
+      skills,
       ...(options.collectPermissionGaps
         ? {
             permissionGapRecorder: new JsonlPermissionGapRecorder(
@@ -178,6 +185,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         else if (command.name === "/fold") runAction(chooseFold)
         else if (command.name === "/models") runAction(manageModels)
         else if (command.name === "/agents") runAction(openAgentSettings)
+        else if (command.name === "/skills") runAction(manageSkills)
       },
       onAbort: () => void core.dispatch({ type: "abort" }),
       onQuit: quit,
@@ -444,6 +452,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         { name: "编辑 SYSTEM.md", description: "不存在时自动创建", value: "system" },
         { name: "编辑 AGENTS.md", description: "不存在时自动创建", value: "agents" },
         { name: "打开 Skills 目录", description: viewItem.directory, value: "skills" },
+        { name: "编辑行为配置", description: "项目上下文边界与个人技能开关", value: "config" },
         { name: "移除注册", description: "保留视图目录和文件", value: "remove" },
         { name: "删除视图目录", description: "同时删除注册和目录，需要再次确认", value: "delete" },
       ],
@@ -456,6 +465,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       if (ensured.ok) await openExternalEditor(join(viewItem.directory, name))
     } else if (action === "skills") {
       await openDirectory(join(viewItem.directory, "skills"))
+    } else if (action === "config") {
+      await editViewConfig(viewItem)
     } else if (action === "remove") {
       await dispatchWithError({ type: "remove_view", viewId }, "移除视图失败")
     } else if (action === "delete") {
@@ -469,6 +480,199 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         { title: `永久删除视图 ${viewItem.name}？`, signal: interactionController.signal },
       )
       if (confirmed) await dispatchWithError({ type: "remove_view", viewId, deleteDirectory: true }, "删除视图失败")
+    }
+  }
+
+  async function promptText(
+    id: string,
+    title: string,
+    label: string,
+    placeholder: string,
+  ): Promise<string | undefined> {
+    const handle = overlays.open<string>({
+      id,
+      title,
+      description: "",
+      actions: [],
+      contentHeight: 1,
+      signal: interactionController.signal,
+      onCancel: () => handle.close(undefined),
+    })
+    const value = await editInline(overlays, handle, { id: `${id}-input`, label, placeholder })
+    handle.close(value)
+    return value
+  }
+
+  async function editViewConfig(viewItem: { directory: string }): Promise<void> {
+    beginInteraction()
+    try {
+      const read = await readViewConfig(viewItem.directory)
+      if (read.error) await showError("视图配置", read.error)
+      const projectSources = await selectItem<ProjectSources>(
+        overlays,
+        "view-project-sources",
+        [
+          {
+            name: "不读取（当前）",
+            description: "不读取项目路径下的 AGENTS.md 和技能",
+            value: "none",
+          },
+          { name: "pi 默认", description: "AGENTS.md 冒泡到文件系统根，技能到 git 根", value: "pi-default" },
+          { name: "git 根", description: "AGENTS.md 与技能统一限定到 git 根", value: "git-root" },
+        ],
+        { title: "项目上下文边界", signal: interactionController.signal },
+      )
+      if (projectSources === undefined) return
+      const loadUserSkills = await selectItem<boolean>(
+        overlays,
+        "view-load-user-skills",
+        [
+          { name: "加载个人技能", description: "会话中加载已安装的个人技能", value: true },
+          { name: "不加载个人技能", description: "纯净视图，不混入个人技能", value: false },
+        ],
+        { title: "个人技能开关", signal: interactionController.signal },
+      )
+      if (loadUserSkills === undefined) return
+      await writeViewConfig(viewItem.directory, { projectSources, loadUserSkills })
+    } finally {
+      endInteraction()
+    }
+  }
+
+  async function manageSkills(): Promise<void> {
+    beginInteraction()
+    try {
+      while (!exiting) {
+        const installed = await skills.list()
+        const action = await selectItem<string>(
+          overlays,
+          "skills-manager",
+          [
+            { name: "引入并发现技能", description: "输入 git 仓库地址并扫描其中的技能", value: "__discover__" },
+            { name: "更新全部", description: "按来源仓库重新拉取已安装技能", value: "__update__" },
+            ...installed.map((skill) => ({
+              name: skill.name,
+              description: `${skill.sourceUrl} · ${skill.relPath}`,
+              value: skill.name,
+            })),
+          ],
+          { title: "技能管理", signal: interactionController.signal },
+        )
+        if (!action) return
+        if (action === "__discover__") {
+          await discoverAndInstallSkills()
+          continue
+        }
+        if (action === "__update__") {
+          const result = await skills.updateSkills()
+          await showError(
+            "技能更新",
+            result.errors.length > 0
+              ? `已更新 ${result.updated} 个来源：${result.errors.join("；")}`
+              : `已更新 ${result.updated} 个来源`,
+          )
+          continue
+        }
+        await manageInstalledSkill(action)
+      }
+    } finally {
+      endInteraction()
+    }
+  }
+
+  async function discoverAndInstallSkills(): Promise<void> {
+    beginInteraction()
+    try {
+      const url = await promptText(
+        "skill-source-url",
+        "引入技能仓库",
+        "仓库地址  ",
+        "https://github.com/owner/repo.git",
+      )
+      if (url === undefined || !url.trim()) return
+      let discovered: DiscoveredSkill[]
+      try {
+        discovered = await skills.discoverSource(url.trim())
+      } catch (error) {
+        await showError("发现技能失败", error instanceof Error ? error.message : String(error))
+        return
+      }
+      if (discovered.length === 0) {
+        await showError("未发现技能", "仓库中没有符合 SKILL.md 规范的技能")
+        return
+      }
+      const selected = await selectItem<DiscoveredSkill>(
+        overlays,
+        "skill-discover",
+        discovered.map((skill) => ({
+          name: skill.name,
+          description: `${skill.relPath} · ${skill.description ?? "无描述"}`,
+          value: skill,
+        })),
+        { title: "选择要安装的技能", signal: interactionController.signal },
+      )
+      if (!selected) return
+      await installDiscoveredSkill({
+        name: selected.name,
+        sourceUrl: url.trim(),
+        relPath: selected.relPath,
+        ...(selected.description ? { description: selected.description } : {}),
+      })
+    } finally {
+      endInteraction()
+    }
+  }
+
+  async function installDiscoveredSkill(input: InstalledSkill): Promise<void> {
+    const result = await skills.installSkill(input)
+    if ("conflict" in result) {
+      const replace = await selectItem<boolean>(
+        overlays,
+        "skill-conflict",
+        [
+          { name: "替换来源", description: `改用 ${input.sourceUrl} 提供该技能`, value: true },
+          { name: "保留现状", description: `继续使用 ${result.conflict.existing.sourceUrl}`, value: false },
+        ],
+        { title: `已存在同名技能 ${result.conflict.existing.name}`, signal: interactionController.signal },
+      )
+      if (replace === true) {
+        await skills.replaceSkill(input.name, {
+          sourceUrl: input.sourceUrl,
+          relPath: input.relPath,
+          ...(input.description ? { description: input.description } : {}),
+        })
+        await showError("技能已替换", `${input.name} 已改用新来源`)
+      }
+      return
+    }
+    await showError("技能已安装", `${input.name} 已加入个人技能`)
+  }
+
+  async function manageInstalledSkill(name: string): Promise<void> {
+    const action = await selectItem<string>(
+      overlays,
+      "installed-skill-action",
+      [
+        { name: "更新", description: "按来源仓库重新拉取该技能", value: "update" },
+        { name: "卸载", description: "从个人技能移除并清理不再使用的缓存", value: "remove" },
+      ],
+      { title: `技能 ${name}`, signal: interactionController.signal },
+    )
+    if (!action) return
+    if (action === "update") {
+      try {
+        await skills.updateSkill(name)
+        await showError("技能已更新", name)
+      } catch (error) {
+        await showError("更新失败", error instanceof Error ? error.message : String(error))
+      }
+    } else if (action === "remove") {
+      try {
+        await skills.removeSkill(name)
+        await showError("技能已卸载", name)
+      } catch (error) {
+        await showError("卸载失败", error instanceof Error ? error.message : String(error))
+      }
     }
   }
 
