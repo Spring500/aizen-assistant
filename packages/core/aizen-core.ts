@@ -12,7 +12,7 @@ import {
   type PiPortEvent,
   type ResolvedViewResources,
 } from "./pi-port.ts"
-import { loadProjectAgentsFiles, loadProjectSkillPaths } from "./project-context.ts"
+import { resolveProjectSources } from "./project-context.ts"
 import type {
   AssistantMessage,
   ModelReference,
@@ -1001,10 +1001,11 @@ export class AizenCore implements CorePort {
     if (viewId === null) {
       const user = this.#skills ? await this.#skills.resolveUserSkills() : { paths: [], missing: [] }
       for (const name of user.missing) this.#reportError(`已安装的 skill 目录缺失：${name}`)
+      const project = resolveProjectSources(this.#cwd, "pi-default")
       return {
         viewId: null,
-        agentsFiles: loadProjectAgentsFiles(this.#cwd, "pi-default"),
-        skillPaths: [...user.paths, ...loadProjectSkillPaths(this.#cwd, "pi-default")],
+        agentsFiles: project.agentsFiles,
+        skillPaths: [...user.paths, ...project.skillPaths],
       }
     }
     const directory = this.#views ? (await this.#views.resolve(viewId)).directory : this.#cwd
@@ -1014,10 +1015,10 @@ export class AizenCore implements CorePort {
     const user =
       config.loadUserSkills && this.#skills ? await this.#skills.resolveUserSkills() : { paths: [], missing: [] }
     for (const name of user.missing) this.#reportError(`已安装的 skill 目录缺失：${name}`)
-    const projectAgents =
-      config.projectSources !== "none" ? loadProjectAgentsFiles(this.#cwd, config.projectSources) : []
-    const projectSkills =
-      config.projectSources !== "none" ? loadProjectSkillPaths(this.#cwd, config.projectSources) : []
+    const project =
+      config.projectSources !== "none" ? resolveProjectSources(this.#cwd, config.projectSources) : undefined
+    const projectAgents = project?.agentsFiles ?? []
+    const projectSkills = project?.skillPaths ?? []
     const viewSkillsPath = join(directory, "skills")
     const viewSkills = existsSync(viewSkillsPath) ? [viewSkillsPath] : []
     const systemFile = await this.#readOptionalTextFile(join(directory, "SYSTEM.md"))
