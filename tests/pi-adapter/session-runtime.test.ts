@@ -451,7 +451,10 @@ describe("pi 内存会话", () => {
     expect(compacted?.type).toBe("compaction")
     await runtime.dispose()
     if (compacted?.type === "compaction") {
-      const restored = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath: null })
+      const restored = await PiSessionRuntime.create({
+        authPath: join(directory, "auth.json"),
+        customProvidersPath: null,
+      })
       await restored.setRuntimeApiKey(model.providerId, "test-key")
       restored.setModelBaseUrl(model.providerId, model.modelId, mock.url)
       await restored.restore({
