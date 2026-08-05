@@ -14,7 +14,7 @@ async function makeRuntime(): Promise<{ directory: string; runtime: PiSessionRun
   directories.push(directory)
   return {
     directory,
-    runtime: await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), modelsPath: null }),
+    runtime: await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), customProvidersPath: null }),
   }
 }
 

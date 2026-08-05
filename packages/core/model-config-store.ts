@@ -105,10 +105,10 @@ function parseConfig(source: string): StoredConfig {
   try {
     parsed = JSON.parse(stripJsonComments(source))
   } catch (error) {
-    throw new Error(`models.json 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`)
+    throw new Error(`custom-providers.json 不是合法 JSON：${error instanceof Error ? error.message : String(error)}`)
   }
-  const root = object(parsed, "models.json")
-  const providers = object(root.providers, "models.json.providers")
+  const root = object(parsed, "custom-providers.json")
+  const providers = object(root.providers, "custom-providers.json.providers")
   return { providers: providers as Record<string, JsonObject> }
 }
 

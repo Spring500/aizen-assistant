@@ -199,12 +199,15 @@ async function pressDown(setup: Awaited<ReturnType<typeof createTestRenderer>>, 
 async function invalidModel(): Promise<void> {
   const root = await copyAppFixture("invalid-model")
   const setup = await setupRenderer()
-  const pi = await PiSessionRuntime.create({ authPath: `${root}/auth.json`, modelsPath: `${root}/models.json` })
+  const pi = await PiSessionRuntime.create({
+    authPath: `${root}/auth.json`,
+    customProvidersPath: `${root}/custom-providers.json`,
+  })
   const core = new AizenCore({
     cwd: root,
     store: new SessionStore(`${root}/sessions/${projectDirectoryName(root)}`),
     pi,
-    modelConfigStore: new ModelConfigStore(`${root}/models.json`),
+    modelConfigStore: new ModelConfigStore(`${root}/custom-providers.json`),
     views: new ViewStore(`${root}/views.json`),
   })
   const running = runInteractiveApp({ cwd: root, dataDirectory: root, testing: { renderer: setup.renderer, core } })
@@ -217,9 +220,9 @@ async function invalidModel(): Promise<void> {
     await Bun.sleep(40)
     await setup.renderOnce()
     const later = setup.captureCharFrame()
-    assertIncludes(first, "models.json")
+    assertIncludes(first, "custom-providers.json")
     assertExcludes(first, "选择会话")
-    assertIncludes(later, "models.json")
+    assertIncludes(later, "custom-providers.json")
     assertExcludes(later, "选择会话")
   } finally {
     setup.renderer.keyInput.emit("keypress", key("\x03"))
@@ -232,13 +235,13 @@ async function invalidModel(): Promise<void> {
 async function noViews(): Promise<void> {
   const root = await copyAppFixture("empty")
   const setup = await setupRenderer()
-  const pi = await PiSessionRuntime.create({ authPath: `${root}/auth.json`, modelsPath: null })
+  const pi = await PiSessionRuntime.create({ authPath: `${root}/auth.json`, customProvidersPath: null })
   await pi.setRuntimeApiKey("anthropic", "fixture-key")
   const core = new AizenCore({
     cwd: root,
     store: new SessionStore(`${root}/sessions/${projectDirectoryName(root)}`),
     pi,
-    modelConfigStore: new ModelConfigStore(`${root}/models.json`),
+    modelConfigStore: new ModelConfigStore(`${root}/custom-providers.json`),
     views: new ViewStore(`${root}/views.json`),
   })
   const running = runInteractiveApp({ cwd: root, dataDirectory: root, testing: { renderer: setup.renderer, core } })

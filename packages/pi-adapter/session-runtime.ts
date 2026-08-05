@@ -899,7 +899,6 @@ export class PiSessionRuntime implements PiPort {
           (enabledPiProviders === undefined ||
             !this.#piProviderRuntime?.isBuiltin(model.provider) ||
             enabledPiProviders.has(model.provider)),
-
         ...(configured
           ? {
               thinkingLevels: [...configured.thinkingLevels],

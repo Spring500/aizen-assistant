@@ -188,7 +188,7 @@ for (const scenario of cases) {
       expect(await exists(join(root, "effect.txt"))).toBe(scenario.sideEffect)
 
       mock.handle(() => ({ type: "text", text: "恢复后继续" }))
-      const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+      const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })
       await pi.setRuntimeApiKey("anthropic", "test-key")
       const model = (await pi.listModels()).find(
         (item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6",
@@ -233,7 +233,7 @@ for (const scenario of cases) {
       await core.dispose()
 
       const beforeSecondOpen = (await store.read(sessionId)).records.length
-      const secondPi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), modelsPath: null })
+      const secondPi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })
       await secondPi.setRuntimeApiKey("anthropic", "test-key")
       secondPi.setModelBaseUrl(model.providerId, model.modelId, mock.url)
       const secondCore = new AizenCore({ cwd: root, store, pi: secondPi })

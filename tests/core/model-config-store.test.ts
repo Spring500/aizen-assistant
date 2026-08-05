@@ -12,7 +12,7 @@ afterEach(async () => {
 async function makeStore(source?: unknown) {
   const directory = await mkdtemp(join(tmpdir(), "aizen-model-config-"))
   directories.push(directory)
-  const path = join(directory, "models.json")
+  const path = join(directory, "custom-providers.json")
   if (source !== undefined) await writeFile(path, JSON.stringify(source, null, 2))
   return { path, store: new ModelConfigStore(path) }
 }
