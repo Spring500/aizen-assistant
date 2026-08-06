@@ -140,6 +140,22 @@ export class SessionStore {
     for (const sessionId of [...this.#leases.keys()]) await this.close(sessionId)
   }
 
+  /** 在创建事务内写入并获取新会话租约。 */
+  async createGeneratedAndOpen(
+    input: Omit<SessionHeader, "kind" | "version" | "sessionId">,
+    records: SessionRecord[],
+  ): Promise<SessionHeader> {
+    await mkdir(this.root, { recursive: true })
+    return withFileLock(join(this.root, ".sessions"), async () => {
+      await this.#refreshPaths()
+      const existing = new Set([...this.#paths.keys()].map((sessionId) => sessionId.toLowerCase()))
+      const sessionId = this.#idGenerator.generate((candidate) => existing.has(candidate.toLowerCase()))
+      const header = await this.#writeNewSession({ ...input, sessionId }, records)
+      await this.open(sessionId)
+      return header
+    })
+  }
+
   /** 生成一个不与现有会话冲突的助记词 ID。 */
   async suggestId(): Promise<string> {
     const existing = new Set((await this.list()).map((session) => session.sessionId.toLowerCase()))

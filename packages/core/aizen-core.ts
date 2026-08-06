@@ -544,9 +544,8 @@ export class AizenCore implements CorePort {
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
       { kind: "permission_mode_changed", recordId: crypto.randomUUID(), at, permissionMode },
     ]
-    const header = await this.#store.createGenerated({ cwd: this.#cwd, createdAt: at }, records)
+    const header = await this.#store.createGeneratedAndOpen({ cwd: this.#cwd, createdAt: at }, records)
     const sessionId = header.sessionId
-    await this.#store.open(sessionId)
     await this.#store.activate(sessionId)
     this.#sessionInitialCwd = header.cwd
     this.#records = records
@@ -799,9 +798,8 @@ export class AizenCore implements CorePort {
     const sourceName = this.#snapshot.currentSessionName || sourceSessionId
     const name = `${sourceName}_副本`
     const records = this.#recordsBeforeTurn(turnId, name, true)
-    const header = await this.#store.createGenerated({ cwd: this.#cwd, createdAt: at }, records)
+    const header = await this.#store.createGeneratedAndOpen({ cwd: this.#cwd, createdAt: at }, records)
     const sessionId = header.sessionId
-    await this.#store.open(sessionId)
     await this.#store.activate(sessionId)
     this.#sessionInitialCwd = this.#originalWorkingDirectory(header.cwd, records)
     await this.#activateRecords(sessionId, records, name, true)
