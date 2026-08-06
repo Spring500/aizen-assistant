@@ -1786,16 +1786,33 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     await dispatchWithError({ type: "rename_session", sessionId: snapshot.currentSessionId, name }, "重命名会话失败")
   }
 
-  const sessionSegments = (session: ReturnType<typeof core.getSnapshot>["sessions"][number]) => ({
-    segments: [
-      ...(session.name ? [{ text: session.name, color: systemColors.header, bold: true }, { text: "  " }] : []),
-      { text: session.sessionId, color: systemColors.shortcuts, italic: true, dim: true },
-    ],
-    details: [
-      { text: session.sessionId === core.getSnapshot().currentSessionId ? "● 当前会话 · " : "" },
-      { text: `${session.updatedAt} · ${session.preview}`, color: systemColors.shortcuts, dim: true },
-    ],
-  })
+  const sessionSegments = (session: ReturnType<typeof core.getSnapshot>["sessions"][number]) => {
+    const isCurrent = session.lockState === "current" || session.sessionId === core.getSnapshot().currentSessionId
+    const isOccupied = session.lockState === "occupied"
+    const marker = isCurrent ? " [当前]" : isOccupied ? " [已打开]" : ""
+    const color = isCurrent
+      ? systemColors.sessionCurrent
+      : isOccupied
+        ? systemColors.sessionOccupied
+        : systemColors.header
+    return {
+      segments: [
+        ...(session.name ? [{ text: session.name, color, bold: true }, { text: "  " }] : []),
+        {
+          text: session.sessionId,
+          color: isCurrent || isOccupied ? color : systemColors.shortcuts,
+          italic: true,
+          dim: !isCurrent && !isOccupied,
+        },
+        ...(marker ? [{ text: marker, color, bold: true }] : []),
+      ],
+      details: [
+        { text: `${session.updatedAt} · ${session.preview}`, color: systemColors.shortcuts, dim: true },
+        ...(isOccupied ? [{ text: " · 当前实例不可打开", color: systemColors.sessionOccupied }] : []),
+      ],
+      ...(isOccupied ? { disabled: true, disabledReason: "会话正在被其他 Agent 使用" } : {}),
+    }
+  }
 
   async function manageSession(sessionId: string): Promise<void> {
     const session = core.getSnapshot().sessions.find((item) => item.sessionId === sessionId)
