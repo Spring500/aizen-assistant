@@ -1,3 +1,6 @@
+import { existsSync } from "node:fs"
+import { readFile } from "node:fs/promises"
+import { join } from "node:path"
 import { type AppPreferencesStore, defaultAppPreferences, parseAppPreferences } from "./app-preferences-store.ts"
 import { CoreErrorQueue } from "./error-queue.ts"
 import type { ModelConfigStore } from "./model-config-store.ts"
@@ -7,8 +10,9 @@ import {
   type PiPermissionExecutionEvent,
   type PiPort,
   type PiPortEvent,
-  type ViewRuntimeInput,
+  type ResolvedViewResources,
 } from "./pi-port.ts"
+import { resolveProjectSources } from "./project-context.ts"
 import type {
   AssistantMessage,
   ModelReference,
@@ -21,6 +25,7 @@ import type {
 import { projectVisibleSessionRecords } from "./session-projection.ts"
 import { recoverInterruptedToolCalls } from "./session-recovery.ts"
 import type { SessionStore } from "./session-store.ts"
+import type { SkillStore } from "./skill-store.ts"
 import { ToolPermissionManager } from "./tool-permissions/manager.ts"
 import { ToolPermissionRegistry } from "./tool-permissions/registry.ts"
 import { sanitizePermissionAuditPayload } from "./tool-permissions/sanitizer.ts"
@@ -43,6 +48,7 @@ import {
   recordsToTranscript,
 } from "./types.ts"
 import type { ViewStore } from "./view-store.ts"
+import { readViewConfig } from "./view-config.ts"
 
 export type ExtraMessageProvider = (input: {
   cwd: string
@@ -57,6 +63,7 @@ export type AizenCoreOptions = {
   store: SessionStore
   pi: PiPort
   views?: ViewStore
+  skills?: SkillStore
   extraMessages?: ExtraMessageProvider
   modelConfigStore?: ModelConfigStore
   preferencesStore?: AppPreferencesStore
@@ -88,6 +95,7 @@ export class AizenCore implements CorePort {
   readonly #store: SessionStore
   readonly #pi: PiPort
   readonly #views: ViewStore | undefined
+  readonly #skills: SkillStore | undefined
   readonly #extraMessages: ExtraMessageProvider
   readonly #modelConfigStore: ModelConfigStore | undefined
   readonly #preferencesStore: AppPreferencesStore | undefined
@@ -136,6 +144,7 @@ export class AizenCore implements CorePort {
       streamingThinking: "",
     }
     this.#views = options.views
+    this.#skills = options.skills
     this.#extraMessages = options.extraMessages ?? (async () => [])
     this.#modelConfigStore = options.modelConfigStore
     this.#preferencesStore = options.preferencesStore
@@ -674,7 +683,7 @@ export class AizenCore implements CorePort {
     const model = this.#snapshot.currentModel
     const viewId = this.#snapshot.currentViewId
     if (!model || viewId === undefined) return
-    let view: ViewRuntimeInput
+    let view: ResolvedViewResources
     try {
       view = await this.#resolveView(viewId)
     } catch (error) {
@@ -981,11 +990,53 @@ export class AizenCore implements CorePort {
     if (model) await this.#tryRememberSessionDefaults(model, this.#snapshot.currentViewId ?? null, permissionMode)
   }
 
-  async #resolveView(viewId: ViewId) {
-    if (viewId === null) return { viewId: null }
-    if (!this.#views) return { viewId, directory: this.#cwd }
-    const view = await this.#views.resolve(viewId)
-    return { viewId, directory: view.directory }
+  /**
+   * 组装视图装载资源：
+   * - 无视图：内建提示词 + 项目上下文 + 用户层（原生体验）。
+   * - 有视图：SYSTEM.md 覆盖系统提示词；AGENTS.md 拼接在项目链之后；
+   *   skillPaths 顺序即优先级（视图自带 > 用户层 > 项目层）。
+   * 配置解析失败只报告、不阻塞（缺失或非法均按默认值处理）。
+   */
+  async #resolveView(viewId: ViewId): Promise<ResolvedViewResources> {
+    if (viewId === null) {
+      const user = this.#skills ? await this.#skills.resolveUserSkills() : { paths: [], missing: [] }
+      for (const name of user.missing) this.#reportError(`已安装的 skill 目录缺失：${name}`)
+      const project = resolveProjectSources(this.#cwd, "pi-default")
+      return {
+        viewId: null,
+        agentsFiles: project.agentsFiles,
+        skillPaths: [...user.paths, ...project.skillPaths],
+      }
+    }
+    const directory = this.#views ? (await this.#views.resolve(viewId)).directory : this.#cwd
+    const read = await readViewConfig(directory)
+    if (read.error) this.#reportError(`${viewId}：${read.error}`)
+    const config = read.config
+    const user =
+      config.loadUserSkills && this.#skills ? await this.#skills.resolveUserSkills() : { paths: [], missing: [] }
+    for (const name of user.missing) this.#reportError(`已安装的 skill 目录缺失：${name}`)
+    const project =
+      config.projectSources !== "none" ? resolveProjectSources(this.#cwd, config.projectSources) : undefined
+    const projectAgents = project?.agentsFiles ?? []
+    const projectSkills = project?.skillPaths ?? []
+    const viewSkillsPath = join(directory, "skills")
+    const viewSkills = existsSync(viewSkillsPath) ? [viewSkillsPath] : []
+    const systemFile = await this.#readOptionalTextFile(join(directory, "SYSTEM.md"))
+    const viewAgents = await this.#readOptionalTextFile(join(directory, "AGENTS.md"))
+    return {
+      viewId,
+      ...(systemFile ? { systemPrompt: systemFile.content } : {}),
+      agentsFiles: [...projectAgents, ...(viewAgents ? [viewAgents] : [])],
+      skillPaths: [...viewSkills, ...user.paths, ...projectSkills],
+    }
+  }
+
+  async #readOptionalTextFile(path: string): Promise<{ path: string; content: string } | undefined> {
+    try {
+      return { path, content: await readFile(path, "utf8") }
+    } catch {
+      return undefined
+    }
   }
 
   /**

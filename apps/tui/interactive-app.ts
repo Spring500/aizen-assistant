@@ -12,12 +12,15 @@ import type {
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
+import { SkillStore, type DiscoveredSkill, type InstalledSkill } from "../../packages/core/skill-store.ts"
 import { JsonlPermissionGapRecorder } from "../../packages/core/tool-permissions/gap-recorder.ts"
 import type { CorePort } from "../../packages/core/types.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
+import { readViewConfig, writeViewConfig, type ProjectSources } from "../../packages/core/view-config.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
+import { cycleMenu } from "../../packages/tui-kit/cycle-menu.ts"
 import { selectEditableItem } from "../../packages/tui-kit/editable-selector.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { editInline } from "../../packages/tui-kit/inline-input.ts"
@@ -51,7 +54,12 @@ export type InteractiveAppOptions = {
   cwd: string
   dataDirectory: string
   collectPermissionGaps?: boolean
-  testing?: { renderer: TuiRenderer; core: CorePort }
+  testing?: {
+    renderer: TuiRenderer
+    core: CorePort
+    /** 覆盖目录打开实现，供测试注入可预期的失败或替身。 */
+    openDirectory?: (path: string) => Promise<void>
+  }
 }
 
 const authPromptLabels: Record<string, string> = {
@@ -85,6 +93,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const store = new SessionStore(join(options.dataDirectory, "sessions", projectDirectoryName(options.cwd)), {
     indexPath: join(options.dataDirectory, "cache", "session-index.json"),
   })
+  const skills = new SkillStore({
+    file: join(options.dataDirectory, "skills.json"),
+    cacheDirectory: join(options.dataDirectory, "skill-sources"),
+  })
   const core =
     options.testing?.core ??
     new AizenCore({
@@ -94,6 +106,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "custom-providers.json")),
       preferencesStore: new AppPreferencesStore(join(options.dataDirectory, "preferences.json")),
       views: new ViewStore(join(options.dataDirectory, "views.json")),
+      skills,
       ...(options.collectPermissionGaps
         ? {
             permissionGapRecorder: new JsonlPermissionGapRecorder(
@@ -178,6 +191,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         else if (command.name === "/fold") runAction(chooseFold)
         else if (command.name === "/models") runAction(manageModels)
         else if (command.name === "/agents") runAction(openAgentSettings)
+        else if (command.name === "/skills") runAction(manageSkills)
       },
       onAbort: () => void core.dispatch({ type: "abort" }),
       onQuit: quit,
@@ -406,69 +420,314 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
+  /**
+   * 视图操作页：停留在页面内完成全部操作。配置项用 ←/→ 直接循环切换并实时写入，
+   * 编辑文件与打开目录后回到原光标位置，只有移除/删除才会离开本页。
+   */
   async function manageView(viewId: string) {
     const viewItem = core.getSnapshot().views.find((item) => item.id === viewId)
     if (!viewItem) return
-    const action = await selectEditableItem(
-      overlays,
-      "view-action",
-      () => [
+    const read = await readViewConfig(viewItem.directory)
+    if (read.error) await showError("视图配置", read.error)
+    const config = read.config
+
+    const projectSourceOptions: ReadonlyArray<{ value: ProjectSources; label: string; hint: string }> = [
+      { value: "none", label: "不加载", hint: "只用视图自身的文档与技能，不加载工作路径的" },
+      { value: "cwd", label: "仅工作目录", hint: "额外加载当前工作目录的 AGENTS.md 与 Skill" },
+      { value: "git-root", label: "git 仓库根", hint: "额外加载工作目录及仓库内上级目录的 AGENTS.md 与 Skill" },
+      {
+        value: "pi-default",
+        label: "pi 默认",
+        hint: "额外加载：AGENTS.md 到文件系统根、Skill 到 git 仓库根",
+      },
+    ]
+    const projectSourceLabel = (value: ProjectSources) =>
+      projectSourceOptions.find((item) => item.value === value)?.label ?? value
+    const projectSourceHint = (value: ProjectSources) =>
+      projectSourceOptions.find((item) => item.value === value)?.hint ?? ""
+
+    await cycleMenu(overlays, "view-settings-page", {
+      title: `管理视图 · ${viewItem.name}`,
+      signal: interactionController.signal,
+      onError: (kind, message) => showError(kind === "cycle" ? "视图配置" : "操作失败", message),
+      rows: [
         {
-          name: `名称  ${viewItem.name}`,
-          description: "视图显示名称",
-          value: "edited",
-          edit: {
-            label: "名称  ",
-            value: viewItem.name,
-            validate: (value) => (value.trim() ? undefined : "视图名称不能为空"),
-            save: async (value) => {
-              await dispatchWithError({ type: "update_view", viewId, name: value.trim() }, "更新视图失败")
-              viewItem.name = value.trim()
-            },
+          kind: "cycle",
+          label: () => `工作路径上下文加载范围  [${projectSourceLabel(config.projectSources)}]`,
+          hint: () => projectSourceHint(config.projectSources),
+          cycle: async (direction) => {
+            const index = projectSourceOptions.findIndex((item) => item.value === config.projectSources)
+            const next =
+              projectSourceOptions[(index + direction + projectSourceOptions.length) % projectSourceOptions.length]
+            if (!next) return
+            config.projectSources = next.value
+            await writeViewConfig(viewItem.directory, config)
           },
         },
         {
-          name: `目录路径  ${viewItem.path}`,
-          description: "视图资源所在目录",
-          value: "edited",
-          edit: {
-            label: "目录路径  ",
-            value: viewItem.path,
-            validate: (value) => (value.trim() ? undefined : "目录路径不能为空"),
-            save: async (value) => {
-              await dispatchWithError({ type: "update_view", viewId, path: value.trim() }, "更新视图失败")
-              viewItem.path = value.trim()
-            },
+          kind: "cycle",
+          label: () => `加载全局技能  [${config.loadUserSkills ? "是" : "否"}]`,
+          hint: () => "是否加载已安装的全局技能",
+          cycle: async () => {
+            config.loadUserSkills = !config.loadUserSkills
+            await writeViewConfig(viewItem.directory, config)
           },
         },
-        { name: "编辑 SYSTEM.md", description: "不存在时自动创建", value: "system" },
-        { name: "编辑 AGENTS.md", description: "不存在时自动创建", value: "agents" },
-        { name: "打开 Skills 目录", description: viewItem.directory, value: "skills" },
-        { name: "移除注册", description: "保留视图目录和文件", value: "remove" },
-        { name: "删除视图目录", description: "同时删除注册和目录，需要再次确认", value: "delete" },
+        {
+          kind: "action",
+          label: () => `名称  ${viewItem.name}`,
+          hint: () => "Enter 重命名",
+          action: async () => {
+            const value = await promptText("view-name", "重命名视图", "名称  ", viewItem.name)
+            if (value === undefined) return false
+            const trimmed = value.trim()
+            if (!trimmed) {
+              await showError("视图名称", "名称不能为空")
+              return false
+            }
+            const result = await dispatchWithError({ type: "update_view", viewId, name: trimmed }, "更新视图失败")
+            if (result.ok) viewItem.name = trimmed
+            return false
+          },
+        },
+        {
+          kind: "action",
+          label: () => `目录路径  ${viewItem.path}`,
+          hint: () => "Enter 修改",
+          action: async () => {
+            const value = await promptText("view-path", "修改视图目录", "目录路径  ", viewItem.path)
+            if (value === undefined) return false
+            const trimmed = value.trim()
+            if (!trimmed) {
+              await showError("目录路径", "路径不能为空")
+              return false
+            }
+            const result = await dispatchWithError({ type: "update_view", viewId, path: trimmed }, "更新视图失败")
+            if (result.ok) viewItem.path = trimmed
+            return false
+          },
+        },
+        {
+          kind: "action",
+          label: () => "编辑 SYSTEM.md",
+          hint: () => "不存在时自动创建",
+          action: async () => {
+            const ensured = await dispatchWithError(
+              { type: "ensure_view_file", viewId, name: "SYSTEM.md" },
+              "创建视图文件失败",
+            )
+            if (ensured.ok) await openExternalEditor(join(viewItem.directory, "SYSTEM.md"))
+            return false
+          },
+        },
+        {
+          kind: "action",
+          label: () => "编辑 AGENTS.md",
+          hint: () => "不存在时自动创建",
+          action: async () => {
+            const ensured = await dispatchWithError(
+              { type: "ensure_view_file", viewId, name: "AGENTS.md" },
+              "创建视图文件失败",
+            )
+            if (ensured.ok) await openExternalEditor(join(viewItem.directory, "AGENTS.md"))
+            return false
+          },
+        },
+        {
+          kind: "action",
+          label: () => "打开 Skills 目录",
+          hint: () => viewItem.directory,
+          action: async () => {
+            await (options.testing?.openDirectory ?? openDirectory)(join(viewItem.directory, "skills"))
+            return false
+          },
+        },
+        {
+          kind: "action",
+          label: () => "移除注册",
+          hint: () => "保留视图目录和文件",
+          action: async () => {
+            await dispatchWithError({ type: "remove_view", viewId }, "移除视图失败")
+            return true
+          },
+        },
+        {
+          kind: "action",
+          label: () => "删除视图目录",
+          hint: () => "同时删除注册和目录，需要再次确认",
+          action: async () => {
+            const confirmed = await selectItem(
+              overlays,
+              "view-delete-confirm",
+              [
+                { name: "确认删除", description: viewItem.directory, value: true },
+                { name: "取消", description: "不做修改", value: false },
+              ],
+              { title: `永久删除视图 ${viewItem.name}？`, signal: interactionController.signal },
+            )
+            if (confirmed)
+              await dispatchWithError({ type: "remove_view", viewId, deleteDirectory: true }, "删除视图失败")
+            return true
+          },
+        },
       ],
-      { title: `管理视图 · ${viewItem.name}`, signal: interactionController.signal },
-    )
-    if (action === "edited") return manageView(viewId)
-    if (action === "system" || action === "agents") {
-      const name = action === "system" ? "SYSTEM.md" : "AGENTS.md"
-      const ensured = await dispatchWithError({ type: "ensure_view_file", viewId, name }, "创建视图文件失败")
-      if (ensured.ok) await openExternalEditor(join(viewItem.directory, name))
-    } else if (action === "skills") {
-      await openDirectory(join(viewItem.directory, "skills"))
-    } else if (action === "remove") {
-      await dispatchWithError({ type: "remove_view", viewId }, "移除视图失败")
-    } else if (action === "delete") {
-      const confirmed = await selectItem(
-        overlays,
-        "view-delete-confirm",
-        [
-          { name: "确认删除", description: viewItem.directory, value: true },
-          { name: "取消", description: "不做修改", value: false },
-        ],
-        { title: `永久删除视图 ${viewItem.name}？`, signal: interactionController.signal },
+    })
+  }
+
+  async function promptText(
+    id: string,
+    title: string,
+    label: string,
+    placeholder: string,
+  ): Promise<string | undefined> {
+    const handle = overlays.open<string>({
+      id,
+      title,
+      description: "",
+      actions: [],
+      contentHeight: 1,
+      signal: interactionController.signal,
+      onCancel: () => handle.close(undefined),
+    })
+    const value = await editInline(overlays, handle, { id: `${id}-input`, label, placeholder })
+    handle.close(value)
+    return value
+  }
+
+  async function manageSkills(): Promise<void> {
+    beginInteraction()
+    try {
+      while (!exiting) {
+        const installed = await skills.list()
+        const action = await selectItem<string>(
+          overlays,
+          "skills-manager",
+          [
+            { name: "引入并发现技能", description: "输入 git 仓库地址并扫描其中的技能", value: "__discover__" },
+            { name: "更新全部", description: "按来源仓库重新拉取已安装技能", value: "__update__" },
+            ...installed.map((skill) => ({
+              name: skill.name,
+              description: `${skill.sourceUrl} · ${skill.relPath}`,
+              value: skill.name,
+            })),
+          ],
+          { title: "技能管理", signal: interactionController.signal },
+        )
+        if (!action) return
+        if (action === "__discover__") {
+          await discoverAndInstallSkills()
+          continue
+        }
+        if (action === "__update__") {
+          const result = await skills.updateSkills()
+          await showError(
+            "技能更新",
+            result.errors.length > 0
+              ? `已更新 ${result.updated} 个来源：${result.errors.join("；")}`
+              : `已更新 ${result.updated} 个来源`,
+          )
+          continue
+        }
+        await manageInstalledSkill(action)
+      }
+    } finally {
+      endInteraction()
+    }
+  }
+
+  async function discoverAndInstallSkills(): Promise<void> {
+    beginInteraction()
+    try {
+      const url = await promptText(
+        "skill-source-url",
+        "引入技能仓库",
+        "仓库地址  ",
+        "https://github.com/owner/repo.git",
       )
-      if (confirmed) await dispatchWithError({ type: "remove_view", viewId, deleteDirectory: true }, "删除视图失败")
+      if (url === undefined || !url.trim()) return
+      let discovered: DiscoveredSkill[]
+      try {
+        discovered = await skills.discoverSource(url.trim())
+      } catch (error) {
+        await showError("发现技能失败", error instanceof Error ? error.message : String(error))
+        return
+      }
+      if (discovered.length === 0) {
+        await showError("未发现技能", "仓库中没有符合 SKILL.md 规范的技能")
+        return
+      }
+      const selected = await selectItem<DiscoveredSkill>(
+        overlays,
+        "skill-discover",
+        discovered.map((skill) => ({
+          name: skill.name,
+          description: `${skill.relPath} · ${skill.description ?? "无描述"}`,
+          value: skill,
+        })),
+        { title: "选择要安装的技能", signal: interactionController.signal },
+      )
+      if (!selected) return
+      await installDiscoveredSkill({
+        name: selected.name,
+        sourceUrl: url.trim(),
+        relPath: selected.relPath,
+        ...(selected.description ? { description: selected.description } : {}),
+      })
+    } finally {
+      endInteraction()
+    }
+  }
+
+  async function installDiscoveredSkill(input: InstalledSkill): Promise<void> {
+    const result = await skills.installSkill(input)
+    if ("conflict" in result) {
+      const replace = await selectItem<boolean>(
+        overlays,
+        "skill-conflict",
+        [
+          { name: "替换来源", description: `改用 ${input.sourceUrl} 提供该技能`, value: true },
+          { name: "保留现状", description: `继续使用 ${result.conflict.existing.sourceUrl}`, value: false },
+        ],
+        { title: `已存在同名技能 ${result.conflict.existing.name}`, signal: interactionController.signal },
+      )
+      if (replace === true) {
+        await skills.replaceSkill(input.name, {
+          sourceUrl: input.sourceUrl,
+          relPath: input.relPath,
+          ...(input.description ? { description: input.description } : {}),
+        })
+        await showError("技能已替换", `${input.name} 已改用新来源`)
+      }
+      return
+    }
+    await showError("技能已安装", `${input.name} 已加入全局技能`)
+  }
+
+  async function manageInstalledSkill(name: string): Promise<void> {
+    const action = await selectItem<string>(
+      overlays,
+      "installed-skill-action",
+      [
+        { name: "更新", description: "按来源仓库重新拉取该技能", value: "update" },
+        { name: "卸载", description: "从全局技能移除并清理不再使用的缓存", value: "remove" },
+      ],
+      { title: `技能 ${name}`, signal: interactionController.signal },
+    )
+    if (!action) return
+    if (action === "update") {
+      try {
+        await skills.updateSkill(name)
+        await showError("技能已更新", name)
+      } catch (error) {
+        await showError("更新失败", error instanceof Error ? error.message : String(error))
+      }
+    } else if (action === "remove") {
+      try {
+        await skills.removeSkill(name)
+        await showError("技能已卸载", name)
+      } catch (error) {
+        await showError("卸载失败", error instanceof Error ? error.message : String(error))
+      }
     }
   }
 
@@ -1616,7 +1875,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   try {
     await dispatchWithError({ type: "load_preferences" }, "读取应用偏好失败")
     while (!exiting && !core.getSnapshot().currentSessionId) {
-      await chooseSession()
+      // 启动流程里的交互错误只提示、不让整个应用崩溃；失败后回到会话选择，而不是退出进程。
+      try {
+        await chooseSession()
+      } catch (error) {
+        await showError("操作失败", error instanceof Error ? error.message : String(error))
+      }
       if (!core.getSnapshot().currentSessionId) await Bun.sleep(50)
     }
     while (!exiting) {

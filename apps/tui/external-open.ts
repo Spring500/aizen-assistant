@@ -19,8 +19,8 @@ export async function openDirectory(path: string): Promise<void> {
       : process.platform === "darwin"
         ? ["open", path]
         : ["xdg-open", path]
-  const child = Bun.spawn(command, { stdout: "ignore", stderr: "pipe" })
-  const exitCode = await child.exited
-  if (exitCode !== 0)
-    throw new Error(`无法打开目录：${new TextDecoder().decode(await new Response(child.stderr).arrayBuffer())}`)
+  // 目录打开器是即发即忘的 GUI 程序：Windows 的 explorer 成功打开也返回退出码 1，
+  // xdg-open / open 会立即返回，退出码都不能表示打开结果，因此只处理启动失败。
+  const child = Bun.spawn(command, { stdout: "ignore", stderr: "ignore" })
+  void child.exited.catch(() => {})
 }

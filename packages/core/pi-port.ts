@@ -17,12 +17,20 @@ export class PiModelRuntimeError extends Error {
   }
 }
 
-export type ViewRuntimeInput =
-  | { viewId: null }
-  | {
-      viewId: string
-      directory: string
-    }
+export type ResolvedAgentsFile = { path: string; content: string }
+
+/**
+ * 视图装载所需的完整资源描述，由 core 组装、adapter 只消费：
+ * - 无视图：内建提示词 + 项目上下文 + 用户层（原生体验）。
+ * - 有视图：SYSTEM.md 覆盖系统提示词；AGENTS.md 拼接在项目链之后；
+ *   skillPaths 顺序即优先级（视图自带 > 用户层 > 项目层）。
+ */
+export type ResolvedViewResources = {
+  viewId: string | null
+  systemPrompt?: string
+  agentsFiles: ResolvedAgentsFile[]
+  skillPaths: string[]
+}
 
 export type ModelRuntimeInfo = ModelReference & {
   contextWindow?: number
@@ -93,7 +101,7 @@ export type PiPortEvent =
 export type PiCreateInput = {
   cwd: string
   model: ModelReference
-  view: ViewRuntimeInput
+  view: ResolvedViewResources
 }
 
 export type PiRestoreInput = PiCreateInput & {
@@ -136,8 +144,8 @@ export type PiPermissionExecutionHandler = (event: PiPermissionExecutionEvent) =
 export interface PiPort {
   create(input: PiCreateInput): Promise<ModelRuntimeInfo>
   restore(input: PiRestoreInput): Promise<ModelRuntimeInfo>
-  refreshView(view: ViewRuntimeInput): Promise<void>
-  switchView(view: ViewRuntimeInput, records: SessionRecord[]): Promise<ModelRuntimeInfo>
+  refreshView(view: ResolvedViewResources): Promise<void>
+  switchView(view: ResolvedViewResources, records: SessionRecord[]): Promise<ModelRuntimeInfo>
   prompt(input: PiPromptInput): Promise<void>
   /** 使用当前模型压缩长期对话；可附加摘要关注点。 */
   compact(customInstructions?: string): Promise<void>

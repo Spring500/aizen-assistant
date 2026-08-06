@@ -3,6 +3,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path"
 
 import { atomicWriteFile, withFileLock } from "./file-transaction.ts"
 import { WordTripletIdGenerator, type MnemonicIdGenerator } from "./mnemonic-id.ts"
+import { DEFAULT_VIEW_CONFIG, writeViewConfig } from "./view-config.ts"
 
 export type ViewDefinition = {
   id: string
@@ -143,6 +144,7 @@ export class ViewStore {
       }).catch((error) => {
         if (!error || typeof error !== "object" || !("code" in error) || error.code !== "EEXIST") throw error
       })
+      await writeViewConfig(directory, { ...DEFAULT_VIEW_CONFIG })
       file.views.push(parsed)
       await atomicWriteFile(this.#file, `${JSON.stringify(file, null, 2)}\n`)
     })

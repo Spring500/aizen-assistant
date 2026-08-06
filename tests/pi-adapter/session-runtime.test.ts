@@ -1,10 +1,12 @@
 import { afterEach, describe, expect } from "bun:test"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
+import { existsSync, readFileSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { PiPortEvent } from "../../packages/core/pi-port.ts"
 import type { SessionRecord } from "../../packages/core/session-format.ts"
+import type { ResolvedViewResources } from "../../packages/core/pi-port.ts"
 import { convertToLlm, serializeConversation, SessionManager } from "@earendil-works/pi-coding-agent"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { startMockServer } from "../utils/mock-server.ts"
@@ -25,6 +27,21 @@ async function makeRuntime(): Promise<{ directory: string; runtime: PiSessionRun
 afterEach(async () => {
   await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
+
+const emptyView: ResolvedViewResources = { viewId: null, agentsFiles: [], skillPaths: [] }
+
+/** 从视图目录读取 SYSTEM.md、AGENTS.md 与 skills/，构造 adapter 消费的装载资源。 */
+function viewResources(directory: string, viewId: string): ResolvedViewResources {
+  const agentsPath = join(directory, "AGENTS.md")
+  const systemPath = join(directory, "SYSTEM.md")
+  const skillsPath = join(directory, "skills")
+  return {
+    viewId,
+    ...(existsSync(systemPath) ? { systemPrompt: readFileSync(systemPath, "utf8") } : {}),
+    agentsFiles: existsSync(agentsPath) ? [{ path: agentsPath, content: readFileSync(agentsPath, "utf8") }] : [],
+    skillPaths: existsSync(skillsPath) ? [skillsPath] : [],
+  }
+}
 
 async function captureRequest(
   runtime: PiSessionRuntime,
@@ -54,7 +71,7 @@ describe("pi 内存会话", () => {
     await runtime.setRuntimeApiKey(model.providerId, "test-key")
     const mock = await startMockServer()
     runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
-    await runtime.create({ cwd: directory, model, view: { viewId: null } })
+    await runtime.create({ cwd: directory, model, view: emptyView })
     const prompt = runtime.prompt({
       recordId: "running-record",
       turnId: "running-turn",
@@ -63,7 +80,7 @@ describe("pi 内存会话", () => {
     })
     const pending = await mock.take()
 
-    await expect(runtime.restore({ cwd: directory, model, view: { viewId: null }, records: [] })).rejects.toThrow(
+    await expect(runtime.restore({ cwd: directory, model, view: emptyView, records: [] })).rejects.toThrow(
       "生成或执行工具期间不能重建会话",
     )
     await expect(runtime.reloadModelConfig()).rejects.toThrow("生成或执行工具期间不能重新加载模型配置")
@@ -82,7 +99,7 @@ describe("pi 内存会话", () => {
     const mock = await startMockServer("完成")
     try {
       runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
-      await runtime.create({ cwd: directory, model, view: { viewId: null } })
+      await runtime.create({ cwd: directory, model, view: emptyView })
       await runtime.prompt({
         recordId: "schema-record",
         turnId: "schema-turn",
@@ -140,7 +157,7 @@ describe("pi 内存会话", () => {
       },
     ]
 
-    await expect(runtime.restore({ cwd: directory, model, view: { viewId: null }, records })).resolves.toBeDefined()
+    await expect(runtime.restore({ cwd: directory, model, view: emptyView, records })).resolves.toBeDefined()
     expect(await captureRequest(runtime, model)).toContain("历史消息")
     await runtime.dispose()
   })
@@ -161,7 +178,7 @@ describe("pi 内存会话", () => {
       },
     ]
 
-    await runtime.restore({ cwd: directory, model, view: { viewId: null }, records })
+    await runtime.restore({ cwd: directory, model, view: emptyView, records })
     const request = JSON.parse(await captureRequest(runtime, model)) as {
       body: { messages: Array<{ content: Array<{ text?: string }> }> }
     }
@@ -224,7 +241,7 @@ describe("pi 内存会话", () => {
       },
     ]
 
-    await runtime.restore({ cwd: directory, model, view: { viewId: "test", directory }, records })
+    await runtime.restore({ cwd: directory, model, view: viewResources(directory, "test"), records })
     const request = await captureRequest(runtime, model)
     expect(request).not.toContain("不要恢复")
     expect(request).toContain("需要恢复")
@@ -278,7 +295,7 @@ describe("pi 内存会话", () => {
       },
     ]
 
-    await runtime.restore({ cwd: directory, model, view: { viewId: "test", directory }, records })
+    await runtime.restore({ cwd: directory, model, view: viewResources(directory, "test"), records })
     const request = await captureRequest(runtime, model)
     expect(request).toContain("已完成输入")
     expect(request).not.toContain("意外中断输入")
@@ -354,7 +371,7 @@ describe("pi 内存会话", () => {
     ]
     const events: PiPortEvent[] = []
     runtime.subscribe((event) => events.push(event))
-    await runtime.restore({ cwd: directory, model, view: { viewId: null }, records })
+    await runtime.restore({ cwd: directory, model, view: emptyView, records })
     await runtime.compact("保留目标")
     expect(events).toContainEqual({
       type: "compaction",
@@ -434,7 +451,7 @@ describe("pi 内存会话", () => {
     ]
     const events: PiPortEvent[] = []
     runtime.subscribe((event) => events.push(event))
-    await runtime.restore({ cwd: directory, model, view: { viewId: null }, records })
+    await runtime.restore({ cwd: directory, model, view: emptyView, records })
     await runtime.prompt({
       recordId: "new-user",
       turnId: "new-turn",
@@ -460,7 +477,7 @@ describe("pi 内存会话", () => {
       await restored.restore({
         cwd: directory,
         model,
-        view: { viewId: null },
+        view: emptyView,
         records: [
           ...records,
           {
@@ -552,7 +569,7 @@ describe("pi 内存会话", () => {
     ]
     const events: PiPortEvent[] = []
     runtime.subscribe((event) => events.push(event))
-    await runtime.restore({ cwd: directory, model, view: { viewId: null }, records })
+    await runtime.restore({ cwd: directory, model, view: emptyView, records })
     await runtime.prompt({
       recordId: "overflow-user",
       turnId: "overflow-turn",
@@ -587,7 +604,7 @@ describe("pi 内存会话", () => {
     await writeFile(join(viewDirectory, "AGENTS.md"), "项目规则甲")
     await writeFile(join(skillDirectory, "SKILL.md"), "---\nname: review\ndescription: 审查代码\n---\n")
 
-    await runtime.create({ cwd: directory, model, view: { viewId: "review", directory: viewDirectory } })
+    await runtime.create({ cwd: directory, model, view: viewResources(viewDirectory, "review") })
     const firstRequest = await captureRequest(runtime, model)
     expect(firstRequest).toContain("视图系统甲")
     expect(firstRequest).toContain("项目规则甲")
@@ -595,7 +612,7 @@ describe("pi 内存会话", () => {
 
     await writeFile(join(viewDirectory, "SYSTEM.md"), "视图系统乙")
     await writeFile(join(viewDirectory, "AGENTS.md"), "项目规则乙")
-    await runtime.refreshView({ viewId: "review", directory: viewDirectory })
+    await runtime.refreshView(viewResources(viewDirectory, "review"))
     const secondRequest = await captureRequest(runtime, model)
     expect(secondRequest).toContain("视图系统乙")
     expect(secondRequest).toContain("项目规则乙")
@@ -603,7 +620,7 @@ describe("pi 内存会话", () => {
     await runtime.dispose()
   })
 
-  test("无视图会话使用内建提示词且不加载工作目录上下文", async () => {
+  test("空资源视图只加载内建提示词", async () => {
     const { directory, runtime } = await makeRuntime()
     const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
     expect(model).toBeDefined()
@@ -614,11 +631,38 @@ describe("pi 内存会话", () => {
     await writeFile(join(directory, "AGENTS.md"), "不应加载的项目规则")
     await writeFile(join(directory, "skills", "hidden", "SKILL.md"), "---\nname: hidden\ndescription: 不应加载\n---\n")
 
-    await runtime.create({ cwd: directory, model, view: { viewId: null } })
+    await runtime.create({ cwd: directory, model, view: emptyView })
     const request = await captureRequest(runtime, model)
     expect(request).toContain("You are an expert coding assistant")
     expect(request).not.toContain("不应加载")
     expect(request).not.toContain("hidden")
+    await runtime.dispose()
+  })
+
+  test("无视图原生模式加载项目上下文与用户技能", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const projectAgents = join(directory, "AGENTS.md")
+    const projectSkills = join(directory, "skills")
+    await writeFile(projectAgents, "项目规则")
+    await mkdir(join(projectSkills, "helper"), { recursive: true })
+    await writeFile(join(projectSkills, "helper", "SKILL.md"), "---\nname: helper\ndescription: 辅助\n---\n")
+
+    await runtime.create({
+      cwd: directory,
+      model,
+      view: {
+        viewId: null,
+        agentsFiles: [{ path: projectAgents, content: "项目规则" }],
+        skillPaths: [projectSkills],
+      },
+    })
+    const request = await captureRequest(runtime, model)
+    expect(request).toContain("项目规则")
+    expect(request).toContain("helper")
     await runtime.dispose()
   })
 
@@ -628,7 +672,7 @@ describe("pi 内存会话", () => {
     expect(model).toBeDefined()
     if (!model) return
     await runtime.setRuntimeApiKey(model.providerId, "test-key")
-    await runtime.create({ cwd: directory, model, view: { viewId: "default", directory } })
+    await runtime.create({ cwd: directory, model, view: viewResources(directory, "default") })
     expect(await captureRequest(runtime, model)).toContain("You are an expert coding assistant")
     await runtime.dispose()
   })
@@ -658,7 +702,7 @@ describe("pi 内存会话", () => {
     })
     try {
       runtime.setModelBaseUrl(model.providerId, model.modelId, `http://localhost:${server.port}`)
-      await runtime.create({ cwd: directory, model, view: { viewId: "test", directory } })
+      await runtime.create({ cwd: directory, model, view: viewResources(directory, "test") })
       const messageEvents: Array<{
         recordId: string
         record: { role: string; parts?: Array<{ kind: string; timing?: { startedAt: number; finishedAt: number } }> }

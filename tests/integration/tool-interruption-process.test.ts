@@ -111,7 +111,12 @@ async function waitForFile(path: string, process: Bun.Subprocess, trace: (stage:
       trace("检查点文件已可见")
       return
     }
-    if (process.exitCode !== null) throw new Error(`检查点 worker 提前退出：${process.exitCode}`)
+    // 进程被外部终止（如 bun 测试运行器清理悬空子进程）时 exitCode 可能保持 null，
+    // 必须同时检查 signalCode / killed，否则会误等满超时窗口。
+    if (process.exitCode !== null || process.signalCode !== null || process.killed)
+      throw new Error(
+        `检查点 worker 提前退出：exitCode=${process.exitCode} signalCode=${process.signalCode} killed=${process.killed}`,
+      )
     await Bun.sleep(10)
   }
   trace("等待检查点超时")

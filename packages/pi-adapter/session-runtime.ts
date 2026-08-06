@@ -1,5 +1,3 @@
-import { existsSync, readFileSync } from "node:fs"
-import { join } from "node:path"
 import { builtinModels } from "@earendil-works/pi-ai/providers/all"
 import type { AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core"
 import {
@@ -48,7 +46,7 @@ import type {
   PiPromptInput,
   PiRestoreInput,
   PiSessionTitleInput,
-  ViewRuntimeInput,
+  ResolvedViewResources,
 } from "../core/pi-port.ts"
 import { PiModelRuntimeError } from "../core/pi-port.ts"
 import type { AizenToolRegistration } from "../core/tool-registry.ts"
@@ -153,28 +151,21 @@ function modelReference(model: Model<Api>, thinkingLevel: ThinkingLevel, config:
 
 function createViewLoader(
   cwd: string,
-  view: ViewRuntimeInput,
+  view: ResolvedViewResources,
   settingsManager: SettingsManager,
 ): DefaultResourceLoader {
-  const emptyView = view.viewId === null
-  const directory = emptyView ? cwd : view.directory
-  const systemPath = join(directory, "SYSTEM.md")
-  const agentsPath = join(directory, "AGENTS.md")
   return new DefaultResourceLoader({
     cwd,
-    agentDir: directory,
+    agentDir: cwd,
     settingsManager,
     noExtensions: true,
     noSkills: true,
     noPromptTemplates: true,
     noThemes: true,
     noContextFiles: true,
-    additionalSkillPaths: !emptyView && existsSync(join(directory, "skills")) ? [join(directory, "skills")] : [],
-    systemPromptOverride: () => (!emptyView && existsSync(systemPath) ? readFileSync(systemPath, "utf8") : undefined),
-    agentsFilesOverride: () => ({
-      agentsFiles:
-        !emptyView && existsSync(agentsPath) ? [{ path: agentsPath, content: readFileSync(agentsPath, "utf8") }] : [],
-    }),
+    additionalSkillPaths: view.skillPaths,
+    systemPromptOverride: () => view.systemPrompt,
+    agentsFilesOverride: () => ({ agentsFiles: view.agentsFiles }),
   })
 }
 
@@ -676,7 +667,7 @@ export class PiSessionRuntime implements PiPort {
   }
 
   /** 视图会改变系统提示词和工具集合，只能在没有活动请求时原子替换。 */
-  async refreshView(view: ViewRuntimeInput): Promise<void> {
+  async refreshView(view: ResolvedViewResources): Promise<void> {
     const session = this.#requireSession()
     if (this.#activePrompt || !session.isIdle) throw new Error("生成或执行工具期间不能刷新视图")
     if (!this.#settingsManager || !this.#viewLoader || !this.#cwd) throw new Error("视图加载器尚未初始化")
@@ -687,7 +678,7 @@ export class PiSessionRuntime implements PiPort {
     session.setActiveToolsByName(session.getActiveToolNames())
   }
 
-  async switchView(view: ViewRuntimeInput, _records: SessionRecord[]): Promise<ModelRuntimeInfo> {
+  async switchView(view: ResolvedViewResources, _records: SessionRecord[]): Promise<ModelRuntimeInfo> {
     await this.refreshView(view)
     const session = this.#requireSession()
     const model = session.model
@@ -1250,8 +1241,9 @@ export class PiSessionRuntime implements PiPort {
     }
   }
 
-  #validateViewLoader(loader: ResourceLoader, viewId: ViewRuntimeInput["viewId"]): void {
-    const diagnostics = loader.getSkills().diagnostics
+  #validateViewLoader(loader: ResourceLoader, viewId: ResolvedViewResources["viewId"]): void {
+    // 同名碰撞是三层技能（视图 > 用户 > 项目）的既定优先级，先到先得，不视为错误。
+    const diagnostics = loader.getSkills().diagnostics.filter((item) => item.type !== "collision")
     if (viewId === null || diagnostics.length === 0) return
     const details = diagnostics.map((item) => `${item.path ?? "Skill"}: ${item.message}`).join("；")
     throw new Error(`视图 ${viewId} 的 Skill 无效：${details}`)
