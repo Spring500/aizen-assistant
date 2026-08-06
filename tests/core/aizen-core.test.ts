@@ -681,6 +681,25 @@ describe("核心编排", () => {
     await restored.dispose()
   })
 
+  test("第二个核心不能打开已占用会话", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-lock-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const first = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
+    await first.dispatch({ type: "create_session", model, viewId: null })
+    const sessionId = first.getSnapshot().currentSessionId
+    if (!sessionId) throw new Error("缺少会话 ID")
+
+    const second = new AizenCore({ cwd: "E:\\project", store: new SessionStore(root), pi: new FakePi() })
+    expect(await second.dispatch({ type: "open_session", sessionId })).toEqual({
+      ok: false,
+      error: { code: "SESSION_LOCKED", message: `会话正在被其他 Agent 使用：${sessionId}`, severity: "error" },
+    })
+    expect(second.getSnapshot().currentSessionId).toBeUndefined()
+    await first.dispose()
+    await second.dispose()
+  })
+
   test("目录变化时记录提示并正常打开和重命名", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)

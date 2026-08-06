@@ -24,7 +24,7 @@ import type {
 } from "./session-format.ts"
 import { projectVisibleSessionRecords } from "./session-projection.ts"
 import { recoverInterruptedToolCalls } from "./session-recovery.ts"
-import type { SessionStore } from "./session-store.ts"
+import { SessionLockedError, type SessionStore } from "./session-store.ts"
 import type { SkillStore } from "./skill-store.ts"
 import { ToolPermissionManager } from "./tool-permissions/manager.ts"
 import { ToolPermissionRegistry } from "./tool-permissions/registry.ts"
@@ -411,7 +411,12 @@ export class AizenCore implements CorePort {
       return {
         ok: false,
         error: {
-          code: error instanceof CoreCommandError ? error.code : "COMMAND_FAILED",
+          code:
+            error instanceof CoreCommandError
+              ? error.code
+              : error instanceof SessionLockedError
+                ? error.code
+                : "COMMAND_FAILED",
           message,
           severity: "error",
         },
@@ -541,6 +546,8 @@ export class AizenCore implements CorePort {
     ]
     const header = await this.#store.createGenerated({ cwd: this.#cwd, createdAt: at }, records)
     const sessionId = header.sessionId
+    await this.#store.open(sessionId)
+    await this.#store.activate(sessionId)
     this.#sessionInitialCwd = header.cwd
     this.#records = records
     this.#writeError = undefined
@@ -569,63 +576,71 @@ export class AizenCore implements CorePort {
    */
   async #openSession(sessionId: string): Promise<void> {
     this.#sessionNamingAbort?.abort()
-    const loaded = await this.#store.read(sessionId)
-    const previousCwd = this.#effectiveWorkingDirectory(loaded.header.cwd, loaded.records)
-    if (normalizeProjectPath(previousCwd) !== normalizeProjectPath(this.#cwd)) {
-      const record: SessionRecord = {
-        kind: "working_directory_changed",
-        recordId: crypto.randomUUID(),
-        at: new Date().toISOString(),
-        previousCwd,
-        currentCwd: this.#cwd,
+    const loaded = await this.#store.open(sessionId)
+    try {
+      const previousCwd = this.#effectiveWorkingDirectory(loaded.header.cwd, loaded.records)
+      if (normalizeProjectPath(previousCwd) !== normalizeProjectPath(this.#cwd)) {
+        const record: SessionRecord = {
+          kind: "working_directory_changed",
+          recordId: crypto.randomUUID(),
+          at: new Date().toISOString(),
+          previousCwd,
+          currentCwd: this.#cwd,
+        }
+        await this.#store.append(sessionId, record)
+        loaded.records.push(record)
       }
-      await this.#store.append(sessionId, record)
-      loaded.records.push(record)
+      const modelRecord = [...loaded.records].reverse().find((record) => record.kind === "model_changed")
+      const viewRecord = [...loaded.records].reverse().find((record) => record.kind === "view_changed")
+      const permissionRecord = [...loaded.records]
+        .reverse()
+        .find((record) => record.kind === "permission_mode_changed" || record.kind === "turn_started")
+      if (modelRecord?.kind !== "model_changed") throw new Error("会话没有模型记录")
+      if (viewRecord?.kind !== "view_changed") throw new Error("会话没有视图记录")
+      const recoveryRecords = this.#recoverInterruptedTools(loaded.records)
+      if (recoveryRecords.length > 0) {
+        for (const record of recoveryRecords) await this.#store.append(sessionId, record)
+        loaded.records.push(...recoveryRecords)
+      }
+      this.#records = loaded.records
+      this.#sessionInitialCwd = this.#originalWorkingDirectory(loaded.header.cwd, loaded.records)
+      this.#writeError = undefined
+      this.#snapshot.currentSessionId = sessionId
+      this.#sessionNamingAttempted = false
+      const renamedRecord = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
+      this.#snapshot.currentSessionName = renamedRecord?.kind === "session_renamed" ? renamedRecord.name : ""
+      this.#snapshot.currentModel = modelRecord.model
+      this.#snapshot.contextUsage = this.#contextUsageFromRecords()
+      this.#snapshot.currentViewId = viewRecord.viewId
+      this.#snapshot.currentPermissionMode =
+        permissionRecord?.kind === "permission_mode_changed"
+          ? permissionRecord.permissionMode
+          : permissionRecord?.kind === "turn_started"
+            ? (permissionRecord.permissionMode ?? "hybrid")
+            : (this.#snapshot.preferences.newSession.permissionMode ?? "hybrid")
+      this.#snapshot.pendingPermissionRequests = []
+      const visibleRecords = projectVisibleSessionRecords(loaded.records)
+      this.#snapshot.transcript = recordsToTranscript(visibleRecords)
+      this.#snapshot.streamingText = ""
+      this.#snapshot.streamingThinking = ""
+      delete this.#snapshot.responseMetrics
+      delete this.#snapshot.runtimeIssue
+      await this.#tryActivateCurrentRecords()
+      if (loaded.warnings.length > 0) this.#reportError(loaded.warnings.join("；"))
+      else if (recoveryRecords.length > 0)
+        this.#reportError("检测到上次异常退出时存在未完成的工具调用；已记录中断状态，未自动重试")
+      await this.#tryRememberSessionDefaults(
+        this.#snapshot.currentModel,
+        viewRecord.viewId,
+        this.#snapshot.currentPermissionMode,
+      )
+      await this.#store.activate(sessionId)
+      this.#snapshot.sessions = await this.#store.list()
+      this.#reportStoreWarnings()
+    } catch (error) {
+      await this.#store.close(sessionId).catch(() => {})
+      throw error
     }
-    const modelRecord = [...loaded.records].reverse().find((record) => record.kind === "model_changed")
-    const viewRecord = [...loaded.records].reverse().find((record) => record.kind === "view_changed")
-    const permissionRecord = [...loaded.records]
-      .reverse()
-      .find((record) => record.kind === "permission_mode_changed" || record.kind === "turn_started")
-    if (modelRecord?.kind !== "model_changed") throw new Error("会话没有模型记录")
-    if (viewRecord?.kind !== "view_changed") throw new Error("会话没有视图记录")
-    const recoveryRecords = this.#recoverInterruptedTools(loaded.records)
-    if (recoveryRecords.length > 0) {
-      for (const record of recoveryRecords) await this.#store.append(sessionId, record)
-      loaded.records.push(...recoveryRecords)
-    }
-    this.#records = loaded.records
-    this.#sessionInitialCwd = this.#originalWorkingDirectory(loaded.header.cwd, loaded.records)
-    this.#writeError = undefined
-    this.#snapshot.currentSessionId = sessionId
-    this.#sessionNamingAttempted = false
-    const renamedRecord = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
-    this.#snapshot.currentSessionName = renamedRecord?.kind === "session_renamed" ? renamedRecord.name : ""
-    this.#snapshot.currentModel = modelRecord.model
-    this.#snapshot.contextUsage = this.#contextUsageFromRecords()
-    this.#snapshot.currentViewId = viewRecord.viewId
-    this.#snapshot.currentPermissionMode =
-      permissionRecord?.kind === "permission_mode_changed"
-        ? permissionRecord.permissionMode
-        : permissionRecord?.kind === "turn_started"
-          ? (permissionRecord.permissionMode ?? "hybrid")
-          : (this.#snapshot.preferences.newSession.permissionMode ?? "hybrid")
-    this.#snapshot.pendingPermissionRequests = []
-    const visibleRecords = projectVisibleSessionRecords(loaded.records)
-    this.#snapshot.transcript = recordsToTranscript(visibleRecords)
-    this.#snapshot.streamingText = ""
-    this.#snapshot.streamingThinking = ""
-    delete this.#snapshot.responseMetrics
-    delete this.#snapshot.runtimeIssue
-    await this.#tryActivateCurrentRecords()
-    if (loaded.warnings.length > 0) this.#reportError(loaded.warnings.join("；"))
-    else if (recoveryRecords.length > 0)
-      this.#reportError("检测到上次异常退出时存在未完成的工具调用；已记录中断状态，未自动重试")
-    await this.#tryRememberSessionDefaults(
-      this.#snapshot.currentModel,
-      viewRecord.viewId,
-      this.#snapshot.currentPermissionMode,
-    )
   }
 
   #recoverInterruptedTools(records: SessionRecord[]): SessionRecord[] {
@@ -786,6 +801,8 @@ export class AizenCore implements CorePort {
     const records = this.#recordsBeforeTurn(turnId, name, true)
     const header = await this.#store.createGenerated({ cwd: this.#cwd, createdAt: at }, records)
     const sessionId = header.sessionId
+    await this.#store.open(sessionId)
+    await this.#store.activate(sessionId)
     this.#sessionInitialCwd = this.#originalWorkingDirectory(header.cwd, records)
     await this.#activateRecords(sessionId, records, name, true)
     this.#snapshot.sessions = await this.#store.list()

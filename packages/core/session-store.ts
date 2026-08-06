@@ -1,6 +1,6 @@
 import { mkdir, open, readdir, readFile, stat } from "node:fs/promises"
 import { basename, join } from "node:path"
-import { atomicWriteFile, withFileLock } from "./file-transaction.ts"
+import { acquireFileLock, atomicWriteFile, isFileLocked, withFileLock } from "./file-transaction.ts"
 import { type MnemonicIdGenerator, WordTripletIdGenerator } from "./mnemonic-id.ts"
 import { sessionFileName } from "./session-file-name.ts"
 import {
@@ -12,6 +12,16 @@ import {
 } from "./session-format.ts"
 import { type SessionIndexEntry, SessionIndexStore } from "./session-index-store.ts"
 
+export type SessionLockState = "available" | "occupied" | "current"
+
+export class SessionLockedError extends Error {
+  readonly code = "SESSION_LOCKED"
+
+  constructor(sessionId: string) {
+    super(`会话正在被其他 Agent 使用：${sessionId}`)
+  }
+}
+
 export type SessionSummary = {
   sessionId: string
   name: string
@@ -19,6 +29,7 @@ export type SessionSummary = {
   createdAt: string
   updatedAt: string
   preview: string
+  lockState?: SessionLockState
 }
 
 export type LoadedSession = {
@@ -51,6 +62,8 @@ export class SessionStore {
   readonly #idGenerator: MnemonicIdGenerator
   readonly #index: SessionIndexStore | undefined
   readonly #projectKey: string
+  readonly #leases = new Map<string, () => Promise<void>>()
+  #currentSessionId: string | undefined
   #warnings: string[] = []
 
   constructor(root: string, options: { idGenerator?: MnemonicIdGenerator; indexPath?: string } = {}) {
@@ -58,6 +71,73 @@ export class SessionStore {
     this.#idGenerator = options.idGenerator ?? new WordTripletIdGenerator()
     this.#index = options.indexPath ? new SessionIndexStore(options.indexPath) : undefined
     this.#projectKey = basename(root)
+  }
+
+  /** 获取指定会话的长期租约；已持有时返回当前历史。 */
+  async open(sessionId: string): Promise<LoadedSession> {
+    if (this.#leases.has(sessionId)) return this.#readPath(await this.#sessionPath(sessionId))
+    await this.#sessionPath(sessionId)
+    let release: () => Promise<void>
+    try {
+      release = await acquireFileLock(this.#lockPath(sessionId), { retries: 0 })
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ELOCKED") throw new SessionLockedError(sessionId)
+      throw error
+    }
+    try {
+      const loaded = await this.#readPath(await this.#sessionPath(sessionId))
+      this.#leases.set(sessionId, release)
+      this.#currentSessionId = sessionId
+      return loaded
+    } catch (error) {
+      await release().catch(() => {})
+      throw error
+    }
+  }
+
+  /** 将已持有租约的会话设为当前会话，并释放其他会话租约。 */
+  async activate(sessionId: string): Promise<void> {
+    if (!this.#leases.has(sessionId)) throw new SessionLockedError(sessionId)
+    for (const held of [...this.#leases.keys()]) if (held !== sessionId) await this.close(held)
+    this.#currentSessionId = sessionId
+  }
+
+  /** 释放指定会话或当前会话租约。 */
+  async close(sessionId?: string): Promise<void> {
+    const target = sessionId ?? this.#currentSessionId
+    if (!target) return
+    const release = this.#leases.get(target)
+    if (!release) return
+    this.#leases.delete(target)
+    if (this.#currentSessionId === target) this.#currentSessionId = undefined
+    await release()
+  }
+
+  /** 返回不依赖 JSONL 文件名的稳定锁路径。 */
+  #lockPath(sessionId: string): string {
+    return join(this.root, `.${sessionId}.session.lock`)
+  }
+
+  /** 用当前租约或一次性租约执行写操作。 */
+  async #withWriteLease<T>(sessionId: string, operation: () => Promise<T>): Promise<T> {
+    if (this.#leases.has(sessionId)) return operation()
+    let release: () => Promise<void>
+    try {
+      release = await acquireFileLock(this.#lockPath(sessionId), { retries: 0 })
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ELOCKED") throw new SessionLockedError(sessionId)
+      throw error
+    }
+    try {
+      return await operation()
+    } finally {
+      await release()
+    }
+  }
+
+  /** 释放当前实例持有的全部租约。 */
+  async closeAll(): Promise<void> {
+    for (const sessionId of [...this.#leases.keys()]) await this.close(sessionId)
   }
 
   /** 生成一个不与现有会话冲突的助记词 ID。 */
@@ -111,9 +191,9 @@ export class SessionStore {
   append(sessionId: string, record: SessionRecord): Promise<void> {
     const validated = parseSessionValue(record)
     if (validated.kind === "session") throw new Error("不能追加第二个会话文件头")
-    return this.#enqueue(sessionId, async () => {
-      const path = await this.#sessionPath(sessionId)
-      await withFileLock(path, async () => {
+    return this.#enqueue(sessionId, () =>
+      this.#withWriteLease(sessionId, async () => {
+        const path = await this.#sessionPath(sessionId)
         const file = await open(path, "a")
         try {
           await file.writeFile(`${JSON.stringify(validated)}\n`)
@@ -121,15 +201,15 @@ export class SessionStore {
         } finally {
           await file.close()
         }
-      })
-    })
+      }),
+    )
   }
 
   /** 在确认源记录未变化后，以原子替换方式重写会话。 */
   rewrite(sessionId: string, expectedRecords: SessionRecord[], records: SessionRecord[]): Promise<void> {
-    return this.#enqueue(sessionId, async () => {
-      const path = await this.#sessionPath(sessionId)
-      await withFileLock(path, async () => {
+    return this.#enqueue(sessionId, () =>
+      this.#withWriteLease(sessionId, async () => {
+        const path = await this.#sessionPath(sessionId)
         const loaded = await this.#readPath(path)
         if (
           loaded.records.length !== expectedRecords.length ||
@@ -137,8 +217,8 @@ export class SessionStore {
         )
           throw new Error("会话已被其他程序修改，请重新打开后再试")
         await atomicWriteFile(path, serializeSession(loaded.header, records))
-      })
-    })
+      }),
+    )
   }
 
   async read(sessionId: string): Promise<LoadedSession> {
@@ -188,7 +268,7 @@ export class SessionStore {
         cached.mtimeMs === fileStatus.mtimeMs
       let summary: SessionSummary
       if (unchanged && cached) {
-        summary = cached.summary
+        summary = { ...cached.summary }
       } else {
         const loaded = await this.#readPath(path)
         const firstTurn = loaded.records.find((record): record is TurnStartedRecord => record.kind === "turn_started")
@@ -214,6 +294,17 @@ export class SessionStore {
     }
     this.#paths.clear()
     for (const [sessionId, path] of paths) this.#paths.set(sessionId, path)
+    const lockStates = await Promise.all(
+      summaries.map(async (summary) => {
+        const locked = await isFileLocked(this.#lockPath(summary.sessionId))
+        return [
+          summary.sessionId,
+          locked ? (this.#currentSessionId === summary.sessionId ? "current" : "occupied") : "available",
+        ] as const
+      }),
+    )
+    const states = new Map(lockStates)
+    for (const summary of summaries) summary.lockState = states.get(summary.sessionId) ?? "available"
     this.#warnings = this.#index ? await this.#index.updateProject(this.#projectKey, current) : []
     return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   }
@@ -264,5 +355,6 @@ export class SessionStore {
 
   async flush(): Promise<void> {
     await Promise.all(this.#queues.values())
+    await this.closeAll()
   }
 }

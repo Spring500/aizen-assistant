@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { MnemonicIdGenerator } from "../../packages/core/mnemonic-id.ts"
 import { sessionFileName } from "../../packages/core/session-file-name.ts"
-import { SessionStore } from "../../packages/core/session-store.ts"
+import { SessionLockedError, SessionStore } from "../../packages/core/session-store.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
@@ -28,6 +28,22 @@ afterEach(async () => {
 })
 
 describe("会话存储", () => {
+  test("会话租约阻止第二个实例打开并在释放后恢复", async () => {
+    const { root } = await makeStore()
+    const first = new SessionStore(root)
+    const second = new SessionStore(root)
+    await first.create({ sessionId: "s1", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" })
+    await first.open("s1")
+
+    expect((await first.list())[0]?.lockState).toBe("current")
+    expect((await second.list())[0]?.lockState).toBe("occupied")
+    await expect(second.open("s1")).rejects.toBeInstanceOf(SessionLockedError)
+    await first.close()
+    await expect(second.open("s1")).resolves.toBeDefined()
+    expect((await second.list())[0]?.lockState).toBe("current")
+    await second.close()
+  })
+
   test("排他新建并按调用顺序追加", async () => {
     const { root, store } = await makeStore()
     const createdAt = "2026-07-23T10:00:00.000Z"
