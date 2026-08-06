@@ -31,7 +31,7 @@ export class PiProviderRuntime {
     return new Set((await this.#providerStore.read()).enabled)
   }
 
-  async isBuiltin(providerId: string): Promise<boolean> {
+  isBuiltin(providerId: string): boolean {
     return getBuiltinProviders().includes(providerId as never)
   }
 
