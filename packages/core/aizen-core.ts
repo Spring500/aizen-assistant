@@ -549,6 +549,8 @@ export class AizenCore implements CorePort {
     await this.#store.open(sessionId)
     await this.#store.activate(sessionId)
     this.#sessionInitialCwd = header.cwd
+    this.#snapshot.sessions = await this.#store.list()
+    this.#reportStoreWarnings()
     this.#records = records
     this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
