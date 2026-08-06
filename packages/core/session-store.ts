@@ -115,7 +115,7 @@ export class SessionStore {
 
   /** 返回不依赖 JSONL 文件名的稳定锁路径。 */
   #lockPath(sessionId: string): string {
-    return join(this.root, `.${sessionId}.session`)
+    return join(this.root, `.${encodeURIComponent(sessionId)}.session`)
   }
 
   /** 用当前租约或一次性租约执行写操作。 */
