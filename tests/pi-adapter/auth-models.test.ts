@@ -291,4 +291,50 @@ describe("认证与模型", () => {
       server.stop(true)
     }
   })
+
+  test("启用 pi 供应商管理后自定义供应商模型仍可选，未启用内置供应商仍不可选", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aizen-auth-"))
+    directories.push(directory)
+    const customProvidersPath = join(directory, "custom-providers.json")
+    await writeFile(
+      customProvidersPath,
+      JSON.stringify({
+        providers: {
+          example: {
+            name: "示例服务商",
+            baseUrl: "https://api.example.com/v1",
+            api: "openai-completions",
+            models: [{ id: "example-model", name: "示例模型" }],
+          },
+        },
+      }),
+    )
+    const authPath = join(directory, "auth.json")
+    await writeFile(authPath, JSON.stringify({ example: { type: "api_key", key: "test-key" } }))
+    const piProvidersPath = join(directory, "pi-providers.json")
+    await writeFile(piProvidersPath, JSON.stringify({ enabled: [] }))
+    const runtime = await PiSessionRuntime.create({ authPath, customProvidersPath, piProvidersPath })
+    try {
+      const example = (await runtime.listModels()).find((item) => item.providerId === "example")
+      expect(example?.modelId).toBe("example-model")
+      // 自定义供应商不受 pi 启用开关约束，模型必须可选
+      expect(example?.available).toBe(true)
+      await runtime.create({
+        cwd: directory,
+        model: { providerId: "example", modelId: "example-model", api: "openai-completions" },
+        view: { viewId: null, agentsFiles: [], skillPaths: [] },
+      })
+
+      await runtime.setRuntimeApiKey("anthropic", "test-key")
+      const anthropic = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+      // 未启用的 pi 内置供应商必须保持不可选
+      expect(anthropic?.available).toBe(false)
+      await new PiProviderStore(piProvidersPath).setEnabled("anthropic", true)
+      const anthropicEnabled = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+      // 启用后 pi 内置供应商模型变为可选
+      expect(anthropicEnabled?.available).toBe(true)
+    } finally {
+      await runtime.dispose()
+    }
+  })
 })
