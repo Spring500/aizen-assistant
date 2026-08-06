@@ -87,6 +87,7 @@ export class SessionStore {
     try {
       const loaded = await this.#readPath(await this.#sessionPath(sessionId))
       this.#leases.set(sessionId, release)
+      if (!this.#currentSessionId) this.#currentSessionId = sessionId
       return loaded
     } catch (error) {
       await release().catch(() => {})
