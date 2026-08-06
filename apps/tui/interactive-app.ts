@@ -44,6 +44,7 @@ import { agentSettingsItems } from "./agent-settings.ts"
 import { parseTuiCommand, tuiCommands } from "./commands.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
 import { createPermissionReview, type PermissionReviewController } from "./permission-review.ts"
+import { sessionDisplay } from "./session-display.ts"
 import { modelWithPreferredThinkingLevel, type SessionSettingsDraft, sessionSettingsItems } from "./session-settings.ts"
 import { viewSelectionItems } from "./view-flow.ts"
 
@@ -1786,16 +1787,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     await dispatchWithError({ type: "rename_session", sessionId: snapshot.currentSessionId, name }, "重命名会话失败")
   }
 
-  const sessionSegments = (session: ReturnType<typeof core.getSnapshot>["sessions"][number]) => ({
-    segments: [
-      ...(session.name ? [{ text: session.name, color: systemColors.header, bold: true }, { text: "  " }] : []),
-      { text: session.sessionId, color: systemColors.shortcuts, italic: true, dim: true },
-    ],
-    details: [
-      { text: session.sessionId === core.getSnapshot().currentSessionId ? "● 当前会话 · " : "" },
-      { text: `${session.updatedAt} · ${session.preview}`, color: systemColors.shortcuts, dim: true },
-    ],
-  })
+  const sessionSegments = (session: ReturnType<typeof core.getSnapshot>["sessions"][number]) =>
+    sessionDisplay(session, core.getSnapshot().currentSessionId)
 
   async function manageSession(sessionId: string): Promise<void> {
     const session = core.getSnapshot().sessions.find((item) => item.sessionId === sessionId)

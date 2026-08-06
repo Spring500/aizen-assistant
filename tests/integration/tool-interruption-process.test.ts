@@ -204,7 +204,17 @@ for (const scenario of cases) {
       if (!model) throw new Error("缺少测试模型")
       pi.setModelBaseUrl(model.providerId, model.modelId, mock.url)
       const store = new SessionStore(join(root, "sessions"))
-      const crashed = await store.read(sessionId)
+      let crashed: Awaited<ReturnType<SessionStore["open"]>> | undefined
+      for (let attempt = 0; attempt < 30; attempt++) {
+        try {
+          crashed = await store.open(sessionId)
+          break
+        } catch (error) {
+          if (!(error instanceof Error) || !error.message.startsWith("会话正在被其他 Agent 使用")) throw error
+          await Bun.sleep(500)
+        }
+      }
+      if (!crashed) throw new Error("异常退出后的会话锁未在预期时间内释放")
       if (scenario.checkpoint === "authorized" || scenario.checkpoint === "authorizedDenied") {
         expect(
           crashed.records.some(

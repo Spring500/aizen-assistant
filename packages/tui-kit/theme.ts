@@ -4,6 +4,8 @@ export const systemColors = {
   statusIdle: "#22c55e",
   statusRunning: "#facc15",
   statusError: "#f87171",
+  sessionCurrent: "#38bdf8",
+  sessionOccupied: "#f97316",
   sessionStatus: "#22d3ee",
   shortcuts: "#9ca3af",
   disabled: "#6b7280",
