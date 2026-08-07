@@ -14,7 +14,7 @@ export type SelectorItem<T> = {
   disabledReason?: string
   tone?: MenuTone
 }
-export type SelectorOptions = { title: string; signal?: AbortSignal }
+export type SelectorOptions = { title: string; signal?: AbortSignal; initialIndex?: number }
 
 export function selectItem<T>(
   manager: OverlayManager | CliRenderer,
@@ -35,7 +35,7 @@ export function selectItem<T>(
     const handle = overlays.open<T>({
       id,
       title: options.title,
-      description: items[0]?.description ?? "",
+      description: items[options.initialIndex ?? 0]?.description ?? "",
       actions: [],
       contentHeight: Math.min(12, Math.max(4, items.length)),
       ...(options.signal ? { signal: options.signal } : {}),
@@ -44,6 +44,7 @@ export function selectItem<T>(
     const selector = new SelectRenderable(overlays.renderer, {
       id,
       options: items,
+      selectedIndex: options.initialIndex ?? 0,
       position: "absolute",
       top: 0,
       right: 0,
