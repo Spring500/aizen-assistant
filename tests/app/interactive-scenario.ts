@@ -214,7 +214,7 @@ async function invalidModel(): Promise<void> {
   try {
     await waitForText(setup, "会话设置 · 新建会话")
     await pressEnter(setup)
-    await Bun.sleep(20)
+    await waitForText(setup, "custom-providers.json")
     await setup.renderOnce()
     const first = setup.captureCharFrame()
     await Bun.sleep(40)
