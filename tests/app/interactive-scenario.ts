@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises"
-import { KeyEvent, parseKeypress } from "@opentui/core"
 import type { TextareaRenderable } from "@opentui/core"
+import { KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { runInteractiveApp } from "../../apps/tui/interactive-app.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
@@ -255,7 +255,7 @@ async function noViews(): Promise<void> {
     await waitForText(setup, "选择思考档位")
     await pressEnter(setup)
     await waitForText(setup, "会话设置 · 新建会话")
-    await pressDown(setup, 5)
+    await pressDown(setup, 6)
     await pressEnter(setup)
     await waitForCondition(() => !!core.getSnapshot().currentSessionId, "创建会话")
     await setup.renderOnce()
@@ -283,7 +283,7 @@ async function throwingCreate(): Promise<void> {
     await pressEnter(setup)
     await pressEnter(setup)
     await pressEnter(setup)
-    await pressDown(setup, 5)
+    await pressDown(setup, 6)
     await pressEnter(setup)
     await Bun.sleep(20)
     await setup.renderOnce()
