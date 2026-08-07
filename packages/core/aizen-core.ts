@@ -171,13 +171,24 @@ export class AizenCore implements CorePort {
             authorization: { type: "deny" as const, reason: "权限管理器不可用", source: "system" as const },
           })),
         })
-      if (batch.calls.some((request) => request.permissionPreset)) return this.#authorizePolicyBatch(batch, signal)
+      if (
+        batch.calls.every(
+          (request) =>
+            request.permissionPreset &&
+            ["read", "write", "edit", "grep", "find", "ls", "bash"].includes(request.toolName),
+        )
+      )
+        return this.#authorizePolicyBatch(batch, signal)
       return this.#permissionManager.authorizeBatch(batch, signal)
     })
     this.#pi.setPermissionHandler?.((request, signal) => {
       if (!this.#permissionManager)
         return Promise.resolve({ type: "deny", reason: "权限管理器不可用", source: "system" })
-      if (request.permissionPreset && this.#policyPermissionManager)
+      if (
+        request.permissionPreset &&
+        this.#policyPermissionManager &&
+        ["read", "write", "edit", "grep", "find", "ls", "bash"].includes(request.toolName)
+      )
         return this.#policyPermissionManager.authorize(
           request,
           {
