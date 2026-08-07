@@ -3,14 +3,14 @@ import type { ModelOption } from "../../packages/core/pi-port.ts"
 import type { RichSelectorItem } from "../../packages/tui-kit/rich-selector.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
 
-export type AgentSettingsAction = "session-naming" | "permission-review" | "apply" | "cancel"
+export type PreferenceSettingsAction = "session-naming" | "permission-review" | "apply" | "cancel"
 
-/** 生成内置 Agent 设置菜单；当前仅管理会话自动命名模型。 */
-export function agentSettingsItems(
+/** 生成应用偏好菜单；当前仅管理会话自动命名与工具审核模型。 */
+export function preferenceSettingsItems(
   namingModel: AgentModelReference | undefined,
   reviewModelOrModels: AgentModelReference | ModelOption[] | undefined,
   optionalModels?: ModelOption[],
-): RichSelectorItem<AgentSettingsAction>[] {
+): RichSelectorItem<PreferenceSettingsAction>[] {
   const reviewModel = Array.isArray(reviewModelOrModels) ? undefined : reviewModelOrModels
   const models = Array.isArray(reviewModelOrModels) ? reviewModelOrModels : (optionalModels ?? [])
   const namingSelected = namingModel

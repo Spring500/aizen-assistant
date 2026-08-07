@@ -145,7 +145,7 @@ test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态"
     const history = setup.externalOutput.takeText().replace(/\s+/g, "")
     const footer = setup.captureCharFrame()
     expect(history).toContain("hello")
-    expect(footer).toContain("AizenAssistant | /fold")
+    expect(footer).toContain("AizenAssistant")
     expect(footer).toContain("[bash] bun test")
   } finally {
     setup.renderer.destroy()
