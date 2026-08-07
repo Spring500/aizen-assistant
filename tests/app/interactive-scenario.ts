@@ -214,14 +214,12 @@ async function invalidModel(): Promise<void> {
   try {
     await waitForText(setup, "会话设置 · 新建会话")
     await pressEnter(setup)
-    await Bun.sleep(20)
-    await setup.renderOnce()
-    const first = setup.captureCharFrame()
+    // 选择供应商界面经过多次异步 RPC 后才会渲染，固定延时易受负载影响，改为轮询等待。
+    const first = await waitForText(setup, "custom-providers.json")
+    assertExcludes(first, "选择会话")
     await Bun.sleep(40)
     await setup.renderOnce()
     const later = setup.captureCharFrame()
-    assertIncludes(first, "custom-providers.json")
-    assertExcludes(first, "选择会话")
     assertIncludes(later, "custom-providers.json")
     assertExcludes(later, "选择会话")
   } finally {
