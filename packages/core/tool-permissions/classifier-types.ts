@@ -10,6 +10,7 @@ export type PermissionClassifyInput = {
 
 export type PermissionClassifyContext = {
   workspaceRoot: string
+  homeDirectory?: string
   sensitivePaths: string[]
   shell: string
   platform: string
