@@ -1,5 +1,4 @@
 import { expect } from "bun:test"
-import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -8,6 +7,7 @@ import { createTestRenderer } from "@opentui/core/testing"
 import { runInteractiveApp } from "../../apps/tui/interactive-app.ts"
 import { defaultAppPreferences } from "../../packages/core/app-preferences-store.ts"
 import type { CoreCommand, CoreEvent, CorePort, CoreSnapshot } from "../../packages/core/types.ts"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
@@ -109,8 +109,8 @@ async function setupApp(core: ViewsCore, root: string, openDirectory?: (path: st
 async function enterViewPage(core: ViewsCore, root: string, openDirectory?: (path: string) => Promise<void>) {
   const app = await setupApp(core, root, openDirectory)
   await app.waitFor("会话设置 · 新建会话")
-  // 会话设置 -> 管理视图（当前模型/当前视图/权限模式/管理模型/管理视图）
-  for (let index = 0; index < 4; index++) await app.pressKey("\x1b[B")
+  // 会话设置 -> 管理视图（当前模型/当前视图/权限预设/审核方式/管理模型/管理视图）
+  for (let index = 0; index < 5; index++) await app.pressKey("\x1b[B")
   await app.pressKey("\r")
   await app.waitFor("管理视图（选择视图后进入操作菜单）")
   // 管理视图 -> 标准视图（刷新/创建视图模板/标准视图）
