@@ -1,5 +1,4 @@
 import { afterEach, describe, expect } from "bun:test"
-import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -7,9 +6,9 @@ import { AizenCore } from "../../packages/core/aizen-core.ts"
 import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import {
+  type PiCreateInput,
   PiModelRuntimeError,
   type PiPort,
-  type PiCreateInput,
   type PiPortEvent,
   type PiRestoreInput,
   type PiSessionTitleInput,
@@ -18,8 +17,9 @@ import {
 import type { ModelReference } from "../../packages/core/session-format.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { SkillStore } from "../../packages/core/skill-store.ts"
-import { ViewStore } from "../../packages/core/view-store.ts"
 import { writeViewConfig } from "../../packages/core/view-config.ts"
+import { ViewStore } from "../../packages/core/view-store.ts"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
@@ -1296,6 +1296,29 @@ describe("视图装载资源组装", () => {
     await writeViewConfig(view.directory, { projectSources: "none", loadUserSkills: true })
     expect(await core.dispatch({ type: "create_session", model, viewId: "dev" })).toEqual({ ok: true })
     expect(pi.views.at(-1)?.skillPaths.some((path) => path.includes("userskill"))).toBe(true)
+    await core.dispose()
+  })
+
+  test("新权限预设和审核方式进入轮次快照", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new FakePi()
+    const core = new AizenCore({ cwd: root, store: new SessionStore(join(root, "sessions")), pi })
+    expect(
+      await core.dispatch({
+        type: "create_session",
+        model,
+        viewId: null,
+        permissionPreset: "plan",
+        permissionReviewMode: "autoDeny",
+      }),
+    ).toEqual({ ok: true })
+    expect(core.getSnapshot()).toMatchObject({
+      currentPermissionPreset: "plan",
+      currentPermissionReviewMode: "autoDeny",
+    })
+    await core.dispatch({ type: "send_prompt", text: "检查" })
+    expect(pi.prompts.at(-1)).toMatchObject({ permissionPreset: "plan", permissionReviewMode: "autoDeny" })
     await core.dispose()
   })
 

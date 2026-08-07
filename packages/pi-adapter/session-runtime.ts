@@ -571,6 +571,8 @@ export class PiSessionRuntime implements PiPort {
         declaredIntent: call.declaredIntent,
         cwd: input.cwd,
         mode: prompt.permissionMode ?? "hybrid",
+        ...(prompt.permissionPreset ? { permissionPreset: prompt.permissionPreset } : {}),
+        ...(prompt.permissionReviewMode ? { permissionReviewMode: prompt.permissionReviewMode } : {}),
         ...(call.name === "bash" ? { environment: { shell: this.#shellKind() } } : {}),
       }
       if (!this.#permissionBatchHandler) {
@@ -875,6 +877,8 @@ export class PiSessionRuntime implements PiPort {
       declaredIntent: call.declaredIntent,
       cwd,
       mode: prompt.permissionMode ?? "hybrid",
+      ...(prompt.permissionPreset ? { permissionPreset: prompt.permissionPreset } : {}),
+      ...(prompt.permissionReviewMode ? { permissionReviewMode: prompt.permissionReviewMode } : {}),
       ...(call.name === "bash" ? { environment: { shell: this.#shellKind() } } : {}),
     })
     if (batch.dispatchQueued) return

@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
+import { homedir } from "node:os"
 import { join } from "node:path"
 import { type AppPreferencesStore, defaultAppPreferences, parseAppPreferences } from "./app-preferences-store.ts"
 import { CoreErrorQueue } from "./error-queue.ts"
@@ -26,7 +27,12 @@ import { projectVisibleSessionRecords } from "./session-projection.ts"
 import { recoverInterruptedToolCalls } from "./session-recovery.ts"
 import { SessionLockedError, type SessionStore } from "./session-store.ts"
 import type { SkillStore } from "./skill-store.ts"
+import { PermissionClassifierRegistry } from "./tool-permissions/classifier-registry.ts"
+import { createBuiltinBashClassifier } from "./tool-permissions/classifiers/bash.ts"
+import { createBuiltinFileClassifier } from "./tool-permissions/classifiers/file.ts"
 import { ToolPermissionManager } from "./tool-permissions/manager.ts"
+import { PolicyPermissionManager } from "./tool-permissions/policy-manager.ts"
+import { builtinPermissionPolicies } from "./tool-permissions/policy-types.ts"
 import { ToolPermissionRegistry } from "./tool-permissions/registry.ts"
 import { sanitizePermissionAuditPayload } from "./tool-permissions/sanitizer.ts"
 import type {
@@ -47,8 +53,8 @@ import {
   type CoreSnapshot,
   recordsToTranscript,
 } from "./types.ts"
-import type { ViewStore } from "./view-store.ts"
 import { readViewConfig } from "./view-config.ts"
+import type { ViewStore } from "./view-store.ts"
 
 export type ExtraMessageProvider = (input: {
   cwd: string
@@ -104,6 +110,7 @@ export class AizenCore implements CorePort {
   readonly #listeners = new Set<(event: CoreEvent) => void>()
   readonly #unsubscribePi: () => void
   readonly #permissionManager: ToolPermissionManager | undefined
+  readonly #policyPermissionManager: PolicyPermissionManager | undefined
   readonly #pendingPermissionAnswers = new Map<
     string,
     { resolve: (decision: HumanReviewBatchDecision) => void; reject: (error: Error) => void }
@@ -153,6 +160,7 @@ export class AizenCore implements CorePort {
     validateToolRegistrations(this.#toolRegistrations)
     this.#unsubscribePi = this.#pi.subscribe((event) => this.#handlePiEvent(event))
     this.#permissionManager = this.#createPermissionManager()
+    this.#policyPermissionManager = this.#createPolicyPermissionManager()
     this.#pi.setToolRegistrations?.(this.#toolRegistrations)
     this.#pi.setPermissionBatchHandler?.((batch, signal) => {
       if (!this.#permissionManager)
@@ -163,11 +171,43 @@ export class AizenCore implements CorePort {
             authorization: { type: "deny" as const, reason: "权限管理器不可用", source: "system" as const },
           })),
         })
+      if (batch.calls.some((request) => request.permissionPreset)) return this.#authorizePolicyBatch(batch, signal)
       return this.#permissionManager.authorizeBatch(batch, signal)
     })
     this.#pi.setPermissionHandler?.((request, signal) => {
       if (!this.#permissionManager)
         return Promise.resolve({ type: "deny", reason: "权限管理器不可用", source: "system" })
+      if (request.permissionPreset && this.#policyPermissionManager)
+        return this.#policyPermissionManager.authorize(
+          request,
+          {
+            workspaceRoot: this.#cwd,
+            homeDirectory: homedir(),
+            sensitivePaths: [
+              ".env",
+              ".npmrc",
+              ".pypirc",
+              "credentials",
+              "id_rsa",
+              "id_ed25519",
+              ".ssh",
+              ".git",
+              ".aizen",
+              "auth.json",
+            ],
+            shell:
+              request.environment &&
+              typeof request.environment === "object" &&
+              !Array.isArray(request.environment) &&
+              typeof request.environment.shell === "string"
+                ? request.environment.shell
+                : "unknown",
+            platform: process.platform,
+          },
+          builtinPermissionPolicies[request.permissionPreset === "custom" ? "edit" : request.permissionPreset],
+          request.permissionReviewMode ?? "manual",
+          signal,
+        )
       return this.#permissionManager.authorize(request, signal)
     })
     this.#pi.setPermissionExecutionHandler?.((event) => this.#recordPermissionExecution(event))
@@ -300,6 +340,10 @@ export class AizenCore implements CorePort {
           this.#snapshot.piProviders = (await this.#pi.listProviders?.()) ?? []
           break
         case "create_session":
+          if (command.permissionPreset) {
+            this.#snapshot.currentPermissionPreset = command.permissionPreset
+            this.#snapshot.currentPermissionReviewMode = command.permissionReviewMode ?? "manual"
+          }
           await this.#createSession(
             command.model,
             command.viewId,
@@ -338,6 +382,10 @@ export class AizenCore implements CorePort {
           break
         case "set_permission_mode":
           await this.#setPermissionMode(command.permissionMode)
+          break
+        case "set_permission_settings":
+          this.#snapshot.currentPermissionPreset = command.preset
+          this.#snapshot.currentPermissionReviewMode = command.reviewMode
           break
         case "answer_permission_batch":
           this.#answerPermissionBatch(command.batchId, command.answers)
@@ -882,6 +930,10 @@ export class AizenCore implements CorePort {
         turnId,
         viewId,
         permissionMode,
+        ...(this.#snapshot.currentPermissionPreset ? { permissionPreset: this.#snapshot.currentPermissionPreset } : {}),
+        ...(this.#snapshot.currentPermissionReviewMode
+          ? { permissionReviewMode: this.#snapshot.currentPermissionReviewMode }
+          : {}),
         items: started.items,
       })
       if (this.#abortRequested) outcome = "aborted"
@@ -1118,6 +1170,67 @@ export class AizenCore implements CorePort {
       this.#snapshot.runtimeIssue = previousIssue ?? { kind: "runtime", message: actual.message }
       return actual
     }
+  }
+
+  #createPolicyPermissionManager(): PolicyPermissionManager | undefined {
+    if (!this.#pi.setPermissionHandler) return undefined
+    const registry = new PermissionClassifierRegistry()
+    registry.registerBuiltin(createBuiltinBashClassifier())
+    registry.registerBuiltin(createBuiltinFileClassifier())
+    return new PolicyPermissionManager({
+      registry,
+      aiReviewer: {
+        review: (request, signal) => {
+          const model = this.#snapshot.preferences.agents.permissionReview?.model
+          if (!model || !this.#pi.permissionReviewer) throw new Error("未配置可用的工具审核模型")
+          return this.#pi.permissionReviewer(model).review(request, signal)
+        },
+      },
+      humanReviewer: { review: (request, signal) => this.#requestPermissionAnswer(request, signal) },
+    })
+  }
+
+  async #authorizePolicyBatch(
+    batch: import("./tool-permissions/types.ts").ToolPermissionBatchRequest,
+    signal?: AbortSignal,
+  ): Promise<import("./tool-permissions/types.ts").ToolPermissionBatchAuthorization> {
+    if (!this.#policyPermissionManager) throw new Error("新权限管理器不可用")
+    const authorizations = []
+    for (const request of batch.calls) {
+      if (!request.permissionPreset) throw new Error("权限批次缺少预设")
+      const authorization = await this.#policyPermissionManager.authorize(
+        request,
+        {
+          workspaceRoot: this.#cwd,
+          homeDirectory: homedir(),
+          sensitivePaths: [
+            ".env",
+            ".npmrc",
+            ".pypirc",
+            "credentials",
+            "id_rsa",
+            "id_ed25519",
+            ".ssh",
+            ".git",
+            ".aizen",
+            "auth.json",
+          ],
+          shell:
+            request.environment &&
+            typeof request.environment === "object" &&
+            !Array.isArray(request.environment) &&
+            typeof request.environment.shell === "string"
+              ? request.environment.shell
+              : "unknown",
+          platform: process.platform,
+        },
+        builtinPermissionPolicies[request.permissionPreset === "custom" ? "edit" : request.permissionPreset],
+        request.permissionReviewMode ?? "manual",
+        signal,
+      )
+      authorizations.push({ toolCallId: request.toolCallId, authorization })
+    }
+    return { batchId: batch.batchId, authorizations }
   }
 
   #createPermissionManager(): ToolPermissionManager | undefined {

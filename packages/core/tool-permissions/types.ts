@@ -1,4 +1,5 @@
 import type { JsonValue } from "../session-format.ts"
+import type { PermissionPresetId, PermissionReviewMode } from "./policy-types.ts"
 import type { SensitiveFieldMatcher } from "./sanitizer.ts"
 
 export const permissionModes = ["unrestricted", "hybrid", "hybridConfirmDenials", "aiOnly"] as const
@@ -48,6 +49,8 @@ export type ToolPermissionRequest = {
   declaredIntent: string
   cwd: string
   mode: PermissionMode
+  permissionPreset?: PermissionPresetId
+  permissionReviewMode?: PermissionReviewMode
   environment?: JsonValue
   /** 第三方验证器声明的额外敏感字段，仅用于 AI 和本地记录脱敏。 */
   sensitiveFields?: string[]

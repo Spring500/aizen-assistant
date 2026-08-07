@@ -1,13 +1,14 @@
-import type { AizenToolRegistration } from "./tool-registry.ts"
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
+import type { PermissionPresetId, PermissionReviewMode } from "./tool-permissions/policy-types.ts"
 import type {
   AiPermissionReviewer,
   PermissionMode,
+  ToolAuthorization,
   ToolPermissionBatchAuthorization,
   ToolPermissionBatchRequest,
-  ToolAuthorization,
   ToolPermissionRequest,
 } from "./tool-permissions/types.ts"
+import type { AizenToolRegistration } from "./tool-registry.ts"
 
 /** 表示当前模型或思考档位不能用于创建 pi 内存会话，交互层可引导用户重新选择。 */
 export class PiModelRuntimeError extends Error {
@@ -114,6 +115,8 @@ export type PiPromptInput = {
   turnId: string
   viewId: ViewId
   permissionMode?: PermissionMode
+  permissionPreset?: PermissionPresetId
+  permissionReviewMode?: PermissionReviewMode
   items: TurnInputItem[]
 }
 
