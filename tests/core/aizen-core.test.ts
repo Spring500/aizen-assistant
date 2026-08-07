@@ -1319,7 +1319,18 @@ describe("视图装载资源组装", () => {
     })
     await core.dispatch({ type: "send_prompt", text: "检查" })
     expect(pi.prompts.at(-1)).toMatchObject({ permissionPreset: "plan", permissionReviewMode: "autoDeny" })
+    const sessionId = core.getSnapshot().currentSessionId
+    expect(sessionId).toBeDefined()
     await core.dispose()
+
+    const restoredPi = new FakePi()
+    const restored = new AizenCore({ cwd: root, store: new SessionStore(join(root, "sessions")), pi: restoredPi })
+    expect(await restored.dispatch({ type: "open_session", sessionId: sessionId ?? "" })).toEqual({ ok: true })
+    expect(restored.getSnapshot()).toMatchObject({
+      currentPermissionPreset: "plan",
+      currentPermissionReviewMode: "autoDeny",
+    })
+    await restored.dispose()
   })
 
   test("视图配置非法时按默认值继续并报告，不阻塞创建会话", async () => {

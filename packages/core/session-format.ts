@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer"
+import type { PermissionPresetId, PermissionReviewMode } from "./tool-permissions/policy-types.ts"
 import type { PermissionMode } from "./tool-permissions/types.ts"
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
@@ -64,6 +65,14 @@ export type ViewChangedRecord = {
   recordId: string
   at: string
   viewId: ViewId
+}
+
+export type PermissionSettingsChangedRecord = {
+  kind: "permission_settings_changed"
+  recordId: string
+  at: string
+  preset: PermissionPresetId
+  reviewMode: PermissionReviewMode
 }
 
 export type PermissionModeChangedRecord = {
@@ -165,6 +174,7 @@ export type SessionRecord =
   | ViewChangedRecord
   | WorkingDirectoryChangedRecord
   | PermissionModeChangedRecord
+  | PermissionSettingsChangedRecord
   | ToolPermissionRecord
   | TurnStartedRecord
   | MessageRecord
@@ -224,6 +234,24 @@ function jsonValue(value: unknown, label: string): JsonValue {
 function viewId(value: unknown): ViewId {
   if (value === null) return null
   return string(value, "viewId")
+}
+
+function permissionPreset(value: unknown): PermissionPresetId {
+  if (value !== "plan" && value !== "edit" && value !== "all-right" && value !== "custom")
+    throw new Error(`未知的权限预设：${String(value)}`)
+  return value
+}
+
+function permissionReviewMode(value: unknown): PermissionReviewMode {
+  if (
+    value !== "manual" &&
+    value !== "aiReview" &&
+    value !== "aiReviewWithAbstain" &&
+    value !== "autoApprove" &&
+    value !== "autoDeny"
+  )
+    throw new Error(`未知的审核方式：${String(value)}`)
+  return value
 }
 
 function permissionMode(value: unknown): PermissionMode {
@@ -429,6 +457,14 @@ export function parseSessionValue(value: unknown): SessionLine {
       ...baseRecord(source, ["kind", "recordId", "at", "previousCwd", "currentCwd"]),
       previousCwd: string(source.previousCwd, "previousCwd"),
       currentCwd: string(source.currentCwd, "currentCwd"),
+    }
+  }
+  if (kind === "permission_settings_changed") {
+    return {
+      kind,
+      ...baseRecord(source, ["kind", "recordId", "at", "preset", "reviewMode"]),
+      preset: permissionPreset(source.preset),
+      reviewMode: permissionReviewMode(source.reviewMode),
     }
   }
   if (kind === "permission_mode_changed") {

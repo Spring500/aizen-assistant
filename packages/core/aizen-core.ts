@@ -340,14 +340,12 @@ export class AizenCore implements CorePort {
           this.#snapshot.piProviders = (await this.#pi.listProviders?.()) ?? []
           break
         case "create_session":
-          if (command.permissionPreset) {
-            this.#snapshot.currentPermissionPreset = command.permissionPreset
-            this.#snapshot.currentPermissionReviewMode = command.permissionReviewMode ?? "manual"
-          }
           await this.#createSession(
             command.model,
             command.viewId,
             command.permissionMode ?? this.#snapshot.preferences.newSession.permissionMode ?? "hybrid",
+            command.permissionPreset,
+            command.permissionReviewMode,
           )
           break
         case "open_session":
@@ -383,10 +381,22 @@ export class AizenCore implements CorePort {
         case "set_permission_mode":
           await this.#setPermissionMode(command.permissionMode)
           break
-        case "set_permission_settings":
+        case "set_permission_settings": {
+          const sessionId = this.#snapshot.currentSessionId
+          if (!sessionId) throw new Error("当前没有打开的会话")
+          const record: SessionRecord = {
+            kind: "permission_settings_changed",
+            recordId: crypto.randomUUID(),
+            at: new Date().toISOString(),
+            preset: command.preset,
+            reviewMode: command.reviewMode,
+          }
+          await this.#store.append(sessionId, record)
+          this.#records.push(record)
           this.#snapshot.currentPermissionPreset = command.preset
           this.#snapshot.currentPermissionReviewMode = command.reviewMode
           break
+        }
         case "answer_permission_batch":
           this.#answerPermissionBatch(command.batchId, command.answers)
           break
@@ -582,7 +592,13 @@ export class AizenCore implements CorePort {
   }
 
   /** 先成功创建 pi runtime，再原子创建会话，避免留下无法运行的空会话。 */
-  async #createSession(model: ModelReference, viewId: ViewId, permissionMode: PermissionMode): Promise<void> {
+  async #createSession(
+    model: ModelReference,
+    viewId: ViewId,
+    permissionMode: PermissionMode,
+    permissionPreset?: import("./tool-permissions/policy-types.ts").PermissionPresetId,
+    permissionReviewMode?: import("./tool-permissions/policy-types.ts").PermissionReviewMode,
+  ): Promise<void> {
     this.#sessionNamingAbort?.abort()
     const at = new Date().toISOString()
     const view = await this.#resolveView(viewId)
@@ -591,6 +607,17 @@ export class AizenCore implements CorePort {
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(actualModel) },
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
       { kind: "permission_mode_changed", recordId: crypto.randomUUID(), at, permissionMode },
+      ...(permissionPreset
+        ? [
+            {
+              kind: "permission_settings_changed" as const,
+              recordId: crypto.randomUUID(),
+              at,
+              preset: permissionPreset,
+              reviewMode: permissionReviewMode ?? "manual",
+            },
+          ]
+        : []),
     ]
     const header = await this.#store.createGeneratedAndOpen({ cwd: this.#cwd, createdAt: at }, records)
     const sessionId = header.sessionId
@@ -606,6 +633,13 @@ export class AizenCore implements CorePort {
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.currentViewId = viewId
     this.#snapshot.currentPermissionMode = permissionMode
+    if (permissionPreset) {
+      this.#snapshot.currentPermissionPreset = permissionPreset
+      this.#snapshot.currentPermissionReviewMode = permissionReviewMode ?? "manual"
+    } else {
+      delete this.#snapshot.currentPermissionPreset
+      delete this.#snapshot.currentPermissionReviewMode
+    }
     this.#snapshot.pendingPermissionRequests = []
     this.#snapshot.transcript = []
     this.#snapshot.streamingText = ""
@@ -665,6 +699,16 @@ export class AizenCore implements CorePort {
           : permissionRecord?.kind === "turn_started"
             ? (permissionRecord.permissionMode ?? "hybrid")
             : (this.#snapshot.preferences.newSession.permissionMode ?? "hybrid")
+      const permissionSettings = [...loaded.records]
+        .reverse()
+        .find((record) => record.kind === "permission_settings_changed")
+      if (permissionSettings?.kind === "permission_settings_changed") {
+        this.#snapshot.currentPermissionPreset = permissionSettings.preset
+        this.#snapshot.currentPermissionReviewMode = permissionSettings.reviewMode
+      } else {
+        delete this.#snapshot.currentPermissionPreset
+        delete this.#snapshot.currentPermissionReviewMode
+      }
       this.#snapshot.pendingPermissionRequests = []
       const visibleRecords = projectVisibleSessionRecords(loaded.records)
       this.#snapshot.transcript = recordsToTranscript(visibleRecords)
