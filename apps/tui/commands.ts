@@ -10,7 +10,7 @@ export type TuiCommandName =
   | "/views"
   | "/fold"
   | "/models"
-  | "/agents"
+  | "/preferences"
   | "/skills"
 
 export type TuiCommand = {
@@ -28,7 +28,7 @@ export const tuiCommands: readonly TuiCommand[] = [
   { name: "/session-settings", description: "配置当前会话：模型、视图、权限模式" },
   { name: "/views", description: "管理视图" },
   { name: "/models", description: "管理供应商和模型" },
-  { name: "/agents", description: "设置内置 Agent" },
+  { name: "/preferences", description: "应用偏好：会话自动命名、工具审核模型" },
   { name: "/skills", description: "管理全局技能" },
   { name: "/fold", description: "设置会话内容折叠开关" },
   { name: "/quit", description: "退出应用" },

@@ -40,7 +40,7 @@ import { systemColors } from "../../packages/tui-kit/theme.ts"
 import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-editor.ts"
 
 import { ActionQueue, dispatchOrPresent, sendPromptWithRecovery } from "./action-runner.ts"
-import { agentSettingsItems } from "./agent-settings.ts"
+import { preferenceSettingsItems } from "./preference-settings.ts"
 import { parseTuiCommand, tuiCommands } from "./commands.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
 import { createPermissionReview, type PermissionReviewController } from "./permission-review.ts"
@@ -191,7 +191,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         else if (command.name === "/views") runAction(manageViews)
         else if (command.name === "/fold") runAction(chooseFold)
         else if (command.name === "/models") runAction(manageModels)
-        else if (command.name === "/agents") runAction(openAgentSettings)
+        else if (command.name === "/preferences") runAction(openPreferences)
         else if (command.name === "/skills") runAction(manageSkills)
       },
       onAbort: () => void core.dispatch({ type: "abort" }),
@@ -1516,25 +1516,25 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
-  async function openAgentSettings(): Promise<void> {
+  async function openPreferences(): Promise<void> {
     beginInteraction()
     try {
-      if (!(await dispatchWithError({ type: "load_preferences" }, "读取 Agent 设置失败")).ok) return
+      if (!(await dispatchWithError({ type: "load_preferences" }, "读取应用偏好失败")).ok) return
       if (!(await dispatchWithError({ type: "list_models" }, "读取模型失败")).ok) return
       let model = core.getSnapshot().preferences.agents.sessionNaming.model
       let reviewModel = core.getSnapshot().preferences.agents.permissionReview?.model
       while (!exiting) {
         const action = await selectRichItem(
           overlays,
-          "agent-settings",
-          agentSettingsItems(model, reviewModel, core.getSnapshot().models),
-          { title: "Agent 设置", signal: interactionController.signal },
+          "preference-settings",
+          preferenceSettingsItems(model, reviewModel, core.getSnapshot().models),
+          { title: "应用偏好", signal: interactionController.signal },
         )
         if (!action || action === "cancel") return
         if (action === "session-naming") {
           const selected = await selectItem(
             overlays,
-            "agent-session-naming-action",
+            "preference-session-naming-action",
             [
               { name: "选择命名模型", description: "为会话自动命名启用独立模型", value: "select" as const },
               { name: "关闭自动命名", description: "不发起会话命名请求", value: "disable" as const },
@@ -1562,7 +1562,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
                 permissionReview: { ...(reviewModel ? { model: reviewModel } : {}) },
               },
             },
-            "保存 Agent 设置失败",
+            "保存应用偏好失败",
           )
           return
         }
