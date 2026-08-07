@@ -1,5 +1,4 @@
 import { afterEach, describe, expect } from "bun:test"
-import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -8,6 +7,7 @@ import {
   defaultAppPreferences,
   parseAppPreferences,
 } from "../../packages/core/app-preferences-store.ts"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
@@ -30,6 +30,8 @@ describe("应用偏好存储", () => {
         model: { providerId: "p", modelId: "m", api: "a", thinkingLevel: "high" },
         viewId: "view",
         permissionMode: "hybrid" as const,
+        permissionPreset: "plan" as const,
+        permissionReviewMode: "autoDeny" as const,
       },
       fold: { ...defaultAppPreferences.fold, thinkingExpanded: true },
     }
@@ -66,6 +68,8 @@ describe("应用偏好存储", () => {
       newSession: {
         viewId: "review",
         permissionMode: "hybrid",
+        permissionPreset: "edit",
+        permissionReviewMode: "manual",
         model: { providerId: "p", modelId: "m", api: "a" },
       },
       agents: {
@@ -81,6 +85,8 @@ describe("应用偏好存储", () => {
     expect(store.takeWarnings()).toEqual([
       "preferences.json.version 是未知字段，已忽略",
       "newSession.permissionMode 无效，已使用默认值",
+      "newSession.permissionPreset 缺失，已使用默认值",
+      "newSession.permissionReviewMode 缺失，已使用默认值",
       "agents.permissionReview.model.modelId 必须是非空字符串，已使用默认值",
       "fold.userTurns 是未知字段，已忽略",
       "fold.toolGroupExpanded 必须是布尔值，已使用默认值",

@@ -344,8 +344,8 @@ export class AizenCore implements CorePort {
             command.model,
             command.viewId,
             command.permissionMode ?? this.#snapshot.preferences.newSession.permissionMode ?? "hybrid",
-            command.permissionPreset,
-            command.permissionReviewMode,
+            command.permissionPreset ?? this.#snapshot.preferences.newSession.permissionPreset ?? "edit",
+            command.permissionReviewMode ?? this.#snapshot.preferences.newSession.permissionReviewMode ?? "manual",
           )
           break
         case "open_session":
@@ -549,6 +549,8 @@ export class AizenCore implements CorePort {
         model: sessionModel(model),
         viewId,
         permissionMode: permissionMode ?? this.#snapshot.currentPermissionMode ?? "hybrid",
+        permissionPreset: this.#snapshot.currentPermissionPreset ?? "edit",
+        permissionReviewMode: this.#snapshot.currentPermissionReviewMode ?? "manual",
       },
     })
   }
