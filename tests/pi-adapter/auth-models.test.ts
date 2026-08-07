@@ -1,10 +1,10 @@
 import { afterEach, describe, expect } from "bun:test"
-import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { PiProviderStore } from "../../packages/core/pi-provider-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
@@ -276,7 +276,7 @@ describe("认证与模型", () => {
       const tools = requests[0]?.tools as Array<{
         function?: { name?: string; parameters?: Record<string, unknown> }
       }>
-      expect(tools).toHaveLength(4)
+      expect(tools).toHaveLength(7)
       for (const tool of tools) {
         expect(tool.function?.parameters?.type).toBe("object")
         expect(tool.function?.parameters?.properties).toHaveProperty("declaredIntent")
