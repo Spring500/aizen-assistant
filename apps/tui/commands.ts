@@ -8,10 +8,11 @@ export type TuiCommandName =
   | "/compact"
   | "/session-settings"
   | "/views"
-  | "/fold"
   | "/models"
   | "/preferences"
   | "/skills"
+  | "/toggle-think"
+  | "/toggle-tool"
 
 export type TuiCommand = {
   name: TuiCommandName
@@ -30,7 +31,8 @@ export const tuiCommands: readonly TuiCommand[] = [
   { name: "/models", description: "管理供应商和模型" },
   { name: "/preferences", description: "应用偏好：会话自动命名、工具审核模型" },
   { name: "/skills", description: "管理全局技能" },
-  { name: "/fold", description: "设置会话内容折叠开关" },
+  { name: "/toggle-think", description: "切换思考过程展开/折叠" },
+  { name: "/toggle-tool", description: "切换工具区展开/折叠" },
   { name: "/quit", description: "退出应用" },
 ]
 

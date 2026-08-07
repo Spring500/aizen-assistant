@@ -189,7 +189,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           )
         else if (command.name === "/session-settings") runAction(() => openSessionSettings("existing"))
         else if (command.name === "/views") runAction(manageViews)
-        else if (command.name === "/fold") runAction(chooseFold)
+        else if (command.name === "/toggle-think") runAction(() => toggleFold("think"))
+        else if (command.name === "/toggle-tool") runAction(() => toggleFold("tool"))
         else if (command.name === "/models") runAction(manageModels)
         else if (command.name === "/preferences") runAction(openPreferences)
         else if (command.name === "/skills") runAction(manageSkills)
@@ -732,41 +733,23 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
-  async function chooseFold() {
+  /**
+   * 无界面切换折叠开关并持久化；kind 为 "think"（思考过程）或 "tool"（工具区整体）。
+   * 切换结果作为历史偏好记录保存，供下次启动继承。
+   */
+  async function toggleFold(kind: "think" | "tool"): Promise<void> {
     beginInteraction()
     try {
-      let draft = view.getFoldPreferences()
-      const fields = [
-        { key: "thinkingExpanded", name: "思考过程" },
-        { key: "toolGroupExpanded", name: "工具组" },
-        { key: "toolDetailsExpanded", name: "工具详情" },
-      ] as const
-      while (!exiting) {
-        const selected = await selectItem<(typeof fields)[number]["key"] | "reset" | "apply">(
-          overlays,
-          "fold-selector",
-          [
-            ...fields.map((field) => ({
-              name: `${field.name.padEnd(6, "　")} ${draft[field.key] ? "展开" : "折叠"}`,
-              description: "选择后切换",
-              value: field.key,
-            })),
-            { name: "恢复默认", description: "恢复内置折叠开关", value: "reset" as const },
-            { name: "应用并返回", description: "保存设置并全量回放会话", value: "apply" as const },
-          ],
-          { title: "折叠设置", signal: interactionController.signal },
-        )
-        if (!selected) return
-        if (selected === "reset") {
-          draft = { thinkingExpanded: false, toolGroupExpanded: false, toolDetailsExpanded: false }
-          continue
-        }
-        if (selected === "apply") {
-          const result = await dispatchWithError({ type: "save_fold_preferences", fold: draft }, "保存折叠设置失败")
-          if (result.ok) await view.setFoldPreferences(draft)
-          return
-        }
-        draft = { ...draft, [selected]: !draft[selected] }
+      const current = view.getFoldPreferences()
+      const expanded = kind === "think" ? !current.thinkingExpanded : !current.toolGroupExpanded
+      const next =
+        kind === "think"
+          ? { ...current, thinkingExpanded: expanded }
+          : { ...current, toolGroupExpanded: expanded, toolDetailsExpanded: expanded }
+      const result = await dispatchWithError({ type: "save_fold_preferences", fold: next }, "保存折叠设置失败")
+      if (result.ok) {
+        const label = kind === "think" ? "思考过程" : "工具区"
+        await view.setFoldPreferences(next, `${label}：${expanded ? "已展开" : "已折叠"}`)
       }
     } finally {
       endInteraction()
