@@ -1,21 +1,24 @@
-import { builtinModels } from "@earendil-works/pi-ai/providers/all"
 import type { AgentEvent, ThinkingLevel } from "@earendil-works/pi-agent-core"
 import {
   type Api,
-  type AssistantMessage as PiAssistantMessage,
   type AuthPrompt,
   clampThinkingLevel,
   getSupportedThinkingLevels,
   isContextOverflow,
   type Model,
-  type UserMessage as PiUserMessage,
   type ModelThinkingLevel,
+  type AssistantMessage as PiAssistantMessage,
+  type UserMessage as PiUserMessage,
 } from "@earendil-works/pi-ai"
+import { builtinModels } from "@earendil-works/pi-ai/providers/all"
 import {
   type AgentSession,
   createAgentSession,
   createBashTool,
   createEditTool,
+  createFindTool,
+  createGrepTool,
+  createLsTool,
   createReadTool,
   createWriteTool,
   DEFAULT_COMPACTION_SETTINGS,
@@ -30,36 +33,36 @@ import {
 } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
 import { ModelConfigStore, type ModelThinkingConfig } from "../core/model-config-store.ts"
-import { PiProviderStore } from "../core/pi-provider-store.ts"
 import type {
   AuthProviderOption,
-  PiProviderOption,
-  ProviderAuthType,
   ModelOption,
   ModelRuntimeInfo,
   PiCreateInput,
-  PiPort,
-  PiPortEvent,
   PiPermissionBatchHandler,
   PiPermissionExecutionHandler,
   PiPermissionHandler,
+  PiPort,
+  PiPortEvent,
   PiPromptInput,
+  PiProviderOption,
   PiRestoreInput,
   PiSessionTitleInput,
+  ProviderAuthType,
   ResolvedViewResources,
 } from "../core/pi-port.ts"
 import { PiModelRuntimeError } from "../core/pi-port.ts"
-import type { AizenToolRegistration } from "../core/tool-registry.ts"
+import { PiProviderStore } from "../core/pi-provider-store.ts"
 import type { JsonValue, ModelReference, SessionRecord } from "../core/session-format.ts"
 import { projectVisibleSessionRecords, workingDirectoryChangeText } from "../core/session-projection.ts"
 import type { ToolAuthorization, ToolPermissionRequest } from "../core/tool-permissions/types.ts"
+import type { AizenToolRegistration } from "../core/tool-registry.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
 import { permissionFailureMessage } from "./permission-failure.ts"
 import { PiPermissionReviewer } from "./permission-reviewer.ts"
-import { generateSessionTitle } from "./session-title-generator.ts"
-import { normalizeToolFailure } from "./tool-failure.ts"
 import { PiCredentialStore, PiModelsCacheStore } from "./pi-stores.ts"
 import { PiProviderRuntime } from "./provider-runtime.ts"
+import { generateSessionTitle } from "./session-title-generator.ts"
+import { normalizeToolFailure } from "./tool-failure.ts"
 
 export type PiSessionRuntimeOptions = {
   authPath: string
@@ -235,7 +238,15 @@ function auditedTools(
     maxLength: 50,
     description: "用不超过 50 个字符的一句话说明本次工具调用的目的，供用户阅读和审计",
   })
-  return [createReadTool(cwd), createBashTool(cwd), createEditTool(cwd), createWriteTool(cwd)].map((tool) => ({
+  return [
+    createReadTool(cwd),
+    createBashTool(cwd),
+    createEditTool(cwd),
+    createWriteTool(cwd),
+    createGrepTool(cwd),
+    createFindTool(cwd),
+    createLsTool(cwd),
+  ].map((tool) => ({
     name: tool.name,
     label: tool.label,
     description: tool.description,
