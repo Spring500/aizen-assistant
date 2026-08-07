@@ -77,6 +77,46 @@ describe("策略权限管理器", () => {
     ).toMatchObject({ type: "deny", source: "policy" })
   })
 
+  test("同一批次的人工项统一展示和提交", async () => {
+    const registry = new PermissionClassifierRegistry()
+    registry.registerBuiltin({
+      id: "builtin/demo@1",
+      toolNames: ["demo"],
+      classify: () => ({
+        kind: "claims",
+        claims: [{ tag: "read-sensitive", reason: "读取敏感文件" }],
+      }),
+    })
+    const batches: number[] = []
+    const manager = new PolicyPermissionManager({
+      registry,
+      aiReviewer: { review: async () => ({ type: "allow", reason: "不应调用" }) },
+      humanReviewer: {
+        review: async (batch) => {
+          batches.push(batch.requests.length)
+          return {
+            batchId: batch.batchId,
+            answers: batch.requests.map((item) => ({ requestId: item.requestId, type: "approve" as const })),
+          }
+        },
+      },
+    })
+    const result = await manager.authorizeBatch(
+      {
+        batchId: "batch",
+        calls: [
+          { ...request, toolCallId: "one", mode: "hybrid" },
+          { ...request, toolCallId: "two", mode: "hybrid" },
+        ],
+      },
+      context,
+      builtinPermissionPolicies.edit,
+      "manual",
+    )
+    expect(batches).toEqual([2])
+    expect(result.authorizations.map((item) => item.authorization.type)).toEqual(["allow", "allow"])
+  })
+
   test("全员弃权按 unknown 策略处理", async () => {
     const registry = new PermissionClassifierRegistry()
     const manager = new PolicyPermissionManager({

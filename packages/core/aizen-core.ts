@@ -1241,42 +1241,46 @@ export class AizenCore implements CorePort {
     signal?: AbortSignal,
   ): Promise<import("./tool-permissions/types.ts").ToolPermissionBatchAuthorization> {
     if (!this.#policyPermissionManager) throw new Error("新权限管理器不可用")
-    const authorizations = []
-    for (const request of batch.calls) {
-      if (!request.permissionPreset) throw new Error("权限批次缺少预设")
-      const authorization = await this.#policyPermissionManager.authorize(
-        request,
-        {
-          workspaceRoot: this.#cwd,
-          homeDirectory: homedir(),
-          sensitivePaths: [
-            ".env",
-            ".npmrc",
-            ".pypirc",
-            "credentials",
-            "id_rsa",
-            "id_ed25519",
-            ".ssh",
-            ".git",
-            ".aizen",
-            "auth.json",
-          ],
-          shell:
-            request.environment &&
-            typeof request.environment === "object" &&
-            !Array.isArray(request.environment) &&
-            typeof request.environment.shell === "string"
-              ? request.environment.shell
-              : "unknown",
-          platform: process.platform,
-        },
-        builtinPermissionPolicies[request.permissionPreset === "custom" ? "edit" : request.permissionPreset],
-        request.permissionReviewMode ?? "manual",
-        signal,
+    const first = batch.calls[0]
+    if (!first?.permissionPreset) throw new Error("权限批次缺少预设")
+    if (
+      batch.calls.some(
+        (request) =>
+          request.permissionPreset !== first.permissionPreset ||
+          request.permissionReviewMode !== first.permissionReviewMode,
       )
-      authorizations.push({ toolCallId: request.toolCallId, authorization })
-    }
-    return { batchId: batch.batchId, authorizations }
+    )
+      throw new Error("同一权限批次的预设和审核方式必须一致")
+    return this.#policyPermissionManager.authorizeBatch(
+      batch,
+      {
+        workspaceRoot: this.#cwd,
+        homeDirectory: homedir(),
+        sensitivePaths: [
+          ".env",
+          ".npmrc",
+          ".pypirc",
+          "credentials",
+          "id_rsa",
+          "id_ed25519",
+          ".ssh",
+          ".git",
+          ".aizen",
+          "auth.json",
+        ],
+        shell:
+          first.environment &&
+          typeof first.environment === "object" &&
+          !Array.isArray(first.environment) &&
+          typeof first.environment.shell === "string"
+            ? first.environment.shell
+            : "unknown",
+        platform: process.platform,
+      },
+      builtinPermissionPolicies[first.permissionPreset === "custom" ? "edit" : first.permissionPreset],
+      first.permissionReviewMode ?? "manual",
+      signal,
+    )
   }
 
   #createPermissionManager(): ToolPermissionManager | undefined {

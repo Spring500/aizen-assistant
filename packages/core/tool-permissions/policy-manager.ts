@@ -3,7 +3,14 @@ import type { PermissionClassifyContext, PermissionClassifyInput } from "./class
 import { evaluatePermissionPolicy, type PermissionPolicyEvaluation } from "./policy-evaluator.ts"
 import type { PermissionPolicy, PermissionReviewMode } from "./policy-types.ts"
 import { resolvePermissionDisposition } from "./review-router.ts"
-import type { AiPermissionReviewer, HumanPermissionReviewer, HumanReviewRequest, ToolAuthorization } from "./types.ts"
+import type {
+  AiPermissionReviewer,
+  HumanPermissionReviewer,
+  HumanReviewRequest,
+  ToolAuthorization,
+  ToolPermissionBatchAuthorization,
+  ToolPermissionBatchRequest,
+} from "./types.ts"
 
 export type PolicyPermissionRequest = PermissionClassifyInput & {
   sessionId: string
@@ -51,6 +58,45 @@ export class PolicyPermissionManager {
     this.#now = options.now ?? (() => new Date())
   }
 
+  /** 对同一工具批次完成分类和自动审核，并将全部人工项合并为一次提交。 */
+  async authorizeBatch(
+    batch: ToolPermissionBatchRequest,
+    context: PermissionClassifyContext,
+    policy: PermissionPolicy,
+    reviewMode: PermissionReviewMode,
+    signal?: AbortSignal,
+  ): Promise<ToolPermissionBatchAuthorization> {
+    const prepared = await Promise.all(
+      batch.calls.map(async (request) => {
+        const classification = await this.#registry.classify(request, context)
+        const evaluation = evaluatePermissionPolicy(classification, policy)
+        const analyzed = assessment(evaluation)
+        const route = resolvePermissionDisposition(evaluation.disposition, reviewMode)
+        if (route === "human") return { request, evaluation, analyzed }
+        return {
+          request,
+          evaluation,
+          analyzed,
+          authorization: await this.#automatic(request, evaluation, analyzed, route, signal),
+        }
+      }),
+    )
+    const humanItems = prepared.filter((item) => item.authorization === undefined)
+    const human = humanItems.length > 0 ? await this.#humanBatch(batch.batchId, humanItems, signal) : new Map()
+    return {
+      batchId: batch.batchId,
+      authorizations: prepared.map((item) => ({
+        toolCallId: item.request.toolCallId,
+        authorization: item.authorization ??
+          human.get(item.request.toolCallId) ?? {
+            type: "deny",
+            reason: "Operation denied: Permission review returned no result.",
+            source: "system",
+          },
+      })),
+    }
+  }
+
   /** 依次执行分类、策略求值和审核路由，返回可直接用于工具包装器的授权结果。 */
   async authorize(
     request: PolicyPermissionRequest,
@@ -63,6 +109,17 @@ export class PolicyPermissionManager {
     const evaluation = evaluatePermissionPolicy(classification, policy)
     const analyzed = assessment(evaluation)
     const route = resolvePermissionDisposition(evaluation.disposition, reviewMode)
+    if (route === "human") return this.#human(request, evaluation, analyzed, signal)
+    return this.#automatic(request, evaluation, analyzed, route, signal)
+  }
+
+  async #automatic(
+    request: PolicyPermissionRequest,
+    evaluation: PermissionPolicyEvaluation,
+    analyzed: ReturnType<typeof assessment>,
+    route: Exclude<ReturnType<typeof resolvePermissionDisposition>, "human">,
+    signal?: AbortSignal,
+  ): Promise<ToolAuthorization> {
     if (route === "allow")
       return {
         type: "allow",
@@ -95,6 +152,66 @@ export class PolicyPermissionManager {
         return { type: "deny", reason: result.reason, assessment: analyzed, source: "ai" }
     }
     return this.#human(request, evaluation, analyzed, signal)
+  }
+
+  async #humanBatch(
+    batchId: string,
+    items: Array<{
+      request: PolicyPermissionRequest
+      evaluation: PermissionPolicyEvaluation
+      analyzed: ReturnType<typeof assessment>
+    }>,
+    signal?: AbortSignal,
+  ): Promise<Map<string, ToolAuthorization>> {
+    const createdAt = this.#now().toISOString()
+    const reviews = items.map(({ request, analyzed }) => ({
+      requestId: crypto.randomUUID(),
+      batchId,
+      sessionId: request.sessionId,
+      turnId: request.turnId,
+      toolCallId: request.toolCallId,
+      toolName: request.toolName,
+      declaredIntent: request.declaredIntent,
+      cwd: request.cwd,
+      arguments: request.arguments,
+      assessment: analyzed,
+      createdAt,
+    }))
+    const decision = await this.#humanReviewer.review(
+      {
+        batchId,
+        sessionId: reviews[0]?.sessionId ?? "",
+        turnId: reviews[0]?.turnId ?? "",
+        requests: reviews,
+        createdAt,
+      },
+      signal,
+    )
+    const answers = new Map(decision.answers.map((answer) => [answer.requestId, answer]))
+    const results = new Map<string, ToolAuthorization>()
+    for (const review of reviews) {
+      const item = items.find((candidate) => candidate.request.toolCallId === review.toolCallId)
+      const answer = answers.get(review.requestId)
+      if (!item) continue
+      if (answer?.type === "approve") {
+        results.set(review.toolCallId, {
+          type: "allow",
+          arguments: item.request.arguments,
+          assessment: item.analyzed,
+          source: "human",
+        })
+      } else {
+        results.set(review.toolCallId, {
+          type: "deny",
+          reason: answer?.reason
+            ? `Operation denied: rule "${item.evaluation.decisiveKey ?? "permission policy"}" requires human approval and was denied.\nUser reason: ${answer.reason}`
+            : `Operation denied: rule "${item.evaluation.decisiveKey ?? "permission policy"}" requires human approval and was denied.`,
+          assessment: item.analyzed,
+          source: "human",
+        })
+      }
+    }
+    return results
   }
 
   async #human(
