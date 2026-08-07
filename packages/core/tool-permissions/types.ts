@@ -123,14 +123,14 @@ export type ToolAuthorization =
       type: "allow"
       arguments: JsonValue
       assessment: ToolAssessment
-      source: "mode" | "validator" | "ai" | "human"
+      source: "mode" | "validator" | "policy" | "reviewMode" | "ai" | "human"
       reviewSteps?: PermissionReviewStep[]
     }
   | {
       type: "deny"
       reason: string
       assessment?: ToolAssessment
-      source: "validator" | "ai" | "human" | "system"
+      source: "validator" | "policy" | "ai" | "human" | "system"
       reviewSteps?: PermissionReviewStep[]
     }
   | { type: "aborted"; reason: string; reviewSteps?: PermissionReviewStep[] }
