@@ -162,7 +162,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     {
       onSubmit: (value) => {
         const command = parseTuiCommand(value)
-        // 普通消息由恢复流程持有原文，模型失效时无需用户清空输入框再执行 /model。
+        // 普通消息由恢复流程持有原文，模型失效时无需用户清空输入框再执行 /session-settings。
         if (!command)
           runAction(() =>
             sendPromptWithRecovery({
@@ -187,8 +187,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               "压缩会话",
             ),
           )
+        else if (command.name === "/session-settings") runAction(() => openSessionSettings("existing"))
         else if (command.name === "/views") runAction(manageViews)
-        else if (command.name === "/view" || command.name === "/model") runAction(() => openSessionSettings("existing"))
         else if (command.name === "/fold") runAction(chooseFold)
         else if (command.name === "/models") runAction(manageModels)
         else if (command.name === "/agents") runAction(openAgentSettings)

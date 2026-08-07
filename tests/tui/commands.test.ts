@@ -10,6 +10,7 @@ test("重命名命令支持行内名称和无参数编辑", () => {
   expect(parseTuiCommand("/compact 保留当前目标")).toEqual({ name: "/compact", argument: "保留当前目标" })
   expect(parseTuiCommand("/compact")).toEqual({ name: "/compact" })
   expect(parseTuiCommand("/rewind")).toEqual({ name: "/rewind" })
+  expect(parseTuiCommand("/session-settings")).toEqual({ name: "/session-settings" })
   expect(parseTuiCommand("/agents")).toEqual({ name: "/agents" })
   expect(parseTuiCommand("/skills")).toEqual({ name: "/skills" })
   expect(parseTuiCommand("/unknown")).toBeUndefined()

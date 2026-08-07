@@ -6,10 +6,9 @@ export type TuiCommandName =
   | "/fork"
   | "/rename"
   | "/compact"
+  | "/session-settings"
   | "/views"
-  | "/view"
   | "/fold"
-  | "/model"
   | "/models"
   | "/agents"
   | "/skills"
@@ -26,9 +25,8 @@ export const tuiCommands: readonly TuiCommand[] = [
   { name: "/fork", description: "从用户消息创建会话副本" },
   { name: "/rename", description: "重命名当前会话" },
   { name: "/compact", description: "压缩当前会话，可附加摘要要求" },
-  { name: "/view", description: "切换当前视图" },
+  { name: "/session-settings", description: "配置当前会话：模型、视图、权限模式" },
   { name: "/views", description: "管理视图" },
-  { name: "/model", description: "切换当前模型" },
   { name: "/models", description: "管理供应商和模型" },
   { name: "/agents", description: "设置内置 Agent" },
   { name: "/skills", description: "管理全局技能" },
