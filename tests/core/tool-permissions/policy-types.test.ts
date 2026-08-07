@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
 import {
   builtinPermissionPolicies,
   configurablePermissionKeys,
@@ -6,6 +6,9 @@ import {
   permissionReviewModes,
   permissionTags,
 } from "../../../packages/core/tool-permissions/policy-types.ts"
+import { createDiagnosticTest } from "../../utils/diagnostic-test.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 describe("权限策略基础类型", () => {
   test("标签集合固定且 violation 不进入可配置策略键", () => {

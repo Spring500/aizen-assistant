@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
 import { resolvePermissionDisposition } from "../../../packages/core/tool-permissions/review-router.ts"
+import { createDiagnosticTest } from "../../utils/diagnostic-test.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const modes = ["manual", "aiReview", "aiReviewWithAbstain", "autoApprove", "autoDeny"] as const
 

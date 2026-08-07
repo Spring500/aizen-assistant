@@ -1,5 +1,8 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
 import { createBuiltinBashClassifier } from "../../../packages/core/tool-permissions/classifiers/bash.ts"
+import { createDiagnosticTest } from "../../utils/diagnostic-test.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const classifier = createBuiltinBashClassifier()
 const context = {

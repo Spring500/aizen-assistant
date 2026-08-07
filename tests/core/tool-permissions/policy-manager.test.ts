@@ -1,7 +1,10 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
 import { PermissionClassifierRegistry } from "../../../packages/core/tool-permissions/classifier-registry.ts"
 import { PolicyPermissionManager } from "../../../packages/core/tool-permissions/policy-manager.ts"
 import { builtinPermissionPolicies } from "../../../packages/core/tool-permissions/policy-types.ts"
+import { createDiagnosticTest } from "../../utils/diagnostic-test.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const request = {
   sessionId: "session",

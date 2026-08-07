@@ -1,6 +1,9 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
 import { PermissionClassifierRegistry } from "../../../packages/core/tool-permissions/classifier-registry.ts"
 import type { PermissionClassifier } from "../../../packages/core/tool-permissions/classifier-types.ts"
+import { createDiagnosticTest } from "../../utils/diagnostic-test.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 function classifier(id: string, toolNames: string[], tag: "read-workspace" | "network-fetch"): PermissionClassifier {
   return {

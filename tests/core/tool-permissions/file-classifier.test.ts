@@ -1,8 +1,11 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, describe, expect } from "bun:test"
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createBuiltinFileClassifier } from "../../../packages/core/tool-permissions/classifiers/file.ts"
+import { createDiagnosticTest } from "../../utils/diagnostic-test.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const roots: string[] = []
 afterEach(async () => Promise.all(roots.splice(0).map((path) => rm(path, { recursive: true, force: true }))))

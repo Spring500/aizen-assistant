@@ -1,9 +1,12 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
 import { evaluatePermissionPolicy } from "../../../packages/core/tool-permissions/policy-evaluator.ts"
 import {
   builtinPermissionPolicies,
   type PermissionPolicy,
 } from "../../../packages/core/tool-permissions/policy-types.ts"
+import { createDiagnosticTest } from "../../utils/diagnostic-test.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 describe("权限策略求值", () => {
   test("violation 固定拒绝且不受预设影响", () => {
