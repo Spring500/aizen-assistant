@@ -27,7 +27,8 @@ export type ChatView = {
   destroy(): Promise<void>
   update(snapshot: CoreSnapshot): Promise<void>
   getFoldPreferences(): FoldPreferences
-  setFoldPreferences(fold: FoldPreferences): Promise<void>
+  /** 应用折叠设置并全量回放；message 为状态栏反馈文案，缺省用通用提示。 */
+  setFoldPreferences(fold: FoldPreferences, message?: string): Promise<void>
 }
 
 type ToolDisplay = {
@@ -652,7 +653,7 @@ export function createChatView(renderer: CliRenderer): ChatView {
   const refreshFooter = () => {
     if (lifecycle !== "active" || !latestSnapshot || header.isDestroyed || live.isDestroyed || status.isDestroyed)
       return
-    header.content = "AizenAssistant | /fold 折叠设置"
+    header.content = "AizenAssistant"
     live.content = liveText(latestSnapshot)
     status.content = notice || statusText(latestSnapshot)
     status.fg =
@@ -712,10 +713,10 @@ export function createChatView(renderer: CliRenderer): ChatView {
     getFoldPreferences() {
       return { ...fold }
     },
-    setFoldPreferences(next) {
+    setFoldPreferences(next, message = "已应用折叠设置，并全量回放会话") {
       return queueOperation(async () => {
         fold = { ...next }
-        notice = "已应用折叠设置，并全量回放会话"
+        notice = message
         await syncHistory(true)
         refreshFooter()
       })

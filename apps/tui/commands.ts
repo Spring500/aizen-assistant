@@ -6,13 +6,13 @@ export type TuiCommandName =
   | "/fork"
   | "/rename"
   | "/compact"
+  | "/session-settings"
   | "/views"
-  | "/view"
-  | "/fold"
-  | "/model"
   | "/models"
-  | "/agents"
+  | "/preferences"
   | "/skills"
+  | "/toggle-think"
+  | "/toggle-tool"
 
 export type TuiCommand = {
   name: TuiCommandName
@@ -26,13 +26,13 @@ export const tuiCommands: readonly TuiCommand[] = [
   { name: "/fork", description: "从用户消息创建会话副本" },
   { name: "/rename", description: "重命名当前会话" },
   { name: "/compact", description: "压缩当前会话，可附加摘要要求" },
-  { name: "/view", description: "切换当前视图" },
+  { name: "/session-settings", description: "配置当前会话：模型、视图、权限模式" },
   { name: "/views", description: "管理视图" },
-  { name: "/model", description: "切换当前模型" },
   { name: "/models", description: "管理供应商和模型" },
-  { name: "/agents", description: "设置内置 Agent" },
+  { name: "/preferences", description: "应用偏好：会话自动命名、工具审核模型" },
   { name: "/skills", description: "管理全局技能" },
-  { name: "/fold", description: "设置会话内容折叠开关" },
+  { name: "/toggle-think", description: "切换思考过程展开/折叠" },
+  { name: "/toggle-tool", description: "切换工具区展开/折叠" },
   { name: "/quit", description: "退出应用" },
 ]
 
