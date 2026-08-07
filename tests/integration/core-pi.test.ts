@@ -1,5 +1,4 @@
 import { afterEach, expect } from "bun:test"
-import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -8,6 +7,7 @@ import { AppPreferencesStore } from "../../packages/core/app-preferences-store.t
 import type { ModelReference } from "../../packages/core/session-format.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { startMockServer } from "../utils/mock-server.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 30_000 })
@@ -170,7 +170,7 @@ test("真实 pi 链路将权限拒绝结果返回模型", async () => {
     const second = await mock.take({ modelId: option.modelId })
     const messages = JSON.stringify(second.messages)
     expect(messages).toContain("permission-call")
-    expect(messages).toContain("Operation denied: User denied permission without providing a reason.")
+    expect(messages).toContain('Operation denied: rule \\"unknown\\" requires human approval and was denied.')
     second.respond({ type: "text", text: "已停止操作" })
     expect(await sending).toEqual({ ok: true })
     expect(
@@ -231,7 +231,7 @@ test("真实 pi 链路统一提交同一消息中的多工具人工审批", asyn
     const messages = JSON.stringify(second.messages)
     expect(messages).toContain("batch-call-one")
     expect(messages).toContain("batch-call-two")
-    expect(messages).toContain("Operation denied: User denied permission. Reason: 无需展示搜索路径")
+    expect(messages).toContain("requires human approval and was denied.\\nUser reason: 无需展示搜索路径")
     second.respond({ type: "text", text: "批次处理完成" })
     expect(await sending).toEqual({ ok: true })
     await core.dispose()
