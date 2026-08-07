@@ -1733,8 +1733,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   }
 
   async function changeConversation(action: "rewind" | "fork"): Promise<void> {
-    const selected = await selectItem(overlays, `${action}-turn`, userTurnOptions(), {
+    const turnOptions = userTurnOptions()
+    const selected = await selectItem(overlays, `${action}-turn`, turnOptions, {
       title: action === "rewind" ? "选择回退位置" : "选择分支位置",
+      // 历史消息按时间顺序排列，默认光标放在最新一条（列表末尾），方便从最近的消息往回选
+      initialIndex: turnOptions.length - 1,
       signal: interactionController.signal,
     })
     if (!selected) return
