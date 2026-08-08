@@ -82,7 +82,7 @@ function firstPendingStart(instructions: MockDslInstruction[], results: Map<stri
 
 /** 执行用户最后一条消息中的 DSL，并仅通过历史工具结果无状态推进多轮调用。 */
 export const mockDslBehavior: MockBehavior = async function* (context: MockRequestContext): AsyncIterable<MockEvent> {
-  const latest = lastUserMessage(context.messages)
+  const latest = lastUserMessage(context.normalizedMessages)
   if (!latest) {
     yield { type: "text", text: `${parseFailurePrefix}\n` }
     yield { type: "finish", reason: "stop" }
@@ -94,7 +94,7 @@ export const mockDslBehavior: MockBehavior = async function* (context: MockReque
     yield { type: "finish", reason: "stop" }
     return
   }
-  const results = resultsAfter(context.messages, latest.index)
+  const results = resultsAfter(context.normalizedMessages, latest.index)
   const start = firstPendingStart(parsed.instructions, results)
   if (start >= parsed.instructions.length) {
     yield { type: "finish", reason: "stop" }

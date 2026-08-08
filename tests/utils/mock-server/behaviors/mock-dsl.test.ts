@@ -7,7 +7,7 @@ import { mockDslBehavior } from "./mock-dsl.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
-function context(message: string, messages: MockRequestContext["messages"] = []): MockRequestContext {
+function context(message: string, messages: MockRequestContext["normalizedMessages"] = []): MockRequestContext {
   return {
     id: "request",
     sequence: 1,
@@ -18,7 +18,8 @@ function context(message: string, messages: MockRequestContext["messages"] = [])
     modelId: "mock-dsl",
     body: {},
     system: "",
-    messages: [...messages, { role: "user", content: message }],
+    messages: [],
+    normalizedMessages: [...messages, { role: "user", content: message }],
     tools: [],
     signal: new AbortController().signal,
   }
@@ -74,7 +75,7 @@ text 目录：{{T1.Result}}`
   expect(
     await events({
       ...context(source),
-      messages: [
+      normalizedMessages: [
         { role: "user", content: source },
         { role: "assistant", content: "" },
         { role: "tool", toolCallId: "T1", toolName: "bash", content: "README.md" },
@@ -93,7 +94,7 @@ text {{T1.Result}} / {{T2.Result}}`
   expect(
     await events({
       ...context(source),
-      messages: [
+      normalizedMessages: [
         { role: "user", content: source },
         { role: "assistant", content: "" },
         { role: "tool", toolCallId: "T1", toolName: "bash", content: "first-result" },

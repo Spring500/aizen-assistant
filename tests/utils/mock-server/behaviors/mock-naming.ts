@@ -1,7 +1,7 @@
 import type { MockBehavior, MockRequestContext } from "../types.ts"
 
 function firstUserText(context: MockRequestContext): string {
-  return context.messages.find((message) => message.role === "user")?.content ?? "会话"
+  return context.normalizedMessages.find((message) => message.role === "user")?.content ?? "会话"
 }
 
 function timestamp(): string {

@@ -30,7 +30,10 @@ export type MockRequestContext = {
   /** 原始 HTTP 请求体，仅用于诊断；行为模块不得依赖协议私有字段。 */
   body: Record<string, unknown>
   system: string
-  messages: MockMessage[]
+  /** 原始协议消息，保留既有测试装置的请求检查语义。 */
+  messages: unknown[]
+  /** 归一化后的消息，仅供行为模块使用。 */
+  normalizedMessages: MockMessage[]
   tools: MockTool[]
   signal: AbortSignal
 }
