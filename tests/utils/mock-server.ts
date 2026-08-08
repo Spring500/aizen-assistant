@@ -102,7 +102,36 @@ function copyContext(context: MockRequestContext): MockRequestContext {
   return { ...structuredClone(serializable), signal }
 }
 
-function responseForEvents(events: AsyncIterable<MockEvent>, context: MockRequestContext): Response {
+async function responseForBehavior(events: AsyncIterable<MockEvent>, context: MockRequestContext): Promise<Response> {
+  const iterator = events[Symbol.asyncIterator]()
+  const first = await iterator.next()
+  if (first.done) {
+    const finish = (async function* (): AsyncIterable<MockEvent> {
+      yield { type: "finish", reason: "stop" }
+    })()
+    return context.protocol === "anthropic-messages"
+      ? encodeAnthropicEvents(finish, context)
+      : encodeOpenAiEvents(finish, context)
+  }
+  if (first.value.type === "error")
+    return Response.json(first.value.body ?? { error: { message: first.value.message } }, { status: first.value.status })
+  const prefixed = (async function* (): AsyncIterable<MockEvent> {
+    yield first.value
+    while (true) {
+      const next = await iterator.next()
+      if (next.done) return
+      yield next.value
+    }
+  })()
+  return context.protocol === "anthropic-messages"
+    ? encodeAnthropicEvents(prefixed, context)
+    : encodeOpenAiEvents(prefixed, context)
+}
+
+function responseForCompatibility(response: MockResponse, context: MockRequestContext): Response {
+  if (response.type === "http_error")
+    return Response.json(response.body ?? { error: { message: `Mock HTTP ${response.status}` } }, { status: response.status })
+  const events = eventsForResponse(response)
   return context.protocol === "anthropic-messages"
     ? encodeAnthropicEvents(events, context)
     : encodeOpenAiEvents(events, context)
@@ -112,7 +141,10 @@ function responseForEvents(events: AsyncIterable<MockEvent>, context: MockReques
  * 启动可由测试逐请求控制的双协议 Mock Server。
  * 传入字符串时保留旧测试的固定文本响应行为；显式处理器优先于内置行为注册表。
  */
-export async function startMockServer(responseText?: string, options?: { port?: number }): Promise<MockServer> {
+export async function startMockServer(
+  responseText?: string,
+  options?: { port?: number; strictModels?: boolean },
+): Promise<MockServer> {
   const history: MockRequestContext[] = []
   const pending: Pending[] = []
   const waiters: TakeWaiter[] = []
@@ -157,10 +189,10 @@ export async function startMockServer(responseText?: string, options?: { port?: 
       })
       history.push(context)
       const handler = (context.modelId ? modelHandlers.get(context.modelId) : undefined) ?? defaultHandler
-      if (handler) return responseForEvents(eventsForResponse(await handler(copyContext(context))), context)
+      if (handler) return responseForCompatibility(await handler(copyContext(context)), context)
       const behavior = context.modelId ? mockBehaviorRegistry[context.modelId] : undefined
-      if (behavior) return responseForEvents(behavior(copyContext(context)), context)
-      if (context.modelId && (registeredMockModelIds().length > 0 || context.modelId.startsWith("mock-")))
+      if (behavior) return await responseForBehavior(behavior(copyContext(context)), context)
+      if (context.modelId && options?.strictModels)
         return Response.json(
           { error: { message: `未注册 Mock 模型：${context.modelId}；可用模型：${registeredMockModelIds().join("、")}` } },
           { status: 404 },
@@ -176,7 +208,7 @@ export async function startMockServer(responseText?: string, options?: { port?: 
         if (!waiter) throw new Error("Mock 请求等待器意外丢失")
         waiter.resolve(controlled(item))
       })
-      return responseForEvents(eventsForResponse(response), context)
+      return responseForCompatibility(response, context)
     },
   })
 
