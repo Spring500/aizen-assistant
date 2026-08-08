@@ -86,6 +86,25 @@ text 目录：{{T1.Result}}`
   ])
 })
 
+test("已有工具结果时继续同轮剩余工具并保留引用切分", async () => {
+  const source = `bash T1 第一项 | first
+bash T2 第二项 | second
+text {{T1.Result}} / {{T2.Result}}`
+  expect(
+    await events({
+      ...context(source),
+      messages: [
+        { role: "user", content: source },
+        { role: "assistant", content: "" },
+        { role: "tool", toolCallId: "T1", toolName: "bash", content: "first-result" },
+      ],
+    }),
+  ).toEqual([
+    { type: "tool", callId: "T2", name: "bash", arguments: { command: "second", declaredIntent: "第二项" } },
+    { type: "finish", reason: "toolUse" },
+  ])
+})
+
 test("互不依赖的工具调用同轮发出", async () => {
   expect(
     await events(

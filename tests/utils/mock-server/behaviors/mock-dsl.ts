@@ -70,8 +70,14 @@ async function hang(signal: AbortSignal): Promise<void> {
   })
 }
 
-function firstUnfinished(instructions: MockDslInstruction[], results: Map<string, string>): number {
-  return instructions.findIndex((instruction) => instruction.type !== "tool" || !results.has(instruction.callId))
+function firstPendingStart(instructions: MockDslInstruction[], results: Map<string, string>): number {
+  let start = 0
+  for (const [index, instruction] of instructions.entries()) {
+    if (instruction.type !== "tool") continue
+    if (!results.has(instruction.callId)) break
+    start = index + 1
+  }
+  return start
 }
 
 /** 执行用户最后一条消息中的 DSL，并仅通过历史工具结果无状态推进多轮调用。 */
@@ -89,8 +95,8 @@ export const mockDslBehavior: MockBehavior = async function* (context: MockReque
     return
   }
   const results = resultsAfter(context.messages, latest.index)
-  const start = firstUnfinished(parsed.instructions, results)
-  if (start < 0) {
+  const start = firstPendingStart(parsed.instructions, results)
+  if (start >= parsed.instructions.length) {
     yield { type: "finish", reason: "stop" }
     return
   }
@@ -114,6 +120,7 @@ export const mockDslBehavior: MockBehavior = async function* (context: MockReque
     else if (instruction.type === "delay") await wait(instruction.milliseconds, context.signal)
     else if (instruction.type === "hang") await hang(context.signal)
     else if (instruction.type === "tool") {
+      if (results.has(instruction.callId)) continue
       yield { type: "tool", callId: instruction.callId, name: instruction.name, arguments: instruction.arguments }
       sentTool = true
     }
