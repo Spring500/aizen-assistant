@@ -1,0 +1,22 @@
+{
+  "newSession": {
+    "model": {
+      "providerId": "mock-anthropic",
+      "modelId": "mock-dsl",
+      "api": "anthropic-messages"
+    },
+    "viewId": null,
+    "permissionMode": "hybrid",
+    "permissionPreset": "edit",
+    "permissionReviewMode": "aiReview"
+  },
+  "agents": {
+    "sessionNaming": { "model": { "providerId": "mock-anthropic", "modelId": "mock-naming" } },
+    "permissionReview": { "model": { "providerId": "mock-anthropic", "modelId": "mock-review" } }
+  },
+  "fold": {
+    "thinkingExpanded": false,
+    "toolGroupExpanded": true,
+    "toolDetailsExpanded": false
+  }
+}

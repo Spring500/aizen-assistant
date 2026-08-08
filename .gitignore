@@ -31,6 +31,7 @@ release/
 # 本地会话、缓存与日志
 .aizen/
 .private/
+mock-data/
 sessions/
 *.log
 *.tmp

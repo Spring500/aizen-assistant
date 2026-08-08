@@ -32,7 +32,7 @@ test("OpenAI 协议归一化请求并输出指定工具调用 ID", async () => {
 })
 
 test("未知内置 Mock 模型返回可诊断的 404", async () => {
-  const mock = await startMockServer()
+  const mock = await startMockServer(undefined, { strictModels: true })
   try {
     const response = await fetch(`${mock.url}/v1/messages`, {
       method: "POST",

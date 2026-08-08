@@ -1,0 +1,26 @@
+{
+  "providers": {
+    "mock-anthropic": {
+      "name": "Mock Anthropic",
+      "baseUrl": "http://127.0.0.1:39527",
+      "api": "anthropic-messages",
+      "authHeader": false,
+      "models": [
+        { "id": "mock-dsl", "name": "Mock DSL", "input": ["text"], "contextWindow": 32000, "maxTokens": 4096 },
+        { "id": "mock-naming", "name": "Mock Naming", "input": ["text"], "contextWindow": 32000, "maxTokens": 4096 },
+        { "id": "mock-review", "name": "Mock Review", "input": ["text"], "contextWindow": 32000, "maxTokens": 4096 }
+      ]
+    },
+    "mock-openai": {
+      "name": "Mock OpenAI",
+      "baseUrl": "http://127.0.0.1:39527/v1",
+      "api": "openai-completions",
+      "authHeader": false,
+      "models": [
+        { "id": "mock-dsl", "name": "Mock DSL (OpenAI)", "input": ["text"], "contextWindow": 32000, "maxTokens": 4096 },
+        { "id": "mock-naming", "name": "Mock Naming (OpenAI)", "input": ["text"], "contextWindow": 32000, "maxTokens": 4096 },
+        { "id": "mock-review", "name": "Mock Review (OpenAI)", "input": ["text"], "contextWindow": 32000, "maxTokens": 4096 }
+      ]
+    }
+  }
+}
