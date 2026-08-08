@@ -12,11 +12,11 @@ import type {
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
-import { SkillStore, type DiscoveredSkill, type InstalledSkill } from "../../packages/core/skill-store.ts"
+import { type DiscoveredSkill, type InstalledSkill, SkillStore } from "../../packages/core/skill-store.ts"
 import { JsonlPermissionGapRecorder } from "../../packages/core/tool-permissions/gap-recorder.ts"
 import type { CorePort } from "../../packages/core/types.ts"
+import { type ProjectSources, readViewConfig, writeViewConfig } from "../../packages/core/view-config.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
-import { readViewConfig, writeViewConfig, type ProjectSources } from "../../packages/core/view-config.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
@@ -1559,7 +1559,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
    * 新建时只继承当前仍合法的思考档位；已有会话则把模型、API 和思考档位视为一组运行参数。
    */
   async function openSessionSettings(mode: "new" | "existing"): Promise<boolean> {
-    let draft: SessionSettingsDraft = { viewId: null, permissionMode: "hybrid" }
+    let draft: SessionSettingsDraft = {
+      viewId: null,
+      permissionMode: "hybrid",
+      permissionPreset: "edit",
+      permissionReviewMode: "manual",
+    }
     if (mode === "new") {
       await dispatchWithError({ type: "load_preferences" }, "读取应用偏好失败")
       const preferred = core.getSnapshot().preferences.newSession
@@ -1578,9 +1583,23 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             model: modelWithPreferredThinkingLevel(available, preferred.model),
             viewId: preferred.viewId,
             permissionMode: preferred.permissionMode ?? "hybrid",
+            permissionPreset: preferred.permissionPreset ?? "edit",
+            permissionReviewMode: preferred.permissionReviewMode ?? "manual",
           }
-        } else draft = { viewId: preferred.viewId, permissionMode: preferred.permissionMode ?? "hybrid" }
-      } else draft = { viewId: preferred.viewId, permissionMode: preferred.permissionMode ?? "hybrid" }
+        } else
+          draft = {
+            viewId: preferred.viewId,
+            permissionMode: preferred.permissionMode ?? "hybrid",
+            permissionPreset: preferred.permissionPreset ?? "edit",
+            permissionReviewMode: preferred.permissionReviewMode ?? "manual",
+          }
+      } else
+        draft = {
+          viewId: preferred.viewId,
+          permissionMode: preferred.permissionMode ?? "hybrid",
+          permissionPreset: preferred.permissionPreset ?? "edit",
+          permissionReviewMode: preferred.permissionReviewMode ?? "manual",
+        }
     }
     if (mode === "existing") {
       const snapshot = core.getSnapshot()
@@ -1599,6 +1618,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         },
         viewId: snapshot.currentViewId ?? null,
         permissionMode: snapshot.currentPermissionMode ?? "hybrid",
+        permissionPreset: snapshot.currentPermissionPreset ?? "edit",
+        permissionReviewMode: snapshot.currentPermissionReviewMode ?? "manual",
       }
     }
     while (!exiting) {
@@ -1619,23 +1640,37 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       } else if (action === "view") {
         const viewId = await chooseView()
         if (viewId !== undefined) draft = { ...draft, viewId }
-      } else if (action === "permission-mode") {
-        const permissionMode = await selectItem(
+      } else if (action === "permission-preset") {
+        const permissionPreset = await selectItem(
           overlays,
-          "session-permission-mode",
+          "session-permission-preset",
           [
-            { name: "完全开放", description: "所有已校验工具直接执行", value: "unrestricted" as const },
-            { name: "自动审核 + 人工审核", description: "AI 拒绝直接生效", value: "hybrid" as const },
-            {
-              name: "自动审核 + 人工确认拒绝",
-              description: "AI 拒绝也交给用户确认",
-              value: "hybridConfirmDenials" as const,
-            },
-            { name: "仅自动审核", description: "所有人工分支直接拒绝", value: "aiOnly" as const },
+            { name: "plan（只读）", description: "修改和发送类行为直接拒绝", value: "plan" as const },
+            { name: "edit（编辑）", description: "工作区开发使用的推荐预设", value: "edit" as const },
+            { name: "all-right（全放开）", description: "除绝对禁止行为外全部放行", value: "all-right" as const },
+            { name: "custom（自定义）", description: "使用应用级自定义策略", value: "custom" as const },
           ],
-          { title: "选择权限模式", signal: interactionController.signal },
+          { title: "选择权限预设", signal: interactionController.signal },
         )
-        if (permissionMode) draft = { ...draft, permissionMode }
+        if (permissionPreset) draft = { ...draft, permissionPreset }
+      } else if (action === "permission-review-mode") {
+        const permissionReviewMode = await selectItem(
+          overlays,
+          "session-permission-review-mode",
+          [
+            { name: "完全人工", description: "所有待审核操作都询问用户", value: "manual" as const },
+            { name: "AI 代审", description: "AI 处理优先 AI 审核档", value: "aiReview" as const },
+            {
+              name: "AI 代审（可弃权）",
+              description: "AI 拿不准时转人工",
+              value: "aiReviewWithAbstain" as const,
+            },
+            { name: "自动放过", description: "无人值守时放行两个审核档", value: "autoApprove" as const },
+            { name: "自动拒绝", description: "无人值守时拒绝两个审核档", value: "autoDeny" as const },
+          ],
+          { title: "选择审核方式", signal: interactionController.signal },
+        )
+        if (permissionReviewMode) draft = { ...draft, permissionReviewMode }
       } else if (action === "manage-models") await manageModels("standalone")
       else if (action === "manage-views") await manageViews()
       else if (action === "apply") {
@@ -1650,6 +1685,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               model: draft.model,
               viewId: draft.viewId,
               permissionMode: draft.permissionMode ?? "hybrid",
+              permissionPreset: draft.permissionPreset ?? "edit",
+              permissionReviewMode: draft.permissionReviewMode ?? "manual",
             },
             "创建会话失败",
           )
@@ -1671,12 +1708,19 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         if (snapshot.currentViewId !== draft.viewId) {
           if (!(await dispatchWithError({ type: "set_view", viewId: draft.viewId }, "切换视图失败")).ok) continue
         }
-        if (snapshot.currentPermissionMode !== draft.permissionMode) {
+        if (
+          snapshot.currentPermissionPreset !== draft.permissionPreset ||
+          snapshot.currentPermissionReviewMode !== draft.permissionReviewMode
+        ) {
           if (
             !(
               await dispatchWithError(
-                { type: "set_permission_mode", permissionMode: draft.permissionMode ?? "hybrid" },
-                "切换权限模式失败",
+                {
+                  type: "set_permission_settings",
+                  preset: draft.permissionPreset ?? "edit",
+                  reviewMode: draft.permissionReviewMode ?? "manual",
+                },
+                "切换权限设置失败",
               )
             ).ok
           )

@@ -1,5 +1,6 @@
 import type { ModelOption } from "../../packages/core/pi-port.ts"
 import type { ModelReference, ViewId } from "../../packages/core/session-format.ts"
+import type { PermissionPresetId, PermissionReviewMode } from "../../packages/core/tool-permissions/policy-types.ts"
 import type { PermissionMode } from "../../packages/core/tool-permissions/types.ts"
 import type { ViewOption } from "../../packages/core/view-store.ts"
 import type { RichSelectorItem } from "../../packages/tui-kit/rich-selector.ts"
@@ -9,22 +10,33 @@ export type SessionSettingsDraft = {
   model?: ModelOption
   viewId: ViewId
   permissionMode?: PermissionMode
+  permissionPreset?: PermissionPresetId
+  permissionReviewMode?: PermissionReviewMode
 }
 
 export type SessionSettingsAction =
   | "model"
   | "view"
-  | "permission-mode"
+  | "permission-preset"
+  | "permission-review-mode"
   | "manage-models"
   | "manage-views"
   | "apply"
   | "cancel"
 
-const permissionModeLabels: Record<PermissionMode, string> = {
-  unrestricted: "完全开放",
-  hybrid: "自动审核 + 人工审核",
-  hybridConfirmDenials: "自动审核 + 人工确认拒绝",
-  aiOnly: "仅自动审核",
+const permissionPresetLabels: Record<PermissionPresetId, string> = {
+  plan: "plan（只读）",
+  edit: "edit（编辑）",
+  "all-right": "all-right（全放开）",
+  custom: "custom（自定义）",
+}
+
+const permissionReviewModeLabels: Record<PermissionReviewMode, string> = {
+  manual: "完全人工",
+  aiReview: "AI 代审",
+  aiReviewWithAbstain: "AI 代审（可弃权）",
+  autoApprove: "自动放过",
+  autoDeny: "自动拒绝",
 }
 
 /** 旧偏好中的档位只有在当前模型仍支持时才能覆盖模型的新默认档位。 */
@@ -69,10 +81,26 @@ export function sessionSettingsItems(
       ],
     },
     {
-      value: "permission-mode",
+      value: "permission-preset",
       segments: [
-        { text: "权限模式  [ " },
-        { text: permissionModeLabels[draft.permissionMode ?? "hybrid"], color: systemColors.sessionStatus, bold: true },
+        { text: "权限预设  [ " },
+        {
+          text: permissionPresetLabels[draft.permissionPreset ?? "edit"],
+          color: systemColors.sessionStatus,
+          bold: true,
+        },
+        { text: " ]" },
+      ],
+    },
+    {
+      value: "permission-review-mode",
+      segments: [
+        { text: "审核方式  [ " },
+        {
+          text: permissionReviewModeLabels[draft.permissionReviewMode ?? "manual"],
+          color: systemColors.sessionStatus,
+          bold: true,
+        },
         { text: " ]" },
       ],
     },

@@ -1,6 +1,5 @@
 import type { AgentPreferences, AppPreferences, FoldPreferences } from "./app-preferences-store.ts"
 import type { EditableModelConfig, EditableProviderConfig, ModelConfigSnapshot } from "./model-config-store.ts"
-import type { ViewOption } from "./view-store.ts"
 import type {
   AuthPromptOption,
   AuthProviderOption,
@@ -10,8 +9,10 @@ import type {
 } from "./pi-port.ts"
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
 import { workingDirectoryChangeText } from "./session-projection.ts"
-import type { HumanReviewRequest, PermissionMode } from "./tool-permissions/types.ts"
 import type { SessionSummary } from "./session-store.ts"
+import type { PermissionPresetId, PermissionReviewMode } from "./tool-permissions/policy-types.ts"
+import type { HumanReviewRequest, PermissionMode } from "./tool-permissions/types.ts"
+import type { ViewOption } from "./view-store.ts"
 
 export type CoreStatus = "idle" | "running" | "compacting" | "aborting" | "authenticating" | "refreshing" | "error"
 
@@ -56,6 +57,8 @@ export type CoreSnapshot = {
   currentModel?: ModelRuntimeInfo
   currentViewId?: ViewId
   currentPermissionMode?: PermissionMode
+  currentPermissionPreset?: PermissionPresetId
+  currentPermissionReviewMode?: PermissionReviewMode
   pendingPermissionRequests?: HumanReviewRequest[]
   permissionReviewError?: string
   runtimeIssue?: RuntimeIssue
@@ -80,7 +83,14 @@ export type CoreCommand =
   | { type: "save_agent_preferences"; agents: AgentPreferences }
   | { type: "list_sessions" }
   | { type: "list_views" }
-  | { type: "create_session"; model: ModelReference; viewId: ViewId; permissionMode?: PermissionMode }
+  | {
+      type: "create_session"
+      model: ModelReference
+      viewId: ViewId
+      permissionMode?: PermissionMode
+      permissionPreset?: PermissionPresetId
+      permissionReviewMode?: PermissionReviewMode
+    }
   | { type: "open_session"; sessionId: string }
   | { type: "rename_session"; sessionId: string; name: string }
   | { type: "rewind"; turnId: string }
@@ -103,6 +113,7 @@ export type CoreCommand =
   | { type: "set_model"; model: ModelReference }
   | { type: "set_view"; viewId: ViewId }
   | { type: "set_permission_mode"; permissionMode: PermissionMode }
+  | { type: "set_permission_settings"; preset: PermissionPresetId; reviewMode: PermissionReviewMode }
   | {
       type: "answer_permission_batch"
       batchId: string

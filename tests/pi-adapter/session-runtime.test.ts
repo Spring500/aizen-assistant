@@ -1,14 +1,13 @@
 import { afterEach, describe, expect } from "bun:test"
-import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { existsSync, readFileSync } from "node:fs"
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { PiPortEvent } from "../../packages/core/pi-port.ts"
+import { convertToLlm, SessionManager, serializeConversation } from "@earendil-works/pi-coding-agent"
+import type { PiPortEvent, ResolvedViewResources } from "../../packages/core/pi-port.ts"
 import type { SessionRecord } from "../../packages/core/session-format.ts"
-import type { ResolvedViewResources } from "../../packages/core/pi-port.ts"
-import { convertToLlm, serializeConversation, SessionManager } from "@earendil-works/pi-coding-agent"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { startMockServer } from "../utils/mock-server.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
@@ -108,7 +107,16 @@ describe("pi 内存会话", () => {
       })
 
       const request = (await mock.requests())[0]
-      expect(request?.tools).toHaveLength(4)
+      expect(request?.tools).toHaveLength(7)
+      expect((request?.tools as Array<{ name?: string }> | undefined)?.map((tool) => tool.name)).toEqual([
+        "read",
+        "bash",
+        "edit",
+        "write",
+        "grep",
+        "find",
+        "ls",
+      ])
       for (const item of request?.tools ?? []) {
         const tool = item as { input_schema?: Record<string, unknown> }
         expect(tool.input_schema?.type).toBe("object")

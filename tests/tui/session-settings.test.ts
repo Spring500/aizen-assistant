@@ -1,6 +1,6 @@
 import { expect } from "bun:test"
-import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { modelWithPreferredThinkingLevel, sessionSettingsItems } from "../../apps/tui/session-settings.ts"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
@@ -29,6 +29,18 @@ test("会话设置使用紧凑单行显示模型与视图", () => {
   )
   expect(items[0]?.segments.map((item) => item.text).join("")).toBe("当前模型  [ anthropic · Claude Code Opus 4.8 ]")
   expect(items[1]?.segments.map((item) => item.text).join("")).toBe("当前视图  [ otter-builds-bridge · 代码审查 ]")
+  expect(
+    items
+      .find((item) => item.value === "permission-preset")
+      ?.segments.map((item) => item.text)
+      .join(""),
+  ).toBe("权限预设  [ edit（编辑） ]")
+  expect(
+    items
+      .find((item) => item.value === "permission-review-mode")
+      ?.segments.map((item) => item.text)
+      .join(""),
+  ).toBe("审核方式  [ 完全人工 ]")
   expect(items.find((item) => item.value === "apply")?.segments[0]?.text).toBe("应用并开始对话")
 })
 
