@@ -1,20 +1,15 @@
-export type MockRequestContext = {
-  id: string
-  sequence: number
-  method: string
-  url: string
-  headers: Record<string, string>
-  modelId?: string
-  body: Record<string, unknown>
-  system: unknown
-  messages: unknown[]
-  tools: unknown[]
-}
+import { encodeAnthropicEvents } from "./mock-server/encoders/anthropic-messages.ts"
+import { encodeOpenAiEvents } from "./mock-server/encoders/openai-completions.ts"
+import { normalizeRequest } from "./mock-server/normalize.ts"
+import { mockBehaviorRegistry, registeredMockModelIds } from "./mock-server/registry.ts"
+import type { MockBehavior, MockEvent, MockProtocol, MockRequestContext } from "./mock-server/types.ts"
+
+export type { MockBehavior, MockEvent, MockProtocol, MockRequestContext } from "./mock-server/types.ts"
 
 export type MockResponse =
   | { type: "text"; text: string; inputTokens?: number; outputTokens?: number }
-  | { type: "tool_call"; name: string; arguments: unknown; callId?: string }
-  | { type: "tool_calls"; calls: Array<{ name: string; arguments: unknown; callId?: string }> }
+  | { type: "tool_call"; name: string; arguments: Record<string, unknown>; callId?: string }
+  | { type: "tool_calls"; calls: Array<{ name: string; arguments: Record<string, unknown>; callId?: string }> }
   | { type: "http_error"; status: number; body?: unknown }
 
 export type MockResponseHandler = (request: MockRequestContext) => MockResponse | Promise<MockResponse>
@@ -34,6 +29,8 @@ export type MockServer = {
   handle(handler: MockResponseHandler): void
   /** 为指定模型设置持续生效的响应逻辑。 */
   handleModel(modelId: string, handler: MockResponseHandler): void
+  /** 返回当前已注册的内置模型行为 ID。 */
+  registeredModels(): string[]
   requests(): Promise<MockRequestContext[]>
   stop(): void
 }
@@ -61,97 +58,66 @@ function matches(context: MockRequestContext, filter: MockTakeFilter): boolean {
   return filter.modelId === undefined || context.modelId === filter.modelId
 }
 
-function sseEvent(event: string, data: unknown): string {
-  return `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`
+function protocolForPath(pathname: string): MockProtocol | undefined {
+  if (pathname === "/v1/messages") return "anthropic-messages"
+  if (pathname === "/v1/chat/completions") return "openai-completions"
+  return undefined
 }
 
-function buildSseBody(response: Exclude<MockResponse, { type: "http_error" }>, modelId: string | undefined): string {
-  const id = `msg_${crypto.randomUUID()}`
-  const model = modelId ?? "mock-model"
-  let body = sseEvent("message_start", {
-    type: "message_start",
-    message: {
-      id,
-      type: "message",
-      role: "assistant",
-      content: [],
-      model,
-      usage: {
-        input_tokens: response.type === "text" ? (response.inputTokens ?? 1) : 1,
-        output_tokens: response.type === "text" ? (response.outputTokens ?? 1) : 1,
-      },
-    },
-  })
-  if (response.type === "text") {
-    body += sseEvent("content_block_start", {
-      type: "content_block_start",
-      index: 0,
-      content_block: { type: "text", text: "" },
-    })
-    body += sseEvent("content_block_delta", {
-      type: "content_block_delta",
-      index: 0,
-      delta: { type: "text_delta", text: response.text },
-    })
-    body += sseEvent("content_block_stop", { type: "content_block_stop", index: 0 })
-    body += sseEvent("message_delta", {
-      type: "message_delta",
-      delta: { stop_reason: "end_turn", stop_sequence: null },
-      usage: { output_tokens: response.outputTokens ?? 1 },
-    })
-  } else {
-    const calls = response.type === "tool_call" ? [response] : response.calls
-    for (const [index, call] of calls.entries()) {
-      body += sseEvent("content_block_start", {
-        type: "content_block_start",
-        index,
-        content_block: {
-          type: "tool_use",
-          id: call.callId ?? `tool_${crypto.randomUUID()}`,
-          name: call.name,
-          input: {},
-        },
-      })
-      body += sseEvent("content_block_delta", {
-        type: "content_block_delta",
-        index,
-        delta: { type: "input_json_delta", partial_json: JSON.stringify(call.arguments) },
-      })
-      body += sseEvent("content_block_stop", { type: "content_block_stop", index })
+function eventsForResponse(response: MockResponse): AsyncIterable<MockEvent> {
+  return (async function* () {
+    if (response.type === "http_error") {
+      yield {
+        type: "error",
+        status: response.status,
+        message: `Mock HTTP ${response.status}`,
+        ...(response.body === undefined ? {} : { body: response.body }),
+      }
+      return
     }
-    body += sseEvent("message_delta", {
-      type: "message_delta",
-      delta: { stop_reason: "tool_use", stop_sequence: null },
-      usage: { output_tokens: 1 },
-    })
-  }
-  body += sseEvent("message_stop", { type: "message_stop" })
-  return body
+    if (response.type === "text") {
+      yield { type: "text", text: response.text }
+      yield {
+        type: "finish",
+        reason: "stop",
+        ...(response.inputTokens === undefined ? {} : { inputTokens: response.inputTokens }),
+        ...(response.outputTokens === undefined ? {} : { outputTokens: response.outputTokens }),
+      }
+      return
+    }
+    const calls = response.type === "tool_call" ? [response] : response.calls
+    for (const [index, call] of calls.entries())
+      yield {
+        type: "tool",
+        callId: call.callId ?? `tool_${index}_${crypto.randomUUID()}`,
+        name: call.name,
+        arguments: call.arguments,
+      }
+    yield { type: "finish", reason: "toolUse" }
+  })()
 }
 
-function httpResponse(response: MockResponse, modelId: string | undefined): Response {
-  if (response.type === "http_error") {
-    const body = response.body === undefined ? { error: { message: `Mock HTTP ${response.status}` } } : response.body
-    return Response.json(body, { status: response.status })
-  }
-  return new Response(buildSseBody(response, modelId), {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
-  })
+function copyContext(context: MockRequestContext): MockRequestContext {
+  const { signal, ...serializable } = context
+  return { ...structuredClone(serializable), signal }
+}
+
+function responseForEvents(events: AsyncIterable<MockEvent>, context: MockRequestContext): Response {
+  return context.protocol === "anthropic-messages"
+    ? encodeAnthropicEvents(events, context)
+    : encodeOpenAiEvents(events, context)
 }
 
 /**
- * 启动可由测试逐请求控制的 Anthropic Messages Mock Server。
- * 传入字符串时保留旧测试的固定文本响应行为。
+ * 启动可由测试逐请求控制的双协议 Mock Server。
+ * 传入字符串时保留旧测试的固定文本响应行为；显式处理器优先于内置行为注册表。
  */
-export async function startMockServer(responseText?: string): Promise<MockServer> {
+export async function startMockServer(responseText?: string, options?: { port?: number }): Promise<MockServer> {
   const history: MockRequestContext[] = []
   const pending: Pending[] = []
   const waiters: TakeWaiter[] = []
   const modelHandlers = new Map<string, MockResponseHandler>()
-  let defaultHandler: MockResponseHandler | undefined = responseText
-    ? () => ({ type: "text", text: responseText })
-    : undefined
+  let defaultHandler: MockResponseHandler | undefined = responseText ? () => ({ type: "text", text: responseText }) : undefined
   let sequence = 0
 
   const controlled = (item: Pending): MockPendingRequest => ({
@@ -166,28 +132,39 @@ export async function startMockServer(responseText?: string): Promise<MockServer
   })
 
   const server = Bun.serve({
-    port: 0,
+    port: options?.port ?? 0,
     async fetch(request) {
       const url = new URL(request.url)
-      if (request.method !== "POST" || url.pathname !== "/v1/messages")
-        return new Response("not found", { status: 404 })
-      const body = objectBody(await request.json())
-      const context: MockRequestContext = {
+      const protocol = protocolForPath(url.pathname)
+      if (request.method !== "POST" || !protocol) return new Response("not found", { status: 404 })
+      let body: Record<string, unknown>
+      try {
+        body = objectBody(await request.json())
+      } catch {
+        return Response.json({ error: { message: "请求体必须是 JSON 对象" } }, { status: 400 })
+      }
+      const controller = new AbortController()
+      request.signal.addEventListener("abort", () => controller.abort(), { once: true })
+      const context = normalizeRequest({
         id: crypto.randomUUID(),
         sequence: sequence++,
         method: request.method,
         url: request.url,
         headers: headers(request),
-        ...(typeof body.model === "string" ? { modelId: body.model } : {}),
+        protocol,
         body,
-        system: body.system,
-        messages: Array.isArray(body.messages) ? body.messages : [],
-        tools: Array.isArray(body.tools) ? body.tools : [],
-      }
+        signal: controller.signal,
+      })
       history.push(context)
       const handler = (context.modelId ? modelHandlers.get(context.modelId) : undefined) ?? defaultHandler
-      if (handler) return httpResponse(await handler(structuredClone(context)), context.modelId)
-
+      if (handler) return responseForEvents(eventsForResponse(await handler(copyContext(context))), context)
+      const behavior = context.modelId ? mockBehaviorRegistry[context.modelId] : undefined
+      if (behavior) return responseForEvents(behavior(copyContext(context)), context)
+      if (context.modelId && (registeredMockModelIds().length > 0 || context.modelId.startsWith("mock-")))
+        return Response.json(
+          { error: { message: `未注册 Mock 模型：${context.modelId}；可用模型：${registeredMockModelIds().join("、")}` } },
+          { status: 404 },
+        )
       const response = await new Promise<MockResponse>((resolve) => {
         const item: Pending = { context, resolve, responded: false }
         const waiterIndex = waiters.findIndex((waiter) => matches(context, waiter.filter))
@@ -199,12 +176,12 @@ export async function startMockServer(responseText?: string): Promise<MockServer
         if (!waiter) throw new Error("Mock 请求等待器意外丢失")
         waiter.resolve(controlled(item))
       })
-      return httpResponse(response, context.modelId)
+      return responseForEvents(eventsForResponse(response), context)
     },
   })
 
   return {
-    url: `http://localhost:${server.port}`,
+    url: `http://127.0.0.1:${server.port}`,
     take(filter = {}) {
       const index = pending.findIndex((item) => matches(item.context, filter))
       const item = index >= 0 ? pending[index] : undefined
@@ -218,8 +195,9 @@ export async function startMockServer(responseText?: string): Promise<MockServer
       if (!modelId) throw new Error("Mock 模型 ID 不能为空")
       modelHandlers.set(modelId, handler)
     },
+    registeredModels: registeredMockModelIds,
     async requests() {
-      return structuredClone(history)
+      return history.map(copyContext)
     },
     stop() {
       void server.stop()
