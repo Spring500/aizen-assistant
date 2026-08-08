@@ -34,6 +34,22 @@ test("mock-naming 生成符合工具契约的标题", async () => {
   }
 })
 
+test("mock-naming 始终生成不超过 80 字符的单行标题", async () => {
+  const { mock, runtime, source } = await setup()
+  try {
+    const result = await runtime.completeSimple(
+      { ...source, id: "mock-naming", baseUrl: mock.url },
+      { messages: [{ role: "user", content: "关键字".repeat(100), timestamp: Date.now() }] },
+    )
+    const call = result.content.find((part) => part.type === "toolCall")
+    if (!call || typeof call.arguments.title !== "string") throw new Error("缺少标题工具调用")
+    expect(call.arguments.title.includes("\n")).toBe(false)
+    expect(Array.from(call.arguments.title)).toHaveLength(80)
+  } finally {
+    mock.stop()
+  }
+})
+
 test("mock-review 按意图暗语输出三种权限裁决", async () => {
   const { mock, runtime, source } = await setup()
   try {

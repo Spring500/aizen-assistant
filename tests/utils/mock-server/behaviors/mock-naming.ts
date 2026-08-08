@@ -12,7 +12,7 @@ function timestamp(): string {
 
 function keyword(value: string): string {
   const compact = value.replace(/\s+/g, " ").trim() || "会话"
-  return Array.from(compact).slice(0, 72).join("")
+  return Array.from(compact).slice(0, 68).join("")
 }
 
 /** 为首条用户消息生成符合 set_session_title 契约的单行标题。 */
