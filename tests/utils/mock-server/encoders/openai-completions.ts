@@ -13,7 +13,11 @@ export function encodeOpenAiEvents(
   const id = `chatcmpl_${crypto.randomUUID()}`
   let started = false
   let finished = false
-  const chunk = (delta: Record<string, unknown>, finishReason: string | null = null, usage?: Record<string, number>) => ({
+  const chunk = (
+    delta: Record<string, unknown>,
+    finishReason: string | null = null,
+    usage?: Record<string, number>,
+  ) => ({
     id,
     object: "chat.completion.chunk",
     created: Math.floor(Date.now() / 1000),
@@ -26,7 +30,8 @@ export function encodeOpenAiEvents(
       try {
         const next = await iterator.next()
         if (next.done) {
-          if (!finished) controller.enqueue(sseData(chunk({}, "stop", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 })))
+          if (!finished)
+            controller.enqueue(sseData(chunk({}, "stop", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 })))
           controller.enqueue(sseData("[DONE]"))
           controller.close()
           return

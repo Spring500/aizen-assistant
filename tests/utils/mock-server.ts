@@ -2,7 +2,7 @@ import { encodeAnthropicEvents } from "./mock-server/encoders/anthropic-messages
 import { encodeOpenAiEvents } from "./mock-server/encoders/openai-completions.ts"
 import { normalizeRequest } from "./mock-server/normalize.ts"
 import { mockBehaviorRegistry, registeredMockModelIds } from "./mock-server/registry.ts"
-import type { MockBehavior, MockEvent, MockProtocol, MockRequestContext } from "./mock-server/types.ts"
+import type { MockEvent, MockProtocol, MockRequestContext } from "./mock-server/types.ts"
 
 export type { MockBehavior, MockEvent, MockProtocol, MockRequestContext } from "./mock-server/types.ts"
 
@@ -114,7 +114,9 @@ async function responseForBehavior(events: AsyncIterable<MockEvent>, context: Mo
       : encodeOpenAiEvents(finish, context)
   }
   if (first.value.type === "error")
-    return Response.json(first.value.body ?? { error: { message: first.value.message } }, { status: first.value.status })
+    return Response.json(first.value.body ?? { error: { message: first.value.message } }, {
+      status: first.value.status,
+    })
   const prefixed = (async function* (): AsyncIterable<MockEvent> {
     yield first.value
     while (true) {
@@ -130,7 +132,9 @@ async function responseForBehavior(events: AsyncIterable<MockEvent>, context: Mo
 
 function responseForCompatibility(response: MockResponse, context: MockRequestContext): Response {
   if (response.type === "http_error")
-    return Response.json(response.body ?? { error: { message: `Mock HTTP ${response.status}` } }, { status: response.status })
+    return Response.json(response.body ?? { error: { message: `Mock HTTP ${response.status}` } }, {
+      status: response.status,
+    })
   const events = eventsForResponse(response)
   return context.protocol === "anthropic-messages"
     ? encodeAnthropicEvents(events, context)
@@ -149,7 +153,9 @@ export async function startMockServer(
   const pending: Pending[] = []
   const waiters: TakeWaiter[] = []
   const modelHandlers = new Map<string, MockResponseHandler>()
-  let defaultHandler: MockResponseHandler | undefined = responseText ? () => ({ type: "text", text: responseText }) : undefined
+  let defaultHandler: MockResponseHandler | undefined = responseText
+    ? () => ({ type: "text", text: responseText })
+    : undefined
   let sequence = 0
 
   const controlled = (item: Pending): MockPendingRequest => ({
@@ -194,7 +200,11 @@ export async function startMockServer(
       if (behavior) return await responseForBehavior(behavior(copyContext(context)), context)
       if (context.modelId && options?.strictModels)
         return Response.json(
-          { error: { message: `未注册 Mock 模型：${context.modelId}；可用模型：${registeredMockModelIds().join("、")}` } },
+          {
+            error: {
+              message: `未注册 Mock 模型：${context.modelId}；可用模型：${registeredMockModelIds().join("、")}`,
+            },
+          },
           { status: 404 },
         )
       const response = await new Promise<MockResponse>((resolve) => {

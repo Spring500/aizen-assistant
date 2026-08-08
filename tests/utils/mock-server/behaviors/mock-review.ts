@@ -20,6 +20,11 @@ export const mockReviewBehavior: MockBehavior = async function* (context) {
       : decision === "deny"
         ? "意图包含拒绝暗语。"
         : "意图未包含可自动裁决的暗语。"
-  yield { type: "tool", callId: "submit_permission_review", name: "submit_permission_review", arguments: { decision, reason } }
+  yield {
+    type: "tool",
+    callId: "submit_permission_review",
+    name: "submit_permission_review",
+    arguments: { decision, reason },
+  }
   yield { type: "finish", reason: "toolUse" }
 }

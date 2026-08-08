@@ -99,7 +99,13 @@ function openAiTools(value: unknown): MockTool[] {
     const tool = object(entry)
     const fn = object(tool.function)
     if (tool.type !== "function" || typeof fn.name !== "string") return []
-    return [{ name: fn.name, ...(typeof fn.description === "string" ? { description: fn.description } : {}), parameters: object(fn.parameters) }]
+    return [
+      {
+        name: fn.name,
+        ...(typeof fn.description === "string" ? { description: fn.description } : {}),
+        parameters: object(fn.parameters),
+      },
+    ]
   })
 }
 

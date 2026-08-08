@@ -18,8 +18,20 @@
       "authHeader": false,
       "models": [
         { "id": "mock-dsl", "name": "Mock DSL (OpenAI)", "input": ["text"], "contextWindow": 32000, "maxTokens": 4096 },
-        { "id": "mock-naming", "name": "Mock Naming (OpenAI)", "input": ["text"], "contextWindow": 32000, "maxTokens": 4096 },
-        { "id": "mock-review", "name": "Mock Review (OpenAI)", "input": ["text"], "contextWindow": 32000, "maxTokens": 4096 }
+        {
+          "id": "mock-naming",
+          "name": "Mock Naming (OpenAI)",
+          "input": ["text"],
+          "contextWindow": 32000,
+          "maxTokens": 4096
+        },
+        {
+          "id": "mock-review",
+          "name": "Mock Review (OpenAI)",
+          "input": ["text"],
+          "contextWindow": 32000,
+          "maxTokens": 4096
+        }
       ]
     }
   }

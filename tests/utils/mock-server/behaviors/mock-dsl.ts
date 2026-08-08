@@ -30,9 +30,13 @@ function substitute(value: string, results: Map<string, string>): string {
 }
 
 function substituteInstruction(instruction: MockDslInstruction, results: Map<string, string>): MockDslInstruction {
-  if (instruction.type === "thinking" || instruction.type === "text") return { ...instruction, text: substitute(instruction.text, results) }
+  if (instruction.type === "thinking" || instruction.type === "text")
+    return { ...instruction, text: substitute(instruction.text, results) }
   if (instruction.type === "tool") {
-    const argumentsValue = JSON.parse(substitute(JSON.stringify(instruction.arguments), results)) as Record<string, unknown>
+    const argumentsValue = JSON.parse(substitute(JSON.stringify(instruction.arguments), results)) as Record<
+      string,
+      unknown
+    >
     return { ...instruction, arguments: argumentsValue }
   }
   return instruction

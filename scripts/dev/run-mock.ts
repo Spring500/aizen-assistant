@@ -45,7 +45,8 @@ export async function prepareMockData(input: {
 }): Promise<string> {
   const source = join(input.templatesDirectory, input.suite)
   const suites = await availableMockSuites(input.templatesDirectory)
-  if (!suites.includes(input.suite)) throw new Error(`自举套件不存在：${input.suite}；可用套件：${suites.join("、") || "无"}`)
+  if (!suites.includes(input.suite))
+    throw new Error(`自举套件不存在：${input.suite}；可用套件：${suites.join("、") || "无"}`)
   const destination = join(input.root, "mock-data")
   if (input.keep) return destination
   await rm(destination, { recursive: true, force: true })

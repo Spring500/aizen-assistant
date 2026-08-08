@@ -6,9 +6,7 @@ export type MockDslInstruction =
   | { type: "error"; status: number; message: string }
   | { type: "hang" }
 
-export type MockDslParseResult =
-  | { ok: true; instructions: MockDslInstruction[] }
-  | { ok: false; reason: string }
+export type MockDslParseResult = { ok: true; instructions: MockDslInstruction[] } | { ok: false; reason: string }
 
 type BlockResult = { content: string; next: number } | { error: string }
 
@@ -44,19 +42,25 @@ function block(lines: string[], start: number): BlockResult {
   return { error: "文本块没有结束标记 >>>" }
 }
 
-function simpleText(lines: string[], index: number, verb: "think" | "text"): { instruction: MockDslInstruction; next: number } | { error: string } {
+function simpleText(
+  lines: string[],
+  index: number,
+  verb: "think" | "text",
+): { instruction: MockDslInstruction; next: number } | { error: string } {
   const line = lines[index] ?? ""
   const value = line.slice(verb.length).trimStart()
   if (!value) return { error: `${verb} 缺少文本` }
-  if (value !== "<<<") return { instruction: { type: verb === "think" ? "thinking" : "text", text: value }, next: index + 1 }
+  if (value !== "<<<")
+    return { instruction: { type: verb === "think" ? "thinking" : "text", text: value }, next: index + 1 }
   const result = block(lines, index + 1)
   if ("error" in result) return result
   return { instruction: { type: verb === "think" ? "thinking" : "text", text: result.content }, next: result.next }
 }
 
-function toolHeader(line: string, name: "bash" | "read" | "write" | "edit"):
-  | { callId: string; intent: string; argument: string }
-  | undefined {
+function toolHeader(
+  line: string,
+  name: "bash" | "read" | "write" | "edit",
+): { callId: string; intent: string; argument: string } | undefined {
   const match = new RegExp(`^${name}\\s+(\\S+)\\s+(.+?)\\s*\\|\\s*(.*)$`).exec(line)
   if (!match?.[1] || !match[2] || match[3] === undefined) return undefined
   const intent = match[2].trim()
@@ -69,7 +73,11 @@ function toolArguments(name: "bash" | "read", argument: string, intent: string):
   return name === "bash" ? { command: argument, declaredIntent: intent } : { path: argument, declaredIntent: intent }
 }
 
-function writeInstruction(lines: string[], index: number, header: { callId: string; intent: string; argument: string }): { instruction: MockDslInstruction; next: number } | { error: string } {
+function writeInstruction(
+  lines: string[],
+  index: number,
+  header: { callId: string; intent: string; argument: string },
+): { instruction: MockDslInstruction; next: number } | { error: string } {
   const marker = nonEmptyIndex(lines, index + 1)
   if (lines[marker]?.trim() !== "<<<") return { error: "write 文件内容必须使用 <<< 和 >>> 包裹" }
   const result = block(lines, marker + 1)
@@ -85,7 +93,11 @@ function writeInstruction(lines: string[], index: number, header: { callId: stri
   }
 }
 
-function editInstruction(lines: string[], index: number, header: { callId: string; intent: string; argument: string }): { instruction: MockDslInstruction; next: number } | { error: string } {
+function editInstruction(
+  lines: string[],
+  index: number,
+  header: { callId: string; intent: string; argument: string },
+): { instruction: MockDslInstruction; next: number } | { error: string } {
   let cursor = nonEmptyIndex(lines, index + 1)
   if (lines[cursor]?.trim() !== "<<<") return { error: "edit 编辑内容必须使用 <<< 和 >>> 包裹" }
   cursor++
@@ -147,7 +159,7 @@ export function parseMockDsl(input: string): MockDslParseResult {
     }
     if (word === "error") {
       const match = /^error\s+(\d{3})(?:\s+(.*))?$/.exec(line.trimStart())
-      if (!match?.[1] || !match[2] && !/^error\s+\d{3}$/.test(line.trimStart()))
+      if (!match?.[1] || (!match[2] && !/^error\s+\d{3}$/.test(line.trimStart())))
         return { ok: false, reason: "error 需要三位 HTTP 状态码" }
       const status = Number(match[1])
       if (status < 100 || status > 599) return { ok: false, reason: "error 状态码必须在 100 到 599 之间" }
@@ -167,7 +179,12 @@ export function parseMockDsl(input: string): MockDslParseResult {
     if (callIds.has(header.callId)) return { ok: false, reason: `工具调用名重复：${header.callId}` }
     callIds.add(header.callId)
     if (name === "bash" || name === "read") {
-      instructions.push({ type: "tool", callId: header.callId, name, arguments: toolArguments(name, header.argument, header.intent) })
+      instructions.push({
+        type: "tool",
+        callId: header.callId,
+        name,
+        arguments: toolArguments(name, header.argument, header.intent),
+      })
       index++
       continue
     }

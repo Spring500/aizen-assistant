@@ -134,9 +134,7 @@ export function encodeAnthropicEvents(
 }
 
 /** 将兼容用的单次处理器转换为 Mock 行为模块。 */
-export function responseBehavior(
-  handler: (context: MockRequestContext) => Promise<MockEvent[]>,
-): MockBehavior {
+export function responseBehavior(handler: (context: MockRequestContext) => Promise<MockEvent[]>): MockBehavior {
   return async function* (context) {
     for (const event of await handler(context)) yield event
   }

@@ -6,7 +6,9 @@ function firstUserText(context: MockRequestContext): string {
 
 function timestamp(): string {
   const now = new Date()
-  const value = [now.getMonth() + 1, now.getDate(), now.getHours(), now.getMinutes()].map((item) => String(item).padStart(2, "0"))
+  const value = [now.getMonth() + 1, now.getDate(), now.getHours(), now.getMinutes()].map((item) =>
+    String(item).padStart(2, "0"),
+  )
   return `${value[0]}${value[1]}-${value[2]}${value[3]}`
 }
 
