@@ -1,5 +1,9 @@
 import { afterEach, expect } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
+import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
+import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
+import { ViewStore } from "../../packages/core/view-store.ts"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createDiagnosticTest } from "../../tests/utils/diagnostic-test.ts"
@@ -32,6 +36,45 @@ test("重建或保留 mock-data 运行实例", async () => {
   expect(await readFile(join(data, "config.json"), "utf8")).toContain('"changed": true')
   await prepareMockData({ root, templatesDirectory: templates, suite: "default", keep: false })
   expect(await readFile(join(data, "config.json"), "utf8")).toContain('"version": 1')
+})
+
+test("默认模板预配置可用模型、子 Agent 和视图", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aizen-mock-template-"))
+  directories.push(root)
+  const templates = join(process.cwd(), "tests", "fixtures", "mock-data-templates")
+  const data = await prepareMockData({ root, templatesDirectory: templates, suite: "default", keep: false })
+  const preferences = await new AppPreferencesStore(join(data, "preferences.json")).read()
+  expect(preferences.newSession).toMatchObject({
+    model: { providerId: "mock-anthropic", modelId: "mock-dsl", api: "anthropic-messages" },
+    viewId: "mock-default",
+    permissionReviewMode: "aiReview",
+  })
+  expect(preferences.agents).toEqual({
+    sessionNaming: { model: { providerId: "mock-anthropic", modelId: "mock-naming" } },
+    permissionReview: { model: { providerId: "mock-anthropic", modelId: "mock-review" } },
+  })
+  expect(await new ModelConfigStore(join(data, "custom-providers.json")).read()).toMatchObject({
+    providers: expect.arrayContaining([
+      expect.objectContaining({ id: "mock-anthropic" }),
+      expect.objectContaining({ id: "mock-openai" }),
+    ]),
+  })
+  const runtime = await PiSessionRuntime.create({
+    authPath: join(data, "auth.json"),
+    customProvidersPath: join(data, "custom-providers.json"),
+  })
+  try {
+    expect(
+      (await runtime.listModels())
+        .filter((model) => model.providerId.startsWith("mock-"))
+        .every((model) => model.available),
+    ).toBe(true)
+  } finally {
+    await runtime.dispose()
+  }
+  expect(await new ViewStore(join(data, "views.json")).list()).toContainEqual(
+    expect.objectContaining({ id: "mock-default", valid: true }),
+  )
 })
 
 test("未知套件列出可用名称", async () => {

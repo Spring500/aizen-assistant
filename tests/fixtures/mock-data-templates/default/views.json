@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "views": [
+    {
+      "id": "mock-default",
+      "name": "Mock 默认视图",
+      "path": "views/mock-default"
+    }
+  ]
+}

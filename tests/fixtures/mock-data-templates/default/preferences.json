@@ -5,7 +5,7 @@
       "modelId": "mock-dsl",
       "api": "anthropic-messages"
     },
-    "viewId": null,
+    "viewId": "mock-default",
     "permissionMode": "hybrid",
     "permissionPreset": "edit",
     "permissionReviewMode": "aiReview"
