@@ -10,7 +10,7 @@ import { join } from "node:path"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
-const model: ModelReference = { providerId: "test", modelId: "model", api: "anthropic-messages" }
+const model: ModelReference = { providerId: "test", modelId: "model" }
 class RestorePi implements PiPort {
   create = async () => model
   restore = async () => model

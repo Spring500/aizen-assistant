@@ -30,10 +30,14 @@ const permissionModeView: Record<PermissionMode, { label: string; color: string 
   aiOnly: { label: "仅自动审核", color: systemColors.statusRunning },
 }
 
-export function sessionStatusText(snapshot: CoreSnapshot): string | StyledText {
-  const model = snapshot.currentModel
-    ? `${snapshot.currentModel.providerId}/${snapshot.currentModel.modelId}`
-    : "未选择模型"
+/**
+ * 会话状态文本；modelLabel 为外部构建的模型显示文本（含思考等级名）时优先使用，
+ * 否则回退 providerId/modelId 形式。
+ */
+export function sessionStatusText(snapshot: CoreSnapshot, modelLabel?: string): string | StyledText {
+  const model =
+    modelLabel ??
+    (snapshot.currentModel ? `${snapshot.currentModel.providerId}/${snapshot.currentModel.modelId}` : "未选择模型")
   const view = snapshot.currentViewId ?? "未选择视图"
   const mode = permissionModeView[snapshot.currentPermissionMode ?? "hybrid"]
   const chunks: TextChunk[] = [
@@ -66,9 +70,9 @@ export function shortcutText(context: ShortcutContext): string {
   return `Enter 发送 | Shift+Enter 换行 | 光标前 \\ 后 Enter 换行 | Esc 中止 | ${global}`
 }
 
-export function statusBarView(snapshot: CoreSnapshot): StatusBarViewModel {
+export function statusBarView(snapshot: CoreSnapshot, modelLabel?: string): StatusBarViewModel {
   return {
-    session: sessionStatusText(snapshot),
+    session: sessionStatusText(snapshot, modelLabel),
     shortcuts: shortcutText({ status: snapshot.status, hasSession: !!snapshot.currentSessionId }),
   }
 }

@@ -25,7 +25,7 @@ import type {
 } from "./session-format.ts"
 import { projectVisibleSessionRecords } from "./session-projection.ts"
 import { recoverInterruptedToolCalls } from "./session-recovery.ts"
-import { SessionLockedError, type SessionStore } from "./session-store.ts"
+import { InvalidSessionRecordError, SessionLockedError, type SessionStore } from "./session-store.ts"
 import type { SkillStore } from "./skill-store.ts"
 import { PermissionClassifierRegistry } from "./tool-permissions/classifier-registry.ts"
 import { createBuiltinBashClassifier } from "./tool-permissions/classifiers/bash.ts"
@@ -81,7 +81,6 @@ function sessionModel(model: ModelReference): ModelReference {
   return {
     providerId: model.providerId,
     modelId: model.modelId,
-    api: model.api,
     ...(model.thinkingLevel === undefined ? {} : { thinkingLevel: model.thinkingLevel }),
   }
 }
@@ -1515,10 +1514,19 @@ export class AizenCore implements CorePort {
     })
     this.#writeQueue = operation.catch((error) => {
       const actual = error instanceof Error ? error : new Error(String(error))
+      if (actual instanceof InvalidSessionRecordError) {
+        // 单条记录本身非法：跳过并告警，不锁死会话，调用方也无需感知。
+        this.#reportError(`已跳过无效的会话记录：${actual.message}`)
+        return
+      }
       this.#markWriteFailure(actual)
       this.#notify()
     })
-    await operation
+    await operation.catch((error) => {
+      const actual = error instanceof Error ? error : new Error(String(error))
+      if (actual instanceof InvalidSessionRecordError) return
+      throw actual
+    })
   }
 
   #enqueueRecord(sessionId: string, record: SessionRecord): void {

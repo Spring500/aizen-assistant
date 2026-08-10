@@ -5,6 +5,8 @@ import type { PermissionMode } from "../../packages/core/tool-permissions/types.
 import type { ViewOption } from "../../packages/core/view-store.ts"
 import type { RichSelectorItem } from "../../packages/tui-kit/rich-selector.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
+import { modelSettingItem } from "./model-setting-item.ts"
+import { viewSettingItem } from "./view-setting-item.ts"
 
 export type SessionSettingsDraft = {
   model?: ModelOption
@@ -23,6 +25,9 @@ export type SessionSettingsAction =
   | "manage-views"
   | "apply"
   | "cancel"
+
+/** 会话设置行；allowEmpty 供调用方决定模型选择菜单是否提供“清除”选项。 */
+export type SessionSettingsItem = RichSelectorItem<SessionSettingsAction> & { allowEmpty?: boolean }
 
 const permissionPresetLabels: Record<PermissionPresetId, string> = {
   plan: "plan（只读）",
@@ -57,29 +62,26 @@ export function sessionSettingsItems(
   draft: SessionSettingsDraft,
   views: ViewOption[],
   mode: "new" | "existing",
-): RichSelectorItem<SessionSettingsAction>[] {
-  const view = draft.viewId === null ? undefined : views.find((item) => item.id === draft.viewId)
+  models: ModelOption[],
+  providerNames: ReadonlyMap<string, string>,
+): SessionSettingsItem[] {
   return [
-    {
+    modelSettingItem({
+      model: draft.model,
+      models,
+      providerNames,
+      label: "当前模型",
+      placeholder: "未选择模型",
+      allowEmpty: false,
       value: "model",
-      segments: [
-        { text: "当前模型  [ " },
-        { text: draft.model?.providerId ?? "none", italic: true, dim: true },
-        { text: " · " },
-        { text: draft.model?.name ?? "未选择模型", color: systemColors.sessionStatus, bold: true },
-        { text: " ]" },
-      ],
-    },
-    {
+    }),
+    viewSettingItem({
+      viewId: draft.viewId,
+      views,
+      label: "当前视图",
+      placeholder: "无视图",
       value: "view",
-      segments: [
-        { text: "当前视图  [ " },
-        { text: view?.id ?? "none", italic: true, dim: true },
-        { text: " · " },
-        { text: view?.name ?? "无视图", color: systemColors.sessionStatus, bold: true },
-        { text: " ]" },
-      ],
-    },
+    }),
     {
       value: "permission-preset",
       segments: [

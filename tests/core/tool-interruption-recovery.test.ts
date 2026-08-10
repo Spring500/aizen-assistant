@@ -11,7 +11,7 @@ import { SessionStore } from "../../packages/core/session-store.ts"
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const directories: string[] = []
-const model: ModelReference = { providerId: "test", modelId: "model", api: "anthropic-messages" }
+const model: ModelReference = { providerId: "test", modelId: "model" }
 afterEach(async () => Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))))
 
 class RestorePi implements PiPort {

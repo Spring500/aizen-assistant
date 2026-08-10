@@ -122,14 +122,23 @@ export type MessageTimingMetadata = {
   tools?: Map<string, Timing>
 }
 
+/** 落盘前的调用目的统一收口：去首尾空白并截断到 50 个码点内，保证满足会话格式校验（1 至 50 个字符）。 */
+function normalizedDeclaredIntent(value: string): string {
+  const trimmed = value.trim()
+  const characters = Array.from(trimmed)
+  return characters.length > 50 ? characters.slice(0, 50).join("") : trimmed
+}
+
 function toolArguments(argumentsValue: Record<string, unknown>): {
   arguments: JsonValue
   declaredIntent?: string
 } {
   const { declaredIntent, ...actualArguments } = argumentsValue
+  if (typeof declaredIntent !== "string") return { arguments: actualArguments as JsonValue }
+  const normalized = normalizedDeclaredIntent(declaredIntent)
   return {
     arguments: actualArguments as JsonValue,
-    ...(typeof declaredIntent === "string" && declaredIntent.trim() ? { declaredIntent: declaredIntent.trim() } : {}),
+    ...(normalized ? { declaredIntent: normalized } : {}),
   }
 }
 

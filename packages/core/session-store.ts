@@ -22,6 +22,9 @@ export class SessionLockedError extends Error {
   }
 }
 
+/** 待追加的记录本身不合法（区别于底层存储故障）。调用方可选择单条降级，不应锁死整个会话。 */
+export class InvalidSessionRecordError extends Error {}
+
 export type SessionSummary = {
   sessionId: string
   name: string
@@ -205,7 +208,12 @@ export class SessionStore {
   }
 
   append(sessionId: string, record: SessionRecord): Promise<void> {
-    const validated = parseSessionValue(record)
+    let validated: SessionLine
+    try {
+      validated = parseSessionValue(record)
+    } catch (error) {
+      throw new InvalidSessionRecordError(error instanceof Error ? error.message : String(error))
+    }
     if (validated.kind === "session") throw new Error("不能追加第二个会话文件头")
     return this.#enqueue(sessionId, () =>
       this.#withWriteLease(sessionId, async () => {

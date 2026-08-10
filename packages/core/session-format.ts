@@ -9,7 +9,7 @@ export type ViewId = string | null
 export type ModelReference = {
   providerId: string
   modelId: string
-  api: string
+  /** 当前选择的思考档位名；可选，表示未选择或模型不配置档位。 */
   thinkingLevel?: string
 }
 
@@ -260,15 +260,18 @@ function permissionMode(value: unknown): PermissionMode {
   return value
 }
 
-function modelReference(value: unknown): ModelReference {
-  const source = object(value, "model")
-  exact(source, ["providerId", "modelId", "api", "thinkingLevel"], "model")
-  const thinkingLevel = optionalString(source.thinkingLevel, "model.thinkingLevel")
-  if (thinkingLevel === "") throw new Error("model.thinkingLevel 必须是非空字符串")
+/**
+ * 解析模型引用。兼容历史数据：旧记录可能包含 api 字段，统一忽略——
+ * api 属于模型定义层，需要时从模型配置管理器查询。
+ */
+export function parseModelReference(value: unknown, label = "model"): ModelReference {
+  const source = object(value, label)
+  exact(source, ["providerId", "modelId", "api", "thinkingLevel"], label)
+  const thinkingLevel = optionalString(source.thinkingLevel, `${label}.thinkingLevel`)
+  if (thinkingLevel === "") throw new Error(`${label}.thinkingLevel 必须是非空字符串`)
   return {
-    providerId: string(source.providerId, "model.providerId"),
-    modelId: string(source.modelId, "model.modelId"),
-    api: string(source.api, "model.api"),
+    providerId: string(source.providerId, `${label}.providerId`),
+    modelId: string(source.modelId, `${label}.modelId`),
     ...(thinkingLevel === undefined ? {} : { thinkingLevel }),
   }
 }
@@ -441,7 +444,7 @@ export function parseSessionValue(value: unknown): SessionLine {
     return {
       kind,
       ...baseRecord(source, ["kind", "recordId", "at", "model"]),
-      model: modelReference(source.model),
+      model: parseModelReference(source.model),
     }
   }
   if (kind === "view_changed") {
