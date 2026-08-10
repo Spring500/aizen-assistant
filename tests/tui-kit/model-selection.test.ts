@@ -1,7 +1,7 @@
 import { expect } from "bun:test"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import type { ProviderConfigEntry } from "../../packages/core/model-config-store.ts"
-import type { AuthProviderOption, ModelOption } from "../../packages/core/pi-port.ts"
+import type { AuthProviderOption, ModelOption, PiProviderOption } from "../../packages/core/pi-port.ts"
 import {
   modelProviderChoices,
   providerDisplayNames,
@@ -57,7 +57,7 @@ test("认证其它供应商只显示未认证项", () => {
 })
 
 test("供应商显示名映射遵循自定义 > pi > 认证优先级", () => {
-  const piProviders = [
+  const piProviders: PiProviderOption[] = [
     {
       id: "custom",
       name: "pi 里的 custom",

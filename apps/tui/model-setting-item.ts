@@ -10,8 +10,8 @@ export type ModelSettingReference = {
 }
 
 export type ModelSettingItemOptions = {
-  /** 当前已选择的模型；省略表示未选择。 */
-  model?: ModelSettingReference
+  /** 当前已选择的模型；省略或传 undefined 表示未选择。 */
+  model?: ModelSettingReference | undefined
   /** 可用模型列表，用于把 modelId 解析为模型显示名。 */
   models?: ModelOption[]
   /** providerId → 供应商显示名；缺失时回退 providerId。 */
@@ -32,11 +32,13 @@ export type ModelSettingItemOptions = {
  * 模型设置行的统一样式：未选择时显示占位文案；
  * 已选择时显示 [ 供应商显示名 · 模型显示名 ]，供应商名斜体弱化、模型名高亮加粗。
  */
-export type ModelSettingItem = RichSelectorItem<string> & {
+export type ModelSettingItem<T extends string> = RichSelectorItem<T> & {
   allowEmpty: boolean
 }
 
-export function modelSettingItem(options: ModelSettingItemOptions): ModelSettingItem {
+export function modelSettingItem<T extends string>(
+  options: ModelSettingItemOptions & { value: T },
+): ModelSettingItem<T> {
   const { model } = options
   const modelName =
     model?.name ??

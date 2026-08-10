@@ -21,7 +21,7 @@ export type ViewSettingItemOptions = {
  * 视图设置行的统一样式：未选择或视图失效时显示占位文案；
  * 已选择时只显示 [ 视图名 ]（不再展示 viewId），视图名高亮加粗。
  */
-export function viewSettingItem(options: ViewSettingItemOptions): RichSelectorItem<string> {
+export function viewSettingItem<T extends string>(options: ViewSettingItemOptions & { value: T }): RichSelectorItem<T> {
   const view = options.viewId === null ? undefined : options.views?.find((item) => item.id === options.viewId)
   return {
     value: options.value,

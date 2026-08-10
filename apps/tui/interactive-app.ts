@@ -17,6 +17,7 @@ import { JsonlPermissionGapRecorder } from "../../packages/core/tool-permissions
 import type { CorePort } from "../../packages/core/types.ts"
 import { type ProjectSources, readViewConfig, writeViewConfig } from "../../packages/core/view-config.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
+import type { ModelOption } from "../../packages/core/pi-port.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
@@ -24,7 +25,11 @@ import { cycleMenu } from "../../packages/tui-kit/cycle-menu.ts"
 import { selectEditableItem } from "../../packages/tui-kit/editable-selector.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { editInline } from "../../packages/tui-kit/inline-input.ts"
-import { modelProviderChoices, unconfiguredAuthProviders } from "../../packages/tui-kit/model-selection.ts"
+import {
+  modelProviderChoices,
+  providerDisplayNames,
+  unconfiguredAuthProviders,
+} from "../../packages/tui-kit/model-selection.ts"
 import { selectMultiple } from "../../packages/tui-kit/multi-select.ts"
 import { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
 import {
@@ -168,7 +173,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             sendPromptWithRecovery({
               core,
               text: value,
-              chooseModel,
+              // 消息发送恢复场景必须选到模型才能继续，不提供“清除”入口
+              chooseModel: () =>
+                chooseModel({ allowEmpty: false }).then((selected) =>
+                  selected === "__clear__" ? undefined : selected,
+                ),
               chooseView,
               present: showError,
               restoreDraft: editor.setInputText,
@@ -756,7 +765,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
-  async function chooseModel() {
+  /**
+   * 三级模型选择：供应商 → 模型 → 思考档位。
+   * options.allowEmpty 为 true 时，供应商列表提供“清除当前选择模型”，选中后返回 "__clear__"。
+   */
+  async function chooseModel(options: { allowEmpty?: boolean } = {}): Promise<ModelOption | "__clear__" | undefined> {
     beginInteraction()
     try {
       const authenticateProvider = async (providerId?: string): Promise<string | undefined> => {
@@ -810,7 +823,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         preferredProviderId = undefined
         const provider =
           preferred ??
-          (await selectItem<(typeof providers)[number] | "__manage_pi__" | "__manage_custom__">(
+          (await selectItem<(typeof providers)[number] | "__clear__" | "__manage_pi__" | "__manage_custom__">(
             overlays,
             "model-provider-selector",
             [
@@ -819,6 +832,15 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
                 description: item.configured ? `${item.models.length} 个可用模型` : "需要认证（认证前不显示模型）",
                 value: item,
               })),
+              ...(options.allowEmpty
+                ? [
+                    {
+                      name: "清除当前选择模型",
+                      description: "将该设置项恢复为未选择状态",
+                      value: "__clear__" as const,
+                    },
+                  ]
+                : []),
               {
                 name: "管理自定义供应商和模型",
                 description: "新增、编辑或删除 custom-providers.json 配置",
@@ -832,6 +854,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             ],
             { title: "选择供应商", signal: interactionController.signal },
           ))
+        if (provider === "__clear__") return "__clear__"
         if (provider === "__manage_custom__") {
           preferredProviderId = await manageModels("select")
           continue
@@ -1504,36 +1527,39 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     try {
       if (!(await dispatchWithError({ type: "load_preferences" }, "读取应用偏好失败")).ok) return
       if (!(await dispatchWithError({ type: "list_models" }, "读取模型失败")).ok) return
+      if (!(await dispatchWithError({ type: "list_auth_providers" }, "读取认证供应商失败")).ok) return
+      if (!(await dispatchWithError({ type: "load_model_config" }, "读取模型配置失败")).ok) return
       let model = core.getSnapshot().preferences.agents.sessionNaming.model
       let reviewModel = core.getSnapshot().preferences.agents.permissionReview?.model
       while (!exiting) {
-        const action = await selectRichItem(
-          overlays,
-          "preference-settings",
-          preferenceSettingsItems(model, reviewModel, core.getSnapshot().models),
-          { title: "应用偏好", signal: interactionController.signal },
+        const snapshot = core.getSnapshot()
+        const items = preferenceSettingsItems(
+          model,
+          reviewModel,
+          snapshot.models,
+          providerDisplayNames(
+            snapshot.authProviders,
+            snapshot.modelConfig?.providers ?? [],
+            snapshot.piProviders ?? [],
+          ),
         )
+        const action = await selectRichItem(overlays, "preference-settings", items, {
+          title: "应用偏好",
+          signal: interactionController.signal,
+        })
         if (!action || action === "cancel") return
-        if (action === "session-naming") {
-          const selected = await selectItem(
-            overlays,
-            "preference-session-naming-action",
-            [
-              { name: "选择命名模型", description: "为会话自动命名启用独立模型", value: "select" as const },
-              { name: "关闭自动命名", description: "不发起会话命名请求", value: "disable" as const },
-            ],
-            { title: "会话自动命名", signal: interactionController.signal },
-          )
-          if (selected === "disable") model = undefined
-          if (selected === "select") {
-            const selectedModel = await chooseModel()
-            if (selectedModel) model = { providerId: selectedModel.providerId, modelId: selectedModel.modelId }
+        if (action === "session-naming" || action === "permission-review") {
+          // 是否允许清除由对应设置行声明，选择菜单据此决定是否提供“清除当前选择模型”
+          const allowEmpty = items.find((item) => item.value === action)?.allowEmpty ?? false
+          const selected = await chooseModel({ allowEmpty })
+          if (selected === "__clear__") {
+            if (action === "session-naming") model = undefined
+            else reviewModel = undefined
+          } else if (selected) {
+            const ref = { providerId: selected.providerId, modelId: selected.modelId }
+            if (action === "session-naming") model = ref
+            else reviewModel = ref
           }
-          continue
-        }
-        if (action === "permission-review") {
-          const selectedModel = await chooseModel()
-          if (selectedModel) reviewModel = { providerId: selectedModel.providerId, modelId: selectedModel.modelId }
           continue
         }
         if (action === "apply") {
@@ -1624,19 +1650,27 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
     while (!exiting) {
       if (!(await dispatchWithError({ type: "list_views" }, "读取视图失败")).ok) return false
-      const action = await selectRichItem(
-        overlays,
-        "session-settings",
-        sessionSettingsItems(draft, core.getSnapshot().views, mode),
-        {
-          title: mode === "new" ? "会话设置 · 新建会话" : "会话设置 · 当前会话",
-          signal: interactionController.signal,
-        },
+      if (!(await dispatchWithError({ type: "list_models" }, "读取模型失败")).ok) return false
+      if (!(await dispatchWithError({ type: "list_auth_providers" }, "读取认证供应商失败")).ok) return false
+      if (!(await dispatchWithError({ type: "load_model_config" }, "读取模型配置失败")).ok) return false
+      const snapshot = core.getSnapshot()
+      const items = sessionSettingsItems(
+        draft,
+        snapshot.views,
+        mode,
+        snapshot.models,
+        providerDisplayNames(snapshot.authProviders, snapshot.modelConfig?.providers ?? [], snapshot.piProviders ?? []),
       )
+      const action = await selectRichItem(overlays, "session-settings", items, {
+        title: mode === "new" ? "会话设置 · 新建会话" : "会话设置 · 当前会话",
+        signal: interactionController.signal,
+      })
       if (!action || action === "cancel") return false
       if (action === "model") {
-        const model = await chooseModel()
-        if (model) draft = { ...draft, model }
+        // 会话必须有模型：allowEmpty 由设置行声明（当前为 false），选择菜单不提供“清除”
+        const allowEmpty = items.find((item) => item.value === "model")?.allowEmpty ?? false
+        const model = await chooseModel({ allowEmpty })
+        if (model && model !== "__clear__") draft = { ...draft, model }
       } else if (action === "view") {
         const viewId = await chooseView()
         if (viewId !== undefined) draft = { ...draft, viewId }
