@@ -15,15 +15,10 @@ afterEach(async () => {
 })
 
 /**
- * 复现 bug：autoApprove 会话中，模型某次返回超过 50 个字符的 declaredIntent。
- * 预期（bug 现象）：
- * 1. 该次助手消息落盘校验失败 → #writeError 置位；
- * 2. 该轮次内工具执行的审计记录也被 #writeError 挡住 → 工具调用失败；
- * 3. 模型在同轮次内继续调用工具（即使 declaredIntent 正常）也全部失败；
- * 4. 下一轮用户输入被"会话持久化异常"拒绝；
- * 5. 会话文件未写入任何失败消息（无现场记录）。
+ * 回归验证：autoApprove 会话中模型返回超过 50 个字符的 declaredIntent 时，
+ * 落盘前应被截断为 50 码点，工具正常执行、会话不被锁死、下一轮可继续输入。
  */
-test("超长 declaredIntent 一次触发后：同轮次调用全部失败且后续无法继续", async () => {
+test("超长 declaredIntent 被截断保存且不锁死会话", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-repro-intent-"))
   directories.push(root)
   const mock = await startMockServer()
@@ -58,7 +53,7 @@ test("超长 declaredIntent 一次触发后：同轮次调用全部失败且后�
       callId: "call-overflow",
     })
 
-    // 模型看到工具失败后，在同一轮次内继续调用工具（这次 declaredIntent 正常）
+    // 工具成功后模型继续：第二次调用 declaredIntent 正常
     const second = await mock.take({ modelId: option.modelId })
     second.respond({
       type: "tool_call",
@@ -67,26 +62,37 @@ test("超长 declaredIntent 一次触发后：同轮次调用全部失败且后�
       callId: "call-normal",
     })
 
-    // 模型再次看到失败后，收尾结束本轮
+    // 模型收尾结束本轮
     const third = await mock.take({ modelId: option.modelId })
     third.respond({ type: "text", text: "完成" })
 
     const firstRound = await sending
     console.log("第一轮结果:", JSON.stringify(firstRound))
     console.log("lastError:", core.getSnapshot().lastError)
-    expect(firstRound.ok).toBe(false)
-    expect(String(firstRound.error?.message ?? "")).toContain("工具调用内容块.declaredIntent 必须为 1 至 50 个字符")
+    expect(firstRound.ok).toBe(true)
+    expect(core.getSnapshot().lastError).toBeUndefined()
 
-    // 会话文件必须没有留下失败消息（出问题时无现场记录）
+    // 会话文件应保存两条 assistant 消息：超长被截断为 50 码点，正常值原样保留
     const loaded = await store.read(sessionId)
-    const messages = loaded.records.filter((record) => record.kind === "message")
-    expect(messages).toHaveLength(0)
+    const assistantCalls = loaded.records
+      .filter((record) => record.kind === "message")
+      .map((record) => (record.kind === "message" ? record.message : null))
+      .filter((message): message is { role: "assistant"; parts: Array<{ kind: string; declaredIntent?: string }> } =>
+        !!message && message.role === "assistant" && Array.isArray(message.parts),
+      )
+      .flatMap((message) => message.parts)
+      .filter((part) => part.kind === "tool_call")
+    expect(assistantCalls).toHaveLength(2)
+    expect(assistantCalls[0]?.declaredIntent).toBe("用".repeat(50))
+    expect(assistantCalls[1]?.declaredIntent).toBe("回显测试")
 
-    // 下一轮用户输入被拒绝
-    const secondRound = await core.dispatch({ type: "send_prompt", text: "继续" })
+    // 下一轮用户输入正常（会话未被锁死）
+    const secondRoundSending = core.dispatch({ type: "send_prompt", text: "继续" })
+    const fourth = await mock.take({ modelId: option.modelId })
+    fourth.respond({ type: "text", text: "收到" })
+    const secondRound = await secondRoundSending
     console.log("第二轮结果:", JSON.stringify(secondRound))
-    expect(secondRound.ok).toBe(false)
-    expect(String(secondRound.error?.message ?? "")).toContain("会话持久化异常，请重新打开会话")
+    expect(secondRound.ok).toBe(true)
     await core.dispose()
   } finally {
     mock.stop()
