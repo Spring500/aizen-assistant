@@ -1,11 +1,7 @@
 import { encodeAnthropicEvents } from "./mock-server/encoders/anthropic-messages.ts"
 import { encodeOpenAiEvents } from "./mock-server/encoders/openai-completions.ts"
 import { normalizeRequest } from "./mock-server/normalize.ts"
-import {
-  builtinMockBehavior,
-  defaultMockModelBehaviors,
-  type MockBehaviorId,
-} from "./mock-server/registry.ts"
+import { builtinMockBehavior, defaultMockModelBehaviors, type MockBehaviorId } from "./mock-server/registry.ts"
 import type { MockBehavior, MockEvent, MockProtocol, MockRequestContext } from "./mock-server/types.ts"
 
 export type { MockBehavior, MockEvent, MockProtocol, MockRequestContext } from "./mock-server/types.ts"
