@@ -1,6 +1,6 @@
 import { afterEach, expect } from "bun:test"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
-import { exists, mkdtemp, readFile, rm } from "node:fs/promises"
+import { exists, mkdtemp, readFile, rm, utimes } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
@@ -194,6 +194,13 @@ for (const scenario of cases) {
       trace(`worker 已退出：${workerExitCode}`)
       const sessionId = await readFile(sessionIdPath, "utf8")
       expect(await exists(join(root, "effect.txt"))).toBe(scenario.sideEffect)
+
+      // worker 已确认退出，其持有的会话锁目录必然残留且心跳不再更新。proper-lockfile
+      // 需等待 stale（10 秒）窗口才会判定锁过期；这里把锁目录的 mtime 主动改到 stale
+      // 窗口之前，使恢复路径立即走正常的“锁过期→抢占”流程，避免每个中断场景空等约 10 秒
+      // （10 个场景累计约 100 秒的 CI 时间）。锁路径规则见 SessionStore 的 #lockPath。
+      const staleEpoch = new Date(Date.now() - 12_000)
+      await utimes(join(root, "sessions", `.${encodeURIComponent(sessionId)}.session.lock`), staleEpoch, staleEpoch)
 
       mock.handle(() => ({ type: "text", text: "恢复后继续" }))
       const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })
