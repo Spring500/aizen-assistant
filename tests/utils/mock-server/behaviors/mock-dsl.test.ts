@@ -190,6 +190,34 @@ text {{T1.Result}}`),
   ])
 })
 
+test("文档中的多工具引用示例可解析并自动切分轮次", async () => {
+  const source = `bash T1 查看状态 | git status
+bash T2 查看分支 | git branch
+text <<<
+状态：{{T1.Result}}
+分支：{{T2.Result}}
+>>>`
+  expect(await events(context(source))).toEqual([
+    { type: "tool", callId: "T1", name: "bash", arguments: { command: "git status", declaredIntent: "查看状态" } },
+    { type: "tool", callId: "T2", name: "bash", arguments: { command: "git branch", declaredIntent: "查看分支" } },
+    { type: "finish", reason: "toolUse" },
+  ])
+  expect(
+    await events({
+      ...context(source),
+      messages: [
+        { role: "user", content: source },
+        { role: "assistant", content: "" },
+        { role: "tool", toolCallId: "T1", toolName: "bash", content: "状态结果" },
+        { role: "tool", toolCallId: "T2", toolName: "bash", content: "分支结果" },
+      ],
+    }),
+  ).toEqual([
+    { type: "text", text: "状态：状态结果\n分支：分支结果" },
+    { type: "finish", reason: "stop" },
+  ])
+})
+
 test("Mock Server 将 mock-dsl 注册为内置行为", async () => {
   const mock = await startMockServer()
   try {
