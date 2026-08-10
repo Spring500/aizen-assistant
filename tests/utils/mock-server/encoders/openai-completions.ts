@@ -13,6 +13,7 @@ export function encodeOpenAiEvents(
   const id = `chatcmpl_${crypto.randomUUID()}`
   let started = false
   let finished = false
+  let toolIndex = 0
   const chunk = (
     delta: Record<string, unknown>,
     finishReason: string | null = null,
@@ -47,12 +48,13 @@ export function encodeOpenAiEvents(
         } else if (event.type === "text") {
           controller.enqueue(sseData(chunk({ content: event.text })))
         } else if (event.type === "tool") {
+          const index = toolIndex++
           controller.enqueue(
             sseData(
               chunk({
                 tool_calls: [
                   {
-                    index: 0,
+                    index: index,
                     id: event.callId,
                     type: "function",
                     function: { name: event.name, arguments: JSON.stringify(event.arguments) },

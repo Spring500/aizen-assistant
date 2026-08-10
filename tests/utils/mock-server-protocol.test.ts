@@ -23,10 +23,18 @@ test("OpenAI 协议归一化请求并输出指定工具调用 ID", async () => {
     expect(request.tools).toContainEqual(
       expect.objectContaining({ function: expect.objectContaining({ name: "echo" }) }),
     )
-    request.respond({ type: "tool_call", name: "echo", arguments: { text: "内容" }, callId: "openai-call" })
+    request.respond({
+      type: "tool_calls",
+      calls: [
+        { name: "echo", arguments: { text: "内容一" }, callId: "openai-call-one" },
+        { name: "echo", arguments: { text: "内容二" }, callId: "openai-call-two" },
+      ],
+    })
     const body = await (await completing).text()
-    expect(body).toContain('"id":"openai-call"')
-    expect(body).toContain('"name":"echo"')
+    expect(body).toContain('"id":"openai-call-one"')
+    expect(body).toContain('"id":"openai-call-two"')
+    expect(body).toContain('"index":0')
+    expect(body).toContain('"index":1')
     expect(body).toContain('"finish_reason":"tool_calls"')
   } finally {
     mock.stop()
