@@ -27,7 +27,7 @@ describe("应用偏好存储", () => {
     const preferences = {
       ...defaultAppPreferences,
       newSession: {
-        model: { providerId: "p", modelId: "m", api: "a", thinkingLevel: "high" },
+        model: { providerId: "p", modelId: "m", thinkingLevel: "high" },
         viewId: "view",
         permissionMode: "hybrid" as const,
         permissionPreset: "plan" as const,
@@ -50,7 +50,7 @@ describe("应用偏好存储", () => {
         newSession: {
           viewId: "review",
           permissionMode: "invalid",
-          model: { providerId: "p", modelId: "m", api: "a" },
+          model: { providerId: "p", modelId: "m" },
         },
         agents: {
           sessionNaming: { model: { providerId: "title", modelId: "model" } },
@@ -70,7 +70,7 @@ describe("应用偏好存储", () => {
         permissionMode: "hybrid",
         permissionPreset: "edit",
         permissionReviewMode: "manual",
-        model: { providerId: "p", modelId: "m", api: "a" },
+        model: { providerId: "p", modelId: "m" },
       },
       agents: {
         sessionNaming: { model: { providerId: "title", modelId: "model" } },
@@ -87,7 +87,7 @@ describe("应用偏好存储", () => {
       "newSession.permissionMode 无效，已使用默认值",
       "newSession.permissionPreset 缺失，已使用默认值",
       "newSession.permissionReviewMode 缺失，已使用默认值",
-      "agents.permissionReview.model.modelId 必须是非空字符串，已使用默认值",
+      "agents.permissionReview.model.modelId 必须是字符串，已使用默认值",
       "fold.userTurns 是未知字段，已忽略",
       "fold.toolGroupExpanded 必须是布尔值，已使用默认值",
       "fold.toolDetailsExpanded 缺失，已使用默认值",
@@ -109,7 +109,7 @@ describe("应用偏好存储", () => {
     expect(store.takeWarnings()).toEqual(["preferences.json 必须是对象，已使用默认值"])
   })
 
-  test("会话命名偏好只保存供应商和模型标识", () => {
+  test("会话命名偏好保存模型引用并兼容忽略旧 api 字段", () => {
     expect(
       parseAppPreferences({
         ...defaultAppPreferences,
@@ -119,15 +119,21 @@ describe("应用偏好存储", () => {
       sessionNaming: { model: { providerId: "provider", modelId: "title-model" } },
       permissionReview: {},
     })
-    expect(() =>
+    // 旧数据可能带 api 字段（属于模型定义层），解析时兼容忽略，不影响引用内容
+    expect(
       parseAppPreferences({
         ...defaultAppPreferences,
         agents: {
-          sessionNaming: { model: { providerId: "provider", modelId: "title-model", api: "invalid" } },
+          sessionNaming: {
+            model: { providerId: "provider", modelId: "title-model", api: "invalid", thinkingLevel: "high" },
+          },
           permissionReview: {},
         },
-      }),
-    ).toThrow("未知字段")
+      }).agents,
+    ).toEqual({
+      sessionNaming: { model: { providerId: "provider", modelId: "title-model", thinkingLevel: "high" } },
+      permissionReview: {},
+    })
   })
 
   test("写入时严格拒绝非法折叠设置", () => {

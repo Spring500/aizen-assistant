@@ -23,7 +23,7 @@ import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
-const model: ModelReference = { providerId: "test", modelId: "model", api: "anthropic-messages", thinkingLevel: "off" }
+const model: ModelReference = { providerId: "test", modelId: "model", thinkingLevel: "off" }
 const directories: string[] = []
 
 class FakePi implements PiPort {
@@ -1194,7 +1194,6 @@ describe("视图装载资源组装", () => {
   const model: ModelReference = {
     providerId: "test",
     modelId: "model",
-    api: "anthropic-messages",
     thinkingLevel: "off",
   }
 
