@@ -43,7 +43,6 @@ import type {
   PermissionMode,
 } from "./tool-permissions/types.ts"
 import { createBashValidator } from "./tool-permissions/validators/bash.ts"
-import { createFileValidator } from "./tool-permissions/validators/file.ts"
 import { type AizenToolRegistration, validateToolRegistrations } from "./tool-registry.ts"
 import {
   type CoreCommand,
@@ -200,6 +199,7 @@ export class AizenCore implements CorePort {
               ".npmrc",
               ".pypirc",
               "credentials",
+              "credentials.json",
               "id_rsa",
               "id_ed25519",
               ".ssh",
@@ -1273,6 +1273,7 @@ export class AizenCore implements CorePort {
           ".npmrc",
           ".pypirc",
           "credentials",
+          "credentials.json",
           "id_rsa",
           "id_ed25519",
           ".ssh",
@@ -1299,9 +1300,6 @@ export class AizenCore implements CorePort {
     if (!this.#pi.setPermissionHandler) return undefined
     const registry = new ToolPermissionRegistry()
     registry.register(createBashValidator())
-    registry.register(createFileValidator("read"))
-    registry.register(createFileValidator("write"))
-    registry.register(createFileValidator("edit"))
     for (const registration of this.#toolRegistrations) registry.register(registration.validator)
     return new ToolPermissionManager({
       registry,
