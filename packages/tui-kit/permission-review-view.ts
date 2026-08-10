@@ -24,7 +24,6 @@ function evidence(request: HumanReviewRequest): { title: string; content: string
 async function showEvidence(
   overlays: OverlayManager,
   request: HumanReviewRequest,
-  onViewedToEnd: () => void,
   signal?: AbortSignal,
 ): Promise<void> {
   const details = request.assessment.details
@@ -36,7 +35,6 @@ async function showEvidence(
         title: `编辑预览：${request.assessment.targets[0] ?? request.toolName}`,
         patch,
         ...(signal ? { signal } : {}),
-        onViewedToEnd,
       })
       return
     }
@@ -64,7 +62,6 @@ async function showEvidence(
       content: full.content,
       wrapMode: "word",
       fg: systemColors.secondary,
-      onViewedToEnd,
       onStateChange: (state) =>
         handle.setDescription(`视觉行 ${state.firstLine}-${state.lastLine} / ${state.totalLines}`),
     })
@@ -258,7 +255,6 @@ export function createPermissionReviewView(
   let current = 0
   const decisions = new Map<string, DraftDecision>()
   const denyDrafts = new Map<string, string>()
-  const viewedEvidence = new Set<string>()
   let closed = false
   let controller: AbortController | undefined
   let navigationPending = false
@@ -281,7 +277,6 @@ export function createPermissionReviewView(
     if (!request) return
     controller = new AbortController()
     const abort = () => controller?.abort()
-    const preview = () => permissionParameterPreview(request, overlays.renderer.terminalWidth, 3)
     const sensitivePaths = sensitiveFieldPaths(request.arguments, request.sensitiveFields)
     const sensitiveLines =
       sensitivePaths.length > 0 ? [`⚠ 敏感字段（本地原值未脱敏）：${sensitivePaths.join("、")}`] : []
@@ -290,7 +285,13 @@ export function createPermissionReviewView(
       tagLines.push([{ text: item.name, bold: true }])
       if (item.evidence) tagLines.push([{ text: `证据：${item.evidence}` }])
     }
-    const approvalBlocked = preview().truncated && !viewedEvidence.has(request.requestId)
+    // unknown 情形：分类器无法判定，需人工判断；bash 等脚本场景批准即批准命令的全部潜在行为。
+    const unclassifiedLines = request.assessment.unclassified
+      ? [
+          "⚠ 分类器无法判定行为风险，需人工判断",
+          ...(request.toolName === "bash" ? ["⚠ 批准即批准该命令的全部潜在行为"] : []),
+        ]
+      : []
     const existing = decisions.get(request.requestId)
     signal?.addEventListener("abort", abort, { once: true })
     void selectEditableItem<"approve" | "deny" | "details">(
@@ -299,11 +300,9 @@ export function createPermissionReviewView(
       () => [
         {
           name: `${existing?.decision === "approve" ? "✓ " : ""}通过`,
-          description: approvalBlocked ? "参数预览有省略；请先打开完整内容并滚动到末尾" : request.assessment.reason,
+          description: request.assessment.reason,
           value: "approve",
           tone: "success",
-          disabled: approvalBlocked,
-          disabledReason: "参数预览有省略；请先打开完整内容并滚动到末尾",
         },
         {
           id: `deny-${request.requestId}`,
@@ -337,11 +336,12 @@ export function createPermissionReviewView(
           { text: `判定原因：${request.assessment.reason}` },
         ],
         headerLinesForWidth: (width) => [
+          ...unclassifiedLines,
           ...sensitiveLines,
           ...tagLines,
           ...permissionParameterPreview(request, width, 3).lines,
         ],
-        headerHeight: 2 + sensitiveLines.length + tagLines.length,
+        headerHeight: 2 + unclassifiedLines.length + sensitiveLines.length + tagLines.length,
         navigate,
         signal: controller.signal,
       },
@@ -358,7 +358,7 @@ export function createPermissionReviewView(
         return
       }
       if (selection === "details") {
-        await showEvidence(overlays, request, () => viewedEvidence.add(request.requestId))
+        await showEvidence(overlays, request)
         open()
         return
       }

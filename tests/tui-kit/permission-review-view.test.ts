@@ -172,13 +172,22 @@ test("审批页展示判定原因和命中标签", async () => {
   controller.close()
 })
 
-test("参数预览有省略时要求先查看完整内容", async () => {
-  const value = request("evidence", "bash")
+test("unknown 情形提示需人工判断且批准即批准全部潜在行为", async () => {
+  const value = request("unknown", "bash")
+  value.assessment.unclassified = true
+  const { setup, controller } = await setupReview([value])
+  const frame = setup.captureCharFrame()
+  expect(frame).toContain("分类器无法判定行为风险，需人工判断")
+  expect(frame).toContain("批准即批准该命令的全部潜在行为")
+  controller.close()
+})
+
+test("通过按钮始终可用", async () => {
+  const value = request("truncated", "bash")
   value.arguments = { command: `echo ${"x".repeat(500)}` }
   const { setup, controller } = await setupReview([value])
   const frame = setup.captureCharFrame()
-  expect(frame).toContain("参数预览有省略")
-  expect(frame).toContain("请先打开完整内容")
+  expect(frame).toContain("通过")
   controller.close()
 })
 
@@ -248,25 +257,6 @@ test("审批参数 Header 在 resize 后重新计算换行与省略", async () =
   expect(wide).toContain("HEAD")
   expect(wide).toContain("TAIL")
   expect(wide).not.toContain("请先打开完整内容")
-  controller.close()
-})
-
-test("长命令完整阅览前禁用通过", async () => {
-  const setup = await createTestRenderer({ width: 48, height: 28 })
-  renderers.push(setup)
-  const overlays = new OverlayManager(setup.renderer)
-  const answers: PermissionReviewAnswer[] = []
-  const long = request("long", "bash")
-  long.arguments = { command: `echo HEAD ${"middle ".repeat(100)} echo TAIL` }
-  const controller = createPermissionReviewView(overlays, [long], (answer) => {
-    answers.push(answer)
-  })
-  await setup.renderOnce()
-  const frame = setup.captureCharFrame()
-  expect(frame).toContain("省略")
-  expect(frame).toContain("请先打开完整内容")
-  setup.renderer.keyInput.emit("keypress", key("\r"))
-  expect(answers).toEqual([])
   controller.close()
 })
 

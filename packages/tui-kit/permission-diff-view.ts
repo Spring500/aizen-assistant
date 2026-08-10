@@ -8,7 +8,6 @@ export type PermissionDiffViewerOptions = {
   patch?: string
   error?: string
   signal?: AbortSignal
-  onViewedToEnd(): void
 }
 
 /** 使用 OpenTUI DiffRenderable 展示带行号和颜色的 unified diff。 */
@@ -57,7 +56,6 @@ export function showPermissionDiff(overlays: OverlayManager, options: Permission
       offset = Math.max(0, Math.min(offset, Math.max(0, lineCount - pageSize)))
       content.top = -offset
       content.height = Math.max(pageSize, lineCount)
-      if (offset + pageSize >= lineCount) options.onViewedToEnd()
       handle.setDescription(
         options.error
           ? "无法生成可靠 diff；请检查失败原因和替换参数"
