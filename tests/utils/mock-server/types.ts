@@ -45,6 +45,7 @@ export type MockEvent =
   | { type: "tool"; callId: string; name: string; arguments: Record<string, unknown> }
   | { type: "finish"; reason: MockFinishReason; inputTokens?: number; outputTokens?: number }
   | { type: "error"; status: number; message: string; body?: unknown }
+  | { type: "disconnect"; message: string }
 
 /** 一个 Mock 模型的无状态行为模块。 */
 export type MockBehavior = (context: MockRequestContext) => AsyncIterable<MockEvent>

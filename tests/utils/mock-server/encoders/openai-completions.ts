@@ -38,6 +38,11 @@ export function encodeOpenAiEvents(
           return
         }
         const event = next.value
+        if (event.type === "disconnect") {
+          controller.error(new Error(event.message))
+          await iterator.return?.()
+          return
+        }
         if (event.type === "error") throw new Error("Mock error 事件必须是流中第一个事件")
         if (!started) {
           started = true

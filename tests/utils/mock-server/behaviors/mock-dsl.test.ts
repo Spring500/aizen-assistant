@@ -58,9 +58,12 @@ new <<<
   })
 })
 
-test("无效 DSL 原样回显", async () => {
+test("无效 DSL 原样回显并包含解析错误", async () => {
   expect(await events(context("普通聊天内容"))).toEqual([
-    { type: "text", text: "用户输入无法解析，原样输出结果如下：\n普通聊天内容" },
+    {
+      type: "text",
+      text: "用户输入无法解析，原样输出结果如下：\n普通聊天内容\n\n解析错误：\n无法识别的指令：普通聊天内容",
+    },
     { type: "finish", reason: "stop" },
   ])
 })
@@ -84,6 +87,73 @@ text 目录：{{T1.Result}}`
   ).toEqual([
     { type: "text", text: "目录：README.md" },
     { type: "finish", reason: "stop" },
+  ])
+})
+
+test("引用仅在思考和正文中生效", async () => {
+  const source = `bash T1 获取内容 | echo '"result"'
+write W1 写入字面量 | result.txt
+<<<
+{{T1.Result}}
+>>>
+text 结果：{{T1.Result}}`
+  expect(await events(context(source))).toEqual([
+    {
+      type: "tool",
+      callId: "T1",
+      name: "bash",
+      arguments: { command: "echo '\"result\"'", declaredIntent: "获取内容" },
+    },
+    {
+      type: "tool",
+      callId: "W1",
+      name: "write",
+      arguments: { path: "result.txt", content: "{{T1.Result}}", declaredIntent: "写入字面量" },
+    },
+    { type: "finish", reason: "toolUse" },
+  ])
+  expect(
+    await events({
+      ...context(source),
+      messages: [
+        { role: "user", content: source },
+        { role: "assistant", content: "" },
+        { role: "tool", toolCallId: "T1", toolName: "bash", content: '他说："成功"' },
+        { role: "tool", toolCallId: "W1", toolName: "write", content: "已写入" },
+      ],
+    }),
+  ).toEqual([
+    { type: "text", text: '结果：他说："成功"' },
+    { type: "finish", reason: "stop" },
+  ])
+})
+
+test("拒绝未声明引用和不合法终止指令组合", () => {
+  expect(parseMockDsl("text {{T1.Result}}")).toEqual({ ok: false, reason: "引用了尚未声明的工具调用：T1" })
+  expect(parseMockDsl("think 正在处理\nerror 500 失败")).toEqual({
+    ok: false,
+    reason: "error 作为 HTTP 错误前只能使用 delay",
+  })
+  expect(parseMockDsl("disconnect 已断开\ntext 不可达")).toEqual({
+    ok: false,
+    reason: "error、disconnect 和 hang 必须是最后一条指令",
+  })
+  expect(parseMockDsl("hang\ntext 不可达")).toEqual({
+    ok: false,
+    reason: "error、disconnect 和 hang 必须是最后一条指令",
+  })
+})
+
+test("合法的 delay 加 HTTP 错误保持首事件语义", async () => {
+  expect(await events(context("delay 0\nerror 500 上游失败"))).toEqual([
+    { type: "error", status: 500, message: "上游失败" },
+  ])
+})
+
+test("思考后可通过 disconnect 模拟流中异常", async () => {
+  expect(await events(context("think 正在处理\ndelay 0\ndisconnect 上游连接中断"))).toEqual([
+    { type: "thinking", text: "正在处理" },
+    { type: "disconnect", message: "上游连接中断" },
   ])
 })
 

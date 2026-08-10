@@ -4,13 +4,17 @@ export type MockDslInstruction =
   | { type: "tool"; callId: string; name: "bash" | "read" | "write" | "edit"; arguments: Record<string, unknown> }
   | { type: "delay"; milliseconds: number }
   | { type: "error"; status: number; message: string }
+  | { type: "disconnect"; message: string }
   | { type: "hang" }
 
 export type MockDslParseResult = { ok: true; instructions: MockDslInstruction[] } | { ok: false; reason: string }
 
 type BlockResult = { content: string; next: number } | { error: string }
 
-const verbs = new Set(["think", "text", "bash", "read", "write", "edit", "delay", "error", "hang"])
+type ParseStep = { instruction: MockDslInstruction; next: number } | { error: string }
+
+const verbs = new Set(["think", "text", "bash", "read", "write", "edit", "delay", "error", "disconnect", "hang"])
+const referencePattern = /\{\{([^{}]+)\.Result\}\}/g
 
 function truncateIntent(intent: string): string {
   return Array.from(intent).slice(0, 50).join("")
@@ -42,11 +46,7 @@ function block(lines: string[], start: number): BlockResult {
   return { error: "文本块没有结束标记 >>>" }
 }
 
-function simpleText(
-  lines: string[],
-  index: number,
-  verb: "think" | "text",
-): { instruction: MockDslInstruction; next: number } | { error: string } {
+function simpleText(lines: string[], index: number, verb: "think" | "text"): ParseStep {
   const line = lines[index] ?? ""
   const value = line.slice(verb.length).trimStart()
   if (!value) return { error: `${verb} 缺少文本` }
@@ -77,7 +77,7 @@ function writeInstruction(
   lines: string[],
   index: number,
   header: { callId: string; intent: string; argument: string },
-): { instruction: MockDslInstruction; next: number } | { error: string } {
+): ParseStep {
   const marker = nonEmptyIndex(lines, index + 1)
   if (lines[marker]?.trim() !== "<<<") return { error: "write 文件内容必须使用 <<< 和 >>> 包裹" }
   const result = block(lines, marker + 1)
@@ -97,7 +97,7 @@ function editInstruction(
   lines: string[],
   index: number,
   header: { callId: string; intent: string; argument: string },
-): { instruction: MockDslInstruction; next: number } | { error: string } {
+): ParseStep {
   let cursor = nonEmptyIndex(lines, index + 1)
   if (lines[cursor]?.trim() !== "<<<") return { error: "edit 编辑内容必须使用 <<< 和 >>> 包裹" }
   cursor++
@@ -129,8 +129,32 @@ function editInstruction(
   }
 }
 
-/** 将聊天输入解析为 mock-dsl 的无副作用指令序列。 */
-export function parseMockDsl(input: string): MockDslParseResult {
+function references(text: string): string[] {
+  return [...text.matchAll(referencePattern)].map((match) => match[1] ?? "")
+}
+
+function validateReferences(instruction: MockDslInstruction, declaredCallIds: Set<string>): string | undefined {
+  if (instruction.type !== "thinking" && instruction.type !== "text") return undefined
+  for (const callId of references(instruction.text)) {
+    if (!declaredCallIds.has(callId)) return `引用了尚未声明的工具调用：${callId}`
+  }
+  return undefined
+}
+
+function validateTerminalInstructions(instructions: MockDslInstruction[]): string | undefined {
+  const terminalIndex = instructions.findIndex(
+    (instruction) => instruction.type === "error" || instruction.type === "disconnect" || instruction.type === "hang",
+  )
+  if (terminalIndex < 0) return undefined
+  if (terminalIndex !== instructions.length - 1) return "error、disconnect 和 hang 必须是最后一条指令"
+  const terminal = instructions[terminalIndex]
+  if (terminal?.type !== "error") return undefined
+  if (instructions.slice(0, terminalIndex).some((instruction) => instruction.type !== "delay"))
+    return "error 作为 HTTP 错误前只能使用 delay"
+  return undefined
+}
+
+function parse(input: string): MockDslParseResult {
   const lines = input.replace(/\r\n?/g, "\n").split("\n")
   const instructions: MockDslInstruction[] = []
   const callIds = new Set<string>()
@@ -146,6 +170,8 @@ export function parseMockDsl(input: string): MockDslParseResult {
     if (word === "think" || word === "text") {
       const result = simpleText(lines, index, word)
       if ("error" in result) return { ok: false, reason: result.error }
+      const referenceError = validateReferences(result.instruction, callIds)
+      if (referenceError) return { ok: false, reason: referenceError }
       instructions.push(result.instruction)
       index = result.next
       continue
@@ -164,6 +190,12 @@ export function parseMockDsl(input: string): MockDslParseResult {
       const status = Number(match[1])
       if (status < 100 || status > 599) return { ok: false, reason: "error 状态码必须在 100 到 599 之间" }
       instructions.push({ type: "error", status, message: match[2]?.trim() || `Mock HTTP ${status}` })
+      index++
+      continue
+    }
+    if (word === "disconnect") {
+      const message = line.trimStart().slice("disconnect".length).trim() || "Mock SSE 连接中断"
+      instructions.push({ type: "disconnect", message })
       index++
       continue
     }
@@ -193,5 +225,17 @@ export function parseMockDsl(input: string): MockDslParseResult {
     instructions.push(result.instruction)
     index = result.next
   }
-  return instructions.length > 0 ? { ok: true, instructions } : { ok: false, reason: "输入为空" }
+  if (instructions.length === 0) return { ok: false, reason: "输入为空" }
+  const terminalError = validateTerminalInstructions(instructions)
+  return terminalError ? { ok: false, reason: terminalError } : { ok: true, instructions }
+}
+
+/** 将聊天输入解析为 mock-dsl 的无副作用指令序列，所有异常均转换为失败结果。 */
+export function parseMockDsl(input: string): MockDslParseResult {
+  try {
+    return parse(input)
+  } catch (error) {
+    if (error instanceof Error) return { ok: false, reason: error.stack ?? `${error.name}: ${error.message}` }
+    return { ok: false, reason: String(error) }
+  }
 }

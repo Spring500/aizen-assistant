@@ -21,8 +21,8 @@ function resultsAfter(messages: MockMessage[], index: number): Map<string, strin
 }
 
 function referencedCallIds(instruction: MockDslInstruction): string[] {
-  const source = JSON.stringify(instruction)
-  return [...source.matchAll(referencePattern)].map((match) => match[1] ?? "")
+  if (instruction.type !== "thinking" && instruction.type !== "text") return []
+  return [...instruction.text.matchAll(referencePattern)].map((match) => match[1] ?? "")
 }
 
 function substitute(value: string, results: Map<string, string>): string {
@@ -32,13 +32,6 @@ function substitute(value: string, results: Map<string, string>): string {
 function substituteInstruction(instruction: MockDslInstruction, results: Map<string, string>): MockDslInstruction {
   if (instruction.type === "thinking" || instruction.type === "text")
     return { ...instruction, text: substitute(instruction.text, results) }
-  if (instruction.type === "tool") {
-    const argumentsValue = JSON.parse(substitute(JSON.stringify(instruction.arguments), results)) as Record<
-      string,
-      unknown
-    >
-    return { ...instruction, arguments: argumentsValue }
-  }
   return instruction
 }
 
@@ -48,14 +41,14 @@ function wait(milliseconds: number, signal: AbortSignal): Promise<void> {
       reject(new Error("Mock 请求已取消"))
       return
     }
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", abort)
-      resolve()
-    }, milliseconds)
     const abort = () => {
       clearTimeout(timer)
       reject(new Error("Mock 请求已取消"))
     }
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort)
+      resolve()
+    }, milliseconds)
     signal.addEventListener("abort", abort, { once: true })
   })
 }
@@ -80,17 +73,21 @@ function firstPendingStart(instructions: MockDslInstruction[], results: Map<stri
   return start
 }
 
+function parseFailureText(input: string, reason: string): string {
+  return `${parseFailurePrefix}\n${input}\n\n解析错误：\n${reason}`
+}
+
 /** 执行用户最后一条消息中的 DSL，并仅通过历史工具结果无状态推进多轮调用。 */
 export const mockDslBehavior: MockBehavior = async function* (context: MockRequestContext): AsyncIterable<MockEvent> {
   const latest = lastUserMessage(context.messages)
   if (!latest) {
-    yield { type: "text", text: `${parseFailurePrefix}\n` }
+    yield { type: "text", text: parseFailureText("", "找不到用户消息") }
     yield { type: "finish", reason: "stop" }
     return
   }
   const parsed = parseMockDsl(latest.text)
   if (!parsed.ok) {
-    yield { type: "text", text: `${parseFailurePrefix}\n${latest.text}` }
+    yield { type: "text", text: parseFailureText(latest.text, parsed.reason) }
     yield { type: "finish", reason: "stop" }
     return
   }
@@ -100,18 +97,8 @@ export const mockDslBehavior: MockBehavior = async function* (context: MockReque
     yield { type: "finish", reason: "stop" }
     return
   }
-  const instructions = parsed.instructions.slice(start)
-  const errorIndex = instructions.findIndex((instruction) => instruction.type === "error")
-  if (errorIndex >= 0) {
-    for (const instruction of instructions.slice(0, errorIndex)) {
-      if (instruction.type === "delay") await wait(instruction.milliseconds, context.signal)
-    }
-    const error = instructions[errorIndex]
-    if (error?.type === "error") yield { type: "error", status: error.status, message: error.message }
-    return
-  }
   let sentTool = false
-  for (const original of instructions) {
+  for (const original of parsed.instructions.slice(start)) {
     const unresolved = referencedCallIds(original).some((callId) => !results.has(callId))
     if (unresolved) break
     const instruction = substituteInstruction(original, results)
@@ -119,7 +106,13 @@ export const mockDslBehavior: MockBehavior = async function* (context: MockReque
     else if (instruction.type === "text") yield { type: "text", text: instruction.text }
     else if (instruction.type === "delay") await wait(instruction.milliseconds, context.signal)
     else if (instruction.type === "hang") await hang(context.signal)
-    else if (instruction.type === "tool") {
+    else if (instruction.type === "disconnect") {
+      yield { type: "disconnect", message: instruction.message }
+      return
+    } else if (instruction.type === "error") {
+      yield { type: "error", status: instruction.status, message: instruction.message }
+      return
+    } else if (instruction.type === "tool") {
       if (results.has(instruction.callId)) continue
       yield { type: "tool", callId: instruction.callId, name: instruction.name, arguments: instruction.arguments }
       sentTool = true
