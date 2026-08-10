@@ -1527,8 +1527,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     try {
       if (!(await dispatchWithError({ type: "load_preferences" }, "读取应用偏好失败")).ok) return
       if (!(await dispatchWithError({ type: "list_models" }, "读取模型失败")).ok) return
-      if (!(await dispatchWithError({ type: "list_auth_providers" }, "读取认证供应商失败")).ok) return
-      if (!(await dispatchWithError({ type: "load_model_config" }, "读取模型配置失败")).ok) return
+      // 供应商/配置数据仅用于解析供应商显示名，失败时降级回退 providerId
+      await core.dispatch({ type: "list_auth_providers" })
+      await core.dispatch({ type: "load_model_config" })
       let model = core.getSnapshot().preferences.agents.sessionNaming.model
       let reviewModel = core.getSnapshot().preferences.agents.permissionReview?.model
       while (!exiting) {
@@ -1650,9 +1651,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
     while (!exiting) {
       if (!(await dispatchWithError({ type: "list_views" }, "读取视图失败")).ok) return false
-      if (!(await dispatchWithError({ type: "list_models" }, "读取模型失败")).ok) return false
-      if (!(await dispatchWithError({ type: "list_auth_providers" }, "读取认证供应商失败")).ok) return false
-      if (!(await dispatchWithError({ type: "load_model_config" }, "读取模型配置失败")).ok) return false
+      // 模型/供应商/配置数据仅用于解析设置行的显示名，失败时降级回退显示，不阻断设置页
+      await core.dispatch({ type: "list_models" })
+      await core.dispatch({ type: "list_auth_providers" })
+      await core.dispatch({ type: "load_model_config" })
       const snapshot = core.getSnapshot()
       const items = sessionSettingsItems(
         draft,
