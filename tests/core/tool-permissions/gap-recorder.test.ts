@@ -20,7 +20,6 @@ test("本地收集器按JSONL顺序写入并在关闭时清空队列", async () 
     at: "2026-08-04T00:00:00.000Z",
     sessionId: "session",
     turnId: "turn",
-    permissionMode: "unrestricted" as const,
     toolName: "bash",
     declaredIntent: "测试记录",
     cwd: root,

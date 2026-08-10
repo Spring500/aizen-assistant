@@ -113,14 +113,12 @@ test("恢复时把已开始但未结束的工具标记为需先检查而不自�
   const records: SessionRecord[] = [
     { kind: "model_changed", recordId: "model", at, model },
     { kind: "view_changed", recordId: "view", at, viewId: null },
-    { kind: "permission_mode_changed", recordId: "mode", at, permissionMode: "hybrid" },
     {
       kind: "turn_started",
       recordId: "turn-started",
       turnId: "turn",
       at,
       viewId: null,
-      permissionMode: "hybrid",
       items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "执行工具" }] }],
     },
     {

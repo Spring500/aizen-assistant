@@ -1,7 +1,6 @@
 import type { ModelOption } from "../../packages/core/pi-port.ts"
 import type { ModelReference, ViewId } from "../../packages/core/session-format.ts"
 import type { PermissionPresetId, PermissionReviewMode } from "../../packages/core/tool-permissions/policy-types.ts"
-import type { PermissionMode } from "../../packages/core/tool-permissions/types.ts"
 import type { ViewOption } from "../../packages/core/view-store.ts"
 import type { RichSelectorItem } from "../../packages/tui-kit/rich-selector.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
@@ -11,7 +10,6 @@ import { viewSettingItem } from "./view-setting-item.ts"
 export type SessionSettingsDraft = {
   model?: ModelOption
   viewId: ViewId
-  permissionMode?: PermissionMode
   permissionPreset?: PermissionPresetId
   permissionReviewMode?: PermissionReviewMode
 }

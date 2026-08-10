@@ -2,9 +2,6 @@ import type { JsonValue } from "../session-format.ts"
 import type { PermissionPresetId, PermissionReviewMode } from "./policy-types.ts"
 import type { SensitiveFieldMatcher } from "./sanitizer.ts"
 
-export const permissionModes = ["unrestricted", "hybrid", "hybridConfirmDenials", "aiOnly"] as const
-export type PermissionMode = (typeof permissionModes)[number]
-
 export type PermissionCoverageGap = {
   code: string
   kind: "unsupported-environment" | "unsupported-syntax" | "parse-failure" | "rule-miss" | "coarse-rule"
@@ -41,7 +38,6 @@ export type ToolPermissionRequest = {
   arguments: JsonValue
   declaredIntent: string
   cwd: string
-  mode: PermissionMode
   permissionPreset?: PermissionPresetId
   permissionReviewMode?: PermissionReviewMode
   environment?: JsonValue
@@ -151,7 +147,6 @@ export type PermissionGapRecord = {
   sessionId: string
   turnId: string
   toolCallId: string
-  permissionMode: PermissionMode
   toolName: string
   declaredIntent: string
   cwd: string

@@ -1,6 +1,6 @@
 import { createTextAttributes, parseColor, StyledText, type TextChunk } from "@opentui/core"
 import type { CoreSnapshot, CoreStatus, ResponseMetrics } from "../core/types.ts"
-import type { PermissionMode } from "../core/tool-permissions/types.ts"
+import type { PermissionPresetId, PermissionReviewMode } from "../core/tool-permissions/policy-types.ts"
 import { systemColors } from "./theme.ts"
 
 export type ShortcutContext = {
@@ -23,11 +23,19 @@ function contextText(snapshot: CoreSnapshot): string {
   return total ? `${formatNumber(used)}/${formatNumber(total)}` : `${formatNumber(used)}/未知`
 }
 
-const permissionModeView: Record<PermissionMode, { label: string; color: string }> = {
-  unrestricted: { label: "完全开放", color: systemColors.statusError },
-  hybrid: { label: "自动+人工", color: systemColors.sessionStatus },
-  hybridConfirmDenials: { label: "自动+人工确认拒绝", color: systemColors.statusIdle },
-  aiOnly: { label: "仅自动审核", color: systemColors.statusRunning },
+const presetLabels: Record<PermissionPresetId, string> = {
+  plan: "只读",
+  edit: "编辑",
+  "all-right": "全放开",
+  custom: "自定义",
+}
+
+const reviewModeLabels: Record<PermissionReviewMode, string> = {
+  manual: "完全人工",
+  aiReview: "AI代审",
+  aiReviewWithAbstain: "AI代审(可弃权)",
+  autoApprove: "自动放过",
+  autoDeny: "自动拒绝",
 }
 
 /**
@@ -39,13 +47,13 @@ export function sessionStatusText(snapshot: CoreSnapshot, modelLabel?: string): 
     modelLabel ??
     (snapshot.currentModel ? `${snapshot.currentModel.providerId}/${snapshot.currentModel.modelId}` : "未选择模型")
   const view = snapshot.currentViewId ?? "未选择视图"
-  const mode = permissionModeView[snapshot.currentPermissionMode ?? "hybrid"]
+  const permission = `${presetLabels[snapshot.currentPermissionPreset ?? "edit"]}·${reviewModeLabels[snapshot.currentPermissionReviewMode ?? "manual"]}`
   const chunks: TextChunk[] = [
     { __isChunk: true, text: `模型：${model} | 视图：${view} | 权限：`, fg: parseColor(systemColors.secondary) },
     {
       __isChunk: true,
-      text: mode.label,
-      fg: parseColor(mode.color),
+      text: permission,
+      fg: parseColor(systemColors.sessionStatus),
       attributes: createTextAttributes({ bold: true }),
     },
     { __isChunk: true, text: ` | 上下文：${contextText(snapshot)}`, fg: parseColor(systemColors.secondary) },

@@ -2,7 +2,6 @@ import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewI
 import type { PermissionPresetId, PermissionReviewMode } from "./tool-permissions/policy-types.ts"
 import type {
   AiPermissionReviewer,
-  PermissionMode,
   ToolAuthorization,
   ToolPermissionBatchAuthorization,
   ToolPermissionBatchRequest,
@@ -114,7 +113,6 @@ export type PiPromptInput = {
   sessionId?: string
   turnId: string
   viewId: ViewId
-  permissionMode?: PermissionMode
   permissionPreset?: PermissionPresetId
   permissionReviewMode?: PermissionReviewMode
   items: TurnInputItem[]

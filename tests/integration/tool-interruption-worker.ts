@@ -152,7 +152,7 @@ async function main(): Promise<void> {
   })
   trace(input.checkpoint, "Core 已创建")
   const reference: ModelReference = model
-  await core.dispatch({ type: "create_session", model: reference, viewId: null, permissionMode: "hybrid" })
+  await core.dispatch({ type: "create_session", model: reference, viewId: null })
   trace(input.checkpoint, "会话已创建")
   const sessionId = core.getSnapshot().currentSessionId
   if (!sessionId) throw new Error("会话创建失败")

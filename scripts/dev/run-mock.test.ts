@@ -112,7 +112,6 @@ test("默认套件完成主回复、命名和 AI 审核", async () => {
           type: "create_session",
           model: preferences.newSession.model,
           viewId: preferences.newSession.viewId,
-          permissionMode: preferences.newSession.permissionMode ?? "hybrid",
           ...(preferences.newSession.permissionPreset === undefined
             ? {}
             : { permissionPreset: preferences.newSession.permissionPreset }),

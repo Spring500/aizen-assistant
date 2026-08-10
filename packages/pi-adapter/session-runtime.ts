@@ -272,7 +272,6 @@ function auditedTools(
             arguments: authorization.arguments,
             declaredIntent,
             cwd,
-            mode: prompt.permissionMode ?? "hybrid",
           }
         : undefined
       if (request)
@@ -368,7 +367,6 @@ function registeredTools(
               arguments: authorization.arguments,
               declaredIntent,
               cwd,
-              mode: prompt.permissionMode ?? "hybrid",
             }
           : undefined
         if (request)
@@ -569,7 +567,6 @@ export class PiSessionRuntime implements PiPort {
         arguments: call.arguments,
         declaredIntent: call.declaredIntent,
         cwd: input.cwd,
-        mode: prompt.permissionMode ?? "hybrid",
         ...(prompt.permissionPreset ? { permissionPreset: prompt.permissionPreset } : {}),
         ...(prompt.permissionReviewMode ? { permissionReviewMode: prompt.permissionReviewMode } : {}),
         ...(call.name === "bash" ? { environment: { shell: this.#shellKind() } } : {}),
@@ -880,7 +877,6 @@ export class PiSessionRuntime implements PiPort {
       arguments: call.arguments,
       declaredIntent: call.declaredIntent,
       cwd,
-      mode: prompt.permissionMode ?? "hybrid",
       ...(prompt.permissionPreset ? { permissionPreset: prompt.permissionPreset } : {}),
       ...(prompt.permissionReviewMode ? { permissionReviewMode: prompt.permissionReviewMode } : {}),
       ...(call.name === "bash" ? { environment: { shell: this.#shellKind() } } : {}),

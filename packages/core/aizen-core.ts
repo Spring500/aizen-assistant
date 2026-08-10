@@ -38,7 +38,6 @@ import type {
   HumanReviewBatchRequest,
   PermissionAuditEvent,
   PermissionGapRecorder,
-  PermissionMode,
 } from "./tool-permissions/types.ts"
 import { type AizenToolRegistration, validateToolRegistrations } from "./tool-registry.ts"
 import {
@@ -338,7 +337,6 @@ export class AizenCore implements CorePort {
           await this.#createSession(
             command.model,
             command.viewId,
-            command.permissionMode ?? this.#snapshot.preferences.newSession.permissionMode ?? "hybrid",
             command.permissionPreset ?? this.#snapshot.preferences.newSession.permissionPreset ?? "edit",
             command.permissionReviewMode ?? this.#snapshot.preferences.newSession.permissionReviewMode ?? "manual",
           )
@@ -372,9 +370,6 @@ export class AizenCore implements CorePort {
           break
         case "set_view":
           await this.#setView(command.viewId)
-          break
-        case "set_permission_mode":
-          await this.#setPermissionMode(command.permissionMode)
           break
         case "set_permission_settings": {
           const sessionId = this.#snapshot.currentSessionId
@@ -529,11 +524,7 @@ export class AizenCore implements CorePort {
   }
 
   /** 仅保存新会话默认值，不参与当前会话记录和 runtime 的一致性判断。 */
-  async #rememberSessionDefaults(
-    model: ModelReference,
-    viewId: ViewId,
-    permissionMode?: PermissionMode,
-  ): Promise<void> {
+  async #rememberSessionDefaults(model: ModelReference, viewId: ViewId): Promise<void> {
     if (!this.#preferencesLoaded) {
       this.#snapshot.preferences = await this.#readPreferences()
       this.#preferencesLoaded = true
@@ -543,7 +534,6 @@ export class AizenCore implements CorePort {
       newSession: {
         model: sessionModel(model),
         viewId,
-        permissionMode: permissionMode ?? this.#snapshot.currentPermissionMode ?? "hybrid",
         permissionPreset: this.#snapshot.currentPermissionPreset ?? "edit",
         permissionReviewMode: this.#snapshot.currentPermissionReviewMode ?? "manual",
       },
@@ -551,13 +541,9 @@ export class AizenCore implements CorePort {
   }
 
   /** 会话操作落盘后，默认偏好只是便利设置；写入失败应提示，但不能把已完成的操作报告为失败。 */
-  async #tryRememberSessionDefaults(
-    model: ModelReference,
-    viewId: ViewId,
-    permissionMode?: PermissionMode,
-  ): Promise<void> {
+  async #tryRememberSessionDefaults(model: ModelReference, viewId: ViewId): Promise<void> {
     try {
-      await this.#rememberSessionDefaults(model, viewId, permissionMode)
+      await this.#rememberSessionDefaults(model, viewId)
     } catch (error) {
       this.#reportError(`保存默认会话设置失败：${error instanceof Error ? error.message : String(error)}`)
     }
@@ -592,7 +578,6 @@ export class AizenCore implements CorePort {
   async #createSession(
     model: ModelReference,
     viewId: ViewId,
-    permissionMode: PermissionMode,
     permissionPreset?: import("./tool-permissions/policy-types.ts").PermissionPresetId,
     permissionReviewMode?: import("./tool-permissions/policy-types.ts").PermissionReviewMode,
   ): Promise<void> {
@@ -603,7 +588,6 @@ export class AizenCore implements CorePort {
     const records: SessionRecord[] = [
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(actualModel) },
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
-      { kind: "permission_mode_changed", recordId: crypto.randomUUID(), at, permissionMode },
       ...(permissionPreset
         ? [
             {
@@ -629,7 +613,6 @@ export class AizenCore implements CorePort {
     this.#snapshot.currentModel = actualModel
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.currentViewId = viewId
-    this.#snapshot.currentPermissionMode = permissionMode
     if (permissionPreset) {
       this.#snapshot.currentPermissionPreset = permissionPreset
       this.#snapshot.currentPermissionReviewMode = permissionReviewMode ?? "manual"
@@ -645,7 +628,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
-    await this.#tryRememberSessionDefaults(actualModel, viewId, permissionMode)
+    await this.#tryRememberSessionDefaults(actualModel, viewId)
   }
 
   /**
@@ -670,9 +653,6 @@ export class AizenCore implements CorePort {
       }
       const modelRecord = [...loaded.records].reverse().find((record) => record.kind === "model_changed")
       const viewRecord = [...loaded.records].reverse().find((record) => record.kind === "view_changed")
-      const permissionRecord = [...loaded.records]
-        .reverse()
-        .find((record) => record.kind === "permission_mode_changed" || record.kind === "turn_started")
       if (modelRecord?.kind !== "model_changed") throw new Error("会话没有模型记录")
       if (viewRecord?.kind !== "view_changed") throw new Error("会话没有视图记录")
       const recoveryRecords = this.#recoverInterruptedTools(loaded.records)
@@ -690,12 +670,6 @@ export class AizenCore implements CorePort {
       this.#snapshot.currentModel = modelRecord.model
       this.#snapshot.contextUsage = this.#contextUsageFromRecords()
       this.#snapshot.currentViewId = viewRecord.viewId
-      this.#snapshot.currentPermissionMode =
-        permissionRecord?.kind === "permission_mode_changed"
-          ? permissionRecord.permissionMode
-          : permissionRecord?.kind === "turn_started"
-            ? (permissionRecord.permissionMode ?? "hybrid")
-            : (this.#snapshot.preferences.newSession.permissionMode ?? "hybrid")
       const permissionSettings = [...loaded.records]
         .reverse()
         .find((record) => record.kind === "permission_settings_changed")
@@ -717,11 +691,7 @@ export class AizenCore implements CorePort {
       if (loaded.warnings.length > 0) this.#reportError(loaded.warnings.join("；"))
       else if (recoveryRecords.length > 0)
         this.#reportError("检测到上次异常退出时存在未完成的工具调用；已记录中断状态，未自动重试")
-      await this.#tryRememberSessionDefaults(
-        this.#snapshot.currentModel,
-        viewRecord.viewId,
-        this.#snapshot.currentPermissionMode,
-      )
+      await this.#tryRememberSessionDefaults(this.#snapshot.currentModel, viewRecord.viewId)
       await this.#store.activate(sessionId)
       this.#snapshot.sessions = await this.#store.list()
       this.#reportStoreWarnings()
@@ -759,15 +729,6 @@ export class AizenCore implements CorePort {
     }
     this.#snapshot.currentModel = modelRecord.model
     this.#snapshot.currentViewId = viewRecord.viewId
-    const permissionRecord = [...records]
-      .reverse()
-      .find((record) => record.kind === "permission_mode_changed" || record.kind === "turn_started")
-    this.#snapshot.currentPermissionMode =
-      permissionRecord?.kind === "permission_mode_changed"
-        ? permissionRecord.permissionMode
-        : permissionRecord?.kind === "turn_started"
-          ? (permissionRecord.permissionMode ?? "hybrid")
-          : "hybrid"
     this.#snapshot.pendingPermissionRequests = []
     this.#snapshot.transcript = recordsToTranscript(projectVisibleSessionRecords(records))
     this.#snapshot.streamingText = ""
@@ -799,7 +760,7 @@ export class AizenCore implements CorePort {
       const actual = await this.#pi.restore({ cwd: this.#cwd, model, view, records: this.#records })
       this.#snapshot.currentModel = actual
       delete this.#snapshot.runtimeIssue
-      await this.#tryRememberSessionDefaults(actual, viewId, this.#snapshot.currentPermissionMode)
+      await this.#tryRememberSessionDefaults(actual, viewId)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.#snapshot.runtimeIssue = {
@@ -830,12 +791,6 @@ export class AizenCore implements CorePort {
       ...retained,
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(model) },
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
-      {
-        kind: "permission_mode_changed",
-        recordId: crypto.randomUUID(),
-        at,
-        permissionMode: this.#snapshot.currentPermissionMode ?? "hybrid",
-      },
       ...(renamed ? [{ kind: "session_renamed" as const, recordId: crypto.randomUUID(), at, name }] : []),
       ...(normalizeProjectPath(previousCwd) === normalizeProjectPath(this.#cwd)
         ? []
@@ -940,14 +895,12 @@ export class AizenCore implements CorePort {
       { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text }] },
     ]
     const firstUserMessage = this.#firstUserMessage() ?? text
-    const permissionMode = this.#snapshot.currentPermissionMode ?? "hybrid"
     const started: TurnStartedRecord = {
       kind: "turn_started",
       recordId: crypto.randomUUID(),
       turnId,
       at: new Date().toISOString(),
       viewId,
-      permissionMode,
       items,
     }
     await this.#store.append(sessionId, started)
@@ -970,7 +923,6 @@ export class AizenCore implements CorePort {
         sessionId,
         turnId,
         viewId,
-        permissionMode,
         ...(this.#snapshot.currentPermissionPreset ? { permissionPreset: this.#snapshot.currentPermissionPreset } : {}),
         ...(this.#snapshot.currentPermissionReviewMode
           ? { permissionReviewMode: this.#snapshot.currentPermissionReviewMode }
@@ -1079,23 +1031,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.currentViewId = viewId
     this.#snapshot.currentModel = actual
     delete this.#snapshot.runtimeIssue
-    await this.#tryRememberSessionDefaults(actual, viewId, this.#snapshot.currentPermissionMode)
-  }
-
-  async #setPermissionMode(permissionMode: PermissionMode): Promise<void> {
-    const sessionId = this.#snapshot.currentSessionId
-    if (!sessionId) throw new Error("请先新建或恢复会话")
-    const record: SessionRecord = {
-      kind: "permission_mode_changed",
-      recordId: crypto.randomUUID(),
-      at: new Date().toISOString(),
-      permissionMode,
-    }
-    await this.#store.append(sessionId, record)
-    this.#records.push(record)
-    this.#snapshot.currentPermissionMode = permissionMode
-    const model = this.#snapshot.currentModel
-    if (model) await this.#tryRememberSessionDefaults(model, this.#snapshot.currentViewId ?? null, permissionMode)
+    await this.#tryRememberSessionDefaults(actual, viewId)
   }
 
   /**
@@ -1184,11 +1120,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.currentModel = actual
     delete this.#snapshot.runtimeIssue
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
-    await this.#tryRememberSessionDefaults(
-      actual,
-      this.#snapshot.currentViewId ?? null,
-      this.#snapshot.currentPermissionMode,
-    )
+    await this.#tryRememberSessionDefaults(actual, this.#snapshot.currentViewId ?? null)
   }
 
   /**

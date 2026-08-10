@@ -1630,7 +1630,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   async function openSessionSettings(mode: "new" | "existing"): Promise<boolean> {
     let draft: SessionSettingsDraft = {
       viewId: null,
-      permissionMode: "hybrid",
       permissionPreset: "edit",
       permissionReviewMode: "manual",
     }
@@ -1651,21 +1650,18 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           draft = {
             model: modelWithPreferredThinkingLevel(available, preferred.model),
             viewId: preferred.viewId,
-            permissionMode: preferred.permissionMode ?? "hybrid",
             permissionPreset: preferred.permissionPreset ?? "edit",
             permissionReviewMode: preferred.permissionReviewMode ?? "manual",
           }
         } else
           draft = {
             viewId: preferred.viewId,
-            permissionMode: preferred.permissionMode ?? "hybrid",
             permissionPreset: preferred.permissionPreset ?? "edit",
             permissionReviewMode: preferred.permissionReviewMode ?? "manual",
           }
       } else
         draft = {
           viewId: preferred.viewId,
-          permissionMode: preferred.permissionMode ?? "hybrid",
           permissionPreset: preferred.permissionPreset ?? "edit",
           permissionReviewMode: preferred.permissionReviewMode ?? "manual",
         }
@@ -1686,7 +1682,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           ...(listed?.offThinkingLevel ? { offThinkingLevel: listed.offThinkingLevel } : {}),
         },
         viewId: snapshot.currentViewId ?? null,
-        permissionMode: snapshot.currentPermissionMode ?? "hybrid",
         permissionPreset: snapshot.currentPermissionPreset ?? "edit",
         permissionReviewMode: snapshot.currentPermissionReviewMode ?? "manual",
       }
@@ -1762,7 +1757,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               type: "create_session",
               model: draft.model,
               viewId: draft.viewId,
-              permissionMode: draft.permissionMode ?? "hybrid",
               permissionPreset: draft.permissionPreset ?? "edit",
               permissionReviewMode: draft.permissionReviewMode ?? "manual",
             },

@@ -36,7 +36,6 @@ test("超长 declaredIntent 被截断保存且不锁死会话", async () => {
       type: "create_session",
       model: option,
       viewId: null,
-      permissionMode: "hybrid",
       permissionPreset: "edit",
       permissionReviewMode: "autoApprove",
     })
