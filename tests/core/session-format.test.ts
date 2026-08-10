@@ -26,7 +26,7 @@ describe("会话格式", () => {
         kind: "model_changed",
         recordId: "r1",
         at: "2026-07-23T10:00:01.000Z",
-        model: { providerId: "anthropic", modelId: "model", api: "anthropic-messages", thinkingLevel: "medium" },
+        model: { providerId: "anthropic", modelId: "model", thinkingLevel: "medium" },
       },
       {
         kind: "view_changed",

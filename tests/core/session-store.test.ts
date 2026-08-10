@@ -58,7 +58,7 @@ describe("会话存储", () => {
         kind: "model_changed",
         recordId: "r1",
         at: "2026-07-23T10:00:01.000Z",
-        model: { providerId: "p", modelId: "m", api: "a", thinkingLevel: "off" },
+        model: { providerId: "p", modelId: "m", thinkingLevel: "off" },
       }),
       store.append("s1", {
         kind: "view_changed",

@@ -115,7 +115,6 @@ describe("认证与模型", () => {
     expect(await runtime.listModels()).toContainEqual({
       providerId: "example",
       modelId: "example-model",
-      api: "openai-completions",
       name: "示例模型",
       contextWindow: 128000,
       available: false,
@@ -260,7 +259,6 @@ describe("认证与模型", () => {
         model: {
           providerId: "example",
           modelId: "thinking-model",
-          api: "openai-completions",
           thinkingLevel: "标准",
         },
         view: { viewId: null, agentsFiles: [], skillPaths: [] },
@@ -321,7 +319,7 @@ describe("认证与模型", () => {
       expect(example?.available).toBe(true)
       await runtime.create({
         cwd: directory,
-        model: { providerId: "example", modelId: "example-model", api: "openai-completions" },
+        model: { providerId: "example", modelId: "example-model" },
         view: { viewId: null, agentsFiles: [], skillPaths: [] },
       })
 

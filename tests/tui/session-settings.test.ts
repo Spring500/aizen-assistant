@@ -13,22 +13,24 @@ const model = {
   available: true,
 }
 
-test("会话设置使用紧凑单行显示模型与视图", () => {
-  const items = sessionSettingsItems(
-    { model, viewId: "otter-builds-bridge" },
-    [
-      {
-        id: "otter-builds-bridge",
-        name: "代码审查",
-        path: "views/otter-builds-bridge",
-        directory: "E:/data/views/otter-builds-bridge",
-        valid: true,
-      },
-    ],
-    "new",
+const views = [
+  {
+    id: "otter-builds-bridge",
+    name: "代码审查",
+    path: "views/otter-builds-bridge",
+    directory: "E:/data/views/otter-builds-bridge",
+    valid: true,
+  },
+]
+
+const providerNames = new Map([["anthropic", "Anthropic"]])
+
+test("会话设置使用统一设置行显示模型与视图", () => {
+  const items = sessionSettingsItems({ model, viewId: "otter-builds-bridge" }, views, "new", [model], providerNames)
+  expect(items[0]?.segments.map((item) => item.text).join("")).toBe(
+    "当前模型  [ Anthropic · Claude Code Opus 4.8 · off ]",
   )
-  expect(items[0]?.segments.map((item) => item.text).join("")).toBe("当前模型  [ anthropic · Claude Code Opus 4.8 ]")
-  expect(items[1]?.segments.map((item) => item.text).join("")).toBe("当前视图  [ otter-builds-bridge · 代码审查 ]")
+  expect(items[1]?.segments.map((item) => item.text).join("")).toBe("当前视图  [ 代码审查 ]")
   expect(
     items
       .find((item) => item.value === "permission-preset")

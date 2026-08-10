@@ -101,7 +101,7 @@ test("状态栏视图模型根据运行状态生成统一内容", () => {
   const current = snapshot({
     status: "running",
     currentSessionId: "s1",
-    currentModel: { providerId: "test", modelId: "model", api: "a", thinkingLevel: "off", contextWindow: 1000 },
+    currentModel: { providerId: "test", modelId: "model", thinkingLevel: "off", contextWindow: 1000 },
     contextUsage: { used: 250, total: 1000 },
   })
   const view = statusBarView(current)
@@ -121,7 +121,6 @@ test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态"
         currentModel: {
           providerId: "test",
           modelId: "model",
-          api: "a",
           thinkingLevel: "off",
         },
         transcript: [
@@ -343,7 +342,6 @@ test("footer 显示回复耗时、生成 token 和上下文用量", async () => 
         currentModel: {
           providerId: "test",
           modelId: "model",
-          api: "a",
           thinkingLevel: "off",
           contextWindow: 200000,
         },

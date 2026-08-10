@@ -146,7 +146,7 @@ describe("pi 内存会话", () => {
         kind: "model_changed",
         recordId: "old-model",
         at: "2026-07-23T09:00:00.000Z",
-        model: { providerId: "deleted", modelId: "old-model", api: "openai-completions", thinkingLevel: "旧档位" },
+        model: { providerId: "deleted", modelId: "old-model", thinkingLevel: "旧档位" },
       },
       {
         kind: "turn_started",
@@ -235,7 +235,7 @@ describe("pi 内存会话", () => {
         message: {
           role: "assistant",
           parts: [{ kind: "text", text: "回复" }],
-          source: { providerId: model.providerId, modelId: model.modelId, api: model.api },
+          source: { providerId: model.providerId, modelId: model.modelId, api: "anthropic-messages" },
           stopReason: "stop",
           usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
         },
@@ -296,7 +296,7 @@ describe("pi 内存会话", () => {
         message: {
           role: "assistant",
           parts: [{ kind: "text", text: "意外中断输出" }],
-          source: { providerId: model.providerId, modelId: model.modelId, api: model.api },
+          source: { providerId: model.providerId, modelId: model.modelId, api: "anthropic-messages" },
           stopReason: "aborted",
           usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
         },
@@ -342,7 +342,7 @@ describe("pi 内存会话", () => {
         message: {
           role: "assistant",
           parts: [{ kind: "text", text: "旧回复" }],
-          source: { providerId: model.providerId, modelId: model.modelId, api: model.api },
+          source: { providerId: model.providerId, modelId: model.modelId, api: "anthropic-messages" },
           stopReason: "stop",
           usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
         },
@@ -422,7 +422,7 @@ describe("pi 内存会话", () => {
         message: {
           role: "assistant",
           parts: [{ kind: "text", text: "旧回复" }],
-          source: { providerId: model.providerId, modelId: model.modelId, api: model.api },
+          source: { providerId: model.providerId, modelId: model.modelId, api: "anthropic-messages" },
           stopReason: "stop",
           usage: { input: model.contextWindow ?? 1000000, output: 1, cacheRead: 0, cacheWrite: 0 },
         },

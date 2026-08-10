@@ -61,7 +61,7 @@ test("连续目录变更在下一轮对话前合并", () => {
       kind: "model_changed",
       recordId: "metadata",
       at,
-      model: { providerId: "test", modelId: "model", api: "anthropic-messages" },
+      model: { providerId: "test", modelId: "model" },
     },
     { kind: "working_directory_changed", recordId: "b-c", at, previousCwd: "B", currentCwd: "C" },
     {

@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises"
 import { atomicWriteFile } from "./file-transaction.ts"
-import type { ModelReference, ViewId } from "./session-format.ts"
+import { parseModelReference, type ModelReference, type ViewId } from "./session-format.ts"
 import {
   type PermissionPresetId,
   type PermissionReviewMode,
@@ -9,17 +9,12 @@ import {
 } from "./tool-permissions/policy-types.ts"
 import { type PermissionMode, permissionModes } from "./tool-permissions/types.ts"
 
-export type AgentModelReference = {
-  providerId: string
-  modelId: string
-}
-
 export type AgentPreferences = {
   sessionNaming: {
-    model?: AgentModelReference
+    model?: ModelReference
   }
   permissionReview?: {
-    model?: AgentModelReference
+    model?: ModelReference
   }
 }
 
@@ -72,15 +67,6 @@ function booleanValue(value: unknown, label: string): boolean {
   return value
 }
 
-function agentModelReference(value: unknown, label: string): AgentModelReference {
-  const source = object(value, label)
-  exact(source, ["providerId", "modelId"], label)
-  for (const key of ["providerId", "modelId"] as const) {
-    if (typeof source[key] !== "string" || !source[key]) throw new Error(`${label}.${key} 必须是非空字符串`)
-  }
-  return { providerId: source.providerId as string, modelId: source.modelId as string }
-}
-
 function permissionPreset(value: unknown): PermissionPresetId {
   if (!permissionPresetIds.includes(value as PermissionPresetId)) throw new Error("newSession.permissionPreset 无效")
   return value as PermissionPresetId
@@ -95,22 +81,6 @@ function permissionReviewMode(value: unknown): PermissionReviewMode {
 function permissionMode(value: unknown): PermissionMode {
   if (!permissionModes.includes(value as PermissionMode)) throw new Error("newSession.permissionMode 无效")
   return value as PermissionMode
-}
-
-function modelReference(value: unknown): ModelReference {
-  const source = object(value, "newSession.model")
-  exact(source, ["providerId", "modelId", "api", "thinkingLevel"], "newSession.model")
-  for (const key of ["providerId", "modelId", "api"] as const) {
-    if (typeof source[key] !== "string" || !source[key]) throw new Error(`newSession.model.${key} 必须是非空字符串`)
-  }
-  if (source.thinkingLevel !== undefined && (typeof source.thinkingLevel !== "string" || !source.thinkingLevel))
-    throw new Error("newSession.model.thinkingLevel 必须是非空字符串")
-  return {
-    providerId: source.providerId as string,
-    modelId: source.modelId as string,
-    api: source.api as string,
-    ...(source.thinkingLevel === undefined ? {} : { thinkingLevel: source.thinkingLevel as string }),
-  }
 }
 
 function foldPreferences(value: unknown): FoldPreferences {
@@ -139,7 +109,7 @@ export function parseAppPreferences(value: unknown): AppPreferences {
   exact(permissionReview, ["model"], "agents.permissionReview")
   return {
     newSession: {
-      ...(newSession.model === undefined ? {} : { model: modelReference(newSession.model) }),
+      ...(newSession.model === undefined ? {} : { model: parseModelReference(newSession.model, "newSession.model") }),
       viewId: newSession.viewId as ViewId,
       permissionMode: permissionMode(newSession.permissionMode),
       permissionPreset:
@@ -153,12 +123,12 @@ export function parseAppPreferences(value: unknown): AppPreferences {
       sessionNaming: {
         ...(sessionNaming.model === undefined
           ? {}
-          : { model: agentModelReference(sessionNaming.model, "agents.sessionNaming.model") }),
+          : { model: parseModelReference(sessionNaming.model, "agents.sessionNaming.model") }),
       },
       permissionReview: {
         ...(permissionReview.model === undefined
           ? {}
-          : { model: agentModelReference(permissionReview.model, "agents.permissionReview.model") }),
+          : { model: parseModelReference(permissionReview.model, "agents.permissionReview.model") }),
       },
     },
     fold: foldPreferences(source.fold),
@@ -245,7 +215,7 @@ function readStoredPreferences(value: unknown): { preferences: AppPreferences; w
     )
     if (newSession.model !== undefined) {
       try {
-        defaults.newSession.model = modelReference(newSession.model)
+        defaults.newSession.model = parseModelReference(newSession.model, "newSession.model")
       } catch (error) {
         issue(warnings, error instanceof Error ? error.message : String(error))
       }
@@ -260,7 +230,7 @@ function readStoredPreferences(value: unknown): { preferences: AppPreferences; w
       unknownFields(sessionNaming, ["model"], "agents.sessionNaming", warnings)
       if (sessionNaming.model !== undefined) {
         try {
-          defaults.agents.sessionNaming.model = agentModelReference(sessionNaming.model, "agents.sessionNaming.model")
+          defaults.agents.sessionNaming.model = parseModelReference(sessionNaming.model, "agents.sessionNaming.model")
         } catch (error) {
           issue(warnings, error instanceof Error ? error.message : String(error))
         }
@@ -272,7 +242,7 @@ function readStoredPreferences(value: unknown): { preferences: AppPreferences; w
       if (permissionReview.model !== undefined) {
         try {
           defaults.agents.permissionReview = {
-            model: agentModelReference(permissionReview.model, "agents.permissionReview.model"),
+            model: parseModelReference(permissionReview.model, "agents.permissionReview.model"),
           }
         } catch (error) {
           issue(warnings, error instanceof Error ? error.message : String(error))

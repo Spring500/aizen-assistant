@@ -18,7 +18,6 @@ const roots: string[] = []
 const model: ModelReference = {
   providerId: "fixture",
   modelId: "fixture-model",
-  api: "anthropic-messages",
   thinkingLevel: "off",
 }
 
