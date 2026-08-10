@@ -392,7 +392,7 @@ test("工具组和工具详情分别由布尔开关控制", async () => {
   }
 })
 
-test("同一轮内跨助手消息的连续工具调用合并为一个工具组", async () => {
+test("同一轮内跨助手消息的连续工具调用各自归档为独立块", async () => {
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
@@ -473,10 +473,12 @@ test("同一轮内跨助手消息的连续工具调用合并为一个工具组",
     )
     await setup.renderOnce()
     const output = setup.externalOutput.takeText().replace(/\s+/g, "")
-    expect(output).toContain("▼2个工具调用：bash/bash")
-    expect(output.match(/个工具调用/g)).toHaveLength(1)
+    // 工具完成即归档，每个工具独立成块，不再就地合并。
+    expect(output.match(/个工具调用/g)).toHaveLength(2)
     expect(output).toContain("[bash]运行测试")
     expect(output).toContain("[bash]检查类型")
+    expect(output).toContain("first")
+    expect(output).toContain("second")
   } finally {
     setup.renderer.destroy()
   }
@@ -568,6 +570,218 @@ test("历史没有变化时不重复写入 scrollback", async () => {
     await view.update({ ...current, status: "running", streamingText: "working" })
     await setup.renderOnce()
     expect(setup.externalOutput.take()).toHaveLength(0)
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("工具调用进行中不生成历史块，完成后才归档", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    const running = snapshot({
+      preferences: {
+        ...structuredClone(defaultAppPreferences),
+        fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
+      },
+      transcript: [
+        {
+          type: "message",
+          turnId: "t1",
+          message: {
+            role: "assistant",
+            parts: [
+              {
+                kind: "tool_call",
+                callId: "c1",
+                name: "bash",
+                arguments: { command: "bun test" },
+                declaredIntent: "运行测试",
+              },
+            ],
+            source: { providerId: "test", modelId: "model", api: "a" },
+            stopReason: "tool_use",
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+      ],
+    })
+    // 工具尚无结果：历史不生成块（由 footer 输出区展示）。
+    await view.update(running)
+    await setup.renderOnce()
+    expect(setup.externalOutput.takeText()).not.toContain("bun test")
+
+    // 工具结果到达：追加一次成型的归档块。
+    await view.update(
+      snapshot({
+        preferences: {
+          ...structuredClone(defaultAppPreferences),
+          fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
+        },
+        transcript: [
+          ...(running.transcript as NonNullable<typeof running.transcript>),
+          {
+            type: "message",
+            turnId: "t1",
+            message: {
+              role: "tool",
+              callId: "c1",
+              name: "bash",
+              parts: [{ kind: "text", text: "all passed" }],
+              isError: false,
+            },
+          },
+        ],
+      }),
+    )
+    await setup.renderOnce()
+    const history = setup.externalOutput.takeText().replace(/\s+/g, "")
+    expect(history).toContain("[bash]运行测试")
+    expect(history).toContain("✓allpassed")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("工具逐个完成后追加归档块，不触发全量重放", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    const transcript: CoreSnapshot["transcript"] = [
+      {
+        type: "message",
+        turnId: "t1",
+        message: {
+          role: "assistant",
+          parts: [
+            {
+              kind: "tool_call",
+              callId: "c1",
+              name: "bash",
+              arguments: { command: "bun test" },
+              declaredIntent: "运行测试",
+            },
+          ],
+          source: { providerId: "test", modelId: "model", api: "a" },
+          stopReason: "tool_use",
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+      {
+        type: "message",
+        turnId: "t1",
+        message: {
+          role: "tool",
+          callId: "c1",
+          name: "bash",
+          parts: [{ kind: "text", text: "first done" }],
+          isError: false,
+        },
+      },
+    ]
+    await view.update(
+      snapshot({
+        preferences: {
+          ...structuredClone(defaultAppPreferences),
+          fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
+        },
+        transcript,
+      }),
+    )
+    await setup.renderOnce()
+    const firstText = setup.externalOutput.takeText().replace(/\s+/g, "")
+    expect(firstText).toContain("[bash]运行测试")
+    expect(firstText).toContain("buntest")
+
+    // 第二个工具也完成后，只追加其归档块，已归档的第一个工具不得被重放。
+    await view.update(
+      snapshot({
+        preferences: {
+          ...structuredClone(defaultAppPreferences),
+          fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
+        },
+        transcript: [
+          ...transcript,
+          {
+            type: "message",
+            turnId: "t1",
+            message: {
+              role: "assistant",
+              parts: [
+                {
+                  kind: "tool_call",
+                  callId: "c2",
+                  name: "bash",
+                  arguments: { command: "bun run typecheck" },
+                  declaredIntent: "检查类型",
+                },
+              ],
+              source: { providerId: "test", modelId: "model", api: "a" },
+              stopReason: "tool_use",
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+          {
+            type: "message",
+            turnId: "t1",
+            message: {
+              role: "tool",
+              callId: "c2",
+              name: "bash",
+              parts: [{ kind: "text", text: "second done" }],
+              isError: false,
+            },
+          },
+        ],
+      }),
+    )
+    await setup.renderOnce()
+    const appended = setup.externalOutput.takeText().replace(/\s+/g, "")
+    expect(appended).toContain("bunruntypecheck")
+    expect(appended).not.toContain("buntest")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("轮次中止时未响应的工具调用兜底归档", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    await view.update(
+      snapshot({
+        preferences: {
+          ...structuredClone(defaultAppPreferences),
+          fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
+        },
+        transcript: [
+          {
+            type: "message",
+            turnId: "t1",
+            message: {
+              role: "assistant",
+              parts: [
+                {
+                  kind: "tool_call",
+                  callId: "c1",
+                  name: "bash",
+                  arguments: { command: "bun test" },
+                  declaredIntent: "运行测试",
+                },
+              ],
+              source: { providerId: "test", modelId: "model", api: "a" },
+              stopReason: "tool_use",
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+          { type: "turn_end", turnId: "t1", outcome: "aborted" },
+        ],
+      }),
+    )
+    await setup.renderOnce()
+    const history = setup.externalOutput.takeText().replace(/\s+/g, "")
+    expect(history).toContain("未响应（本轮已中止/失败）")
+    expect(history).toContain("[已中止]")
   } finally {
     setup.renderer.destroy()
   }

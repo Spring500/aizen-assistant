@@ -263,43 +263,22 @@ function toolDisplay(call: ToolCallPart, result: ToolMessage | undefined): ToolD
   }
 }
 
-function groupTiming(tools: ToolDisplay[]): Timing | undefined {
-  const timings = tools.flatMap((tool) => (tool.timing ? [tool.timing] : []))
-  if (timings.length === 0) return undefined
-  return {
-    startedAt: Math.min(...timings.map((item) => item.startedAt)),
-    finishedAt: Math.max(...timings.map((item) => item.finishedAt)),
-  }
-}
-
-function mergeConsecutiveToolGroups(blocks: DisplayBlock[]): DisplayBlock[] {
-  const merged: DisplayBlock[] = []
-  for (const block of blocks) {
-    const previous = merged.at(-1)
-    if (block.kind !== "tool_group" || previous?.kind !== "tool_group" || previous.turnId !== block.turnId) {
-      merged.push(block)
-      continue
-    }
-    const tools = [...previous.tools, ...block.tools]
-    const timing = groupTiming(tools)
-    merged[merged.length - 1] = {
-      kind: "tool_group",
-      id: `tools-${tools.map((tool) => tool.id).join("-")}`,
-      turnId: block.turnId,
-      tools,
-      ...(timing ? { timing } : {}),
-    }
-  }
-  return merged
-}
-
 function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
   const results = new Map<string, ToolMessage>()
   const calls = new Set<string>()
+  // 记录每个轮次发出的工具调用，用于轮次结束时对未响应调用的兜底归档。
+  const turnCalls = new Map<string, ToolCallPart[]>()
   for (const entry of snapshot.transcript) {
     if (entry.type !== "message") continue
     if (entry.message.role === "tool") results.set(entry.message.callId, entry.message)
-    else for (const part of entry.message.parts) if (part.kind === "tool_call") calls.add(part.callId)
+    else {
+      const callsInTurn = entry.message.parts.filter((part) => part.kind === "tool_call")
+      if (callsInTurn.length > 0) {
+        const existing = turnCalls.get(entry.turnId) ?? []
+        turnCalls.set(entry.turnId, [...existing, ...callsInTurn])
+      }
+      for (const part of callsInTurn) calls.add(part.callId)
+    }
   }
 
   const blocks: DisplayBlock[] = []
@@ -326,7 +305,6 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
       }
     } else if (entry.type === "message") {
       if (entry.message.role === "assistant") {
-        const tools: ToolDisplay[] = []
         for (const [partIndex, part] of entry.message.parts.entries()) {
           if (part.kind === "text")
             blocks.push({
@@ -344,17 +322,18 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
               content: part.text,
               ...(part.timing ? { timing: part.timing } : {}),
             })
-          else tools.push(toolDisplay(part, results.get(part.callId)))
-        }
-        if (tools.length > 0) {
-          const timing = groupTiming(tools)
-          blocks.push({
-            kind: "tool_group",
-            id: `tools-${tools.map((tool) => tool.id).join("-")}`,
-            turnId: entry.turnId,
-            tools,
-            ...(timing ? { timing } : {}),
-          })
+          else if (part.kind === "tool_call" && results.has(part.callId)) {
+            // 仅当工具已有结果时才归档为历史块（一次成型，永不就地变化）；
+            // 进行中的工具调用由 footer 输出区展示。
+            const tool = toolDisplay(part, results.get(part.callId))
+            blocks.push({
+              kind: "tool_group",
+              id: `tools-${part.callId}`,
+              turnId: entry.turnId,
+              tools: [tool],
+              ...(tool.timing ? { timing: tool.timing } : {}),
+            })
+          }
         }
       } else if (!calls.has(entry.message.callId)) {
         const tool: ToolDisplay = {
@@ -374,7 +353,26 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
           ...(tool.timing ? { timing: tool.timing } : {}),
         })
       }
-    } else if (entry.outcome !== "completed") {
+    } else if (entry.type === "turn_end" && entry.outcome !== "completed") {
+      // 轮次非正常结束：该轮未响应的工具调用永久不会得到结果，兜底补记。
+      for (const call of turnCalls.get(entry.turnId) ?? []) {
+        if (results.has(call.callId)) continue
+        const tool: ToolDisplay = {
+          id: call.callId,
+          name: call.name,
+          ...(call.declaredIntent ? { intent: call.declaredIntent } : {}),
+          input: toolInputText(call.name, call.arguments),
+          output: "未响应（本轮已中止/失败）",
+          isError: true,
+          waiting: false,
+        }
+        blocks.push({
+          kind: "tool_group",
+          id: `tools-${call.callId}`,
+          turnId: entry.turnId,
+          tools: [tool],
+        })
+      }
       blocks.push({
         kind: "plain",
         id: `outcome-${entry.turnId}`,
@@ -383,7 +381,7 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
       })
     }
   }
-  return mergeConsecutiveToolGroups(blocks)
+  return blocks
 }
 
 function makeBox(context: RenderContext, id: string, color: string, marginBottom = 0): BoxRenderable {
