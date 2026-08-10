@@ -204,3 +204,24 @@ test("上下键切换候选且 Esc 关闭后保留输入", async () => {
     setup.renderer.destroy()
   }
 })
+
+test("命令补全弹出与收起不改变 footer 高度", async () => {
+  const setup = await createTestRenderer({ width: 60, height: 16, screenMode: "split-footer", footerHeight: 12 })
+  try {
+    const editor = createChatEditor(
+      setup.renderer,
+      { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} },
+      commands,
+    )
+    const before = setup.renderer.footerHeight
+    editor.input.setText("/")
+    await Bun.sleep(1)
+    expect(setup.renderer.footerHeight).toBe(before)
+    editor.input.setText("普通文本")
+    await Bun.sleep(1)
+    expect(setup.renderer.footerHeight).toBe(before)
+    editor.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
