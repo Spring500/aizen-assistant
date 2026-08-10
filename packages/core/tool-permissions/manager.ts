@@ -174,9 +174,7 @@ export class ToolPermissionManager {
           assessment: {
             summary: "完全开放模式",
             targets: [],
-            risk: "low",
             reason: "当前会话允许直接执行工具",
-            findings: [],
           },
           source: "mode",
         },
@@ -315,9 +313,7 @@ export class ToolPermissionManager {
     const assessment = decision?.assessment ?? {
       summary: request.toolName,
       targets: [],
-      risk: "high" as const,
       reason: error ?? "需要用户判断",
-      findings: [],
     }
     if (request.mode === "aiOnly")
       return {

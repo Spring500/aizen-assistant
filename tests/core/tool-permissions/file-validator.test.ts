@@ -68,7 +68,7 @@ test("edit 匹配失败直接返回无法执行", async () => {
   )
   expect(result.type).toBe("deny")
   expect(result.assessment.reason).toContain("没有匹配")
-  expect(result.assessment.findings).toMatchObject([{ category: "edit-preview" }])
+  expect(result.assessment.details).toMatchObject({ previewError: expect.any(String) })
 })
 
 test("依赖清单交给AI审核并说明执行影响", async () => {
@@ -77,7 +77,7 @@ test("依赖清单交给AI审核并说明执行影响", async () => {
     request(root, "write", { path: "package.json", content: "{}" }),
   )
   expect(result.type).toBe("needAiReview")
-  expect(result.assessment.findings).toMatchObject([{ category: "execution-sensitive-file" }])
+  expect(result.assessment.reason).toContain("执行或发布")
   expect(result.assessment.coverageGaps).toMatchObject([{ code: "file.execution-impact-coarse-rule" }])
 })
 
@@ -99,7 +99,7 @@ test("工作区外和敏感路径交给人工", async () => {
     request(root, "read", { path: join(outside, "secret.txt") }),
   )
   expect(outsideResult.type).toBe("needHumanReview")
-  expect(outsideResult.assessment.findings).toMatchObject([{ category: "outside-workspace" }])
+  expect(outsideResult.assessment.reason).toContain("工作区外")
   await mkdir(join(root, ".git"))
   await writeFile(join(root, ".git", "config"), "x")
   expect((await createFileValidator("read").validate(request(root, "read", { path: ".git/config" }))).type).toBe(

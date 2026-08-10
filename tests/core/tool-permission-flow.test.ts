@@ -93,9 +93,7 @@ test("Core允许第三方工具注入同一验证器接口", async () => {
             assessment: {
               summary: "第三方工具",
               targets: [],
-              risk: "low",
               reason: "第三方固定规则允许",
-              findings: [],
             },
           }),
         },

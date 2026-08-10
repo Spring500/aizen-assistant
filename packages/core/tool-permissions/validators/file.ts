@@ -135,29 +135,14 @@ function details(toolName: string, path: string, input: Record<string, JsonValue
 function assessment(
   summary: string,
   target: string,
-  risk: ToolAssessment["risk"],
   reason: string,
   normalizedArguments: JsonValue,
   localDetails: JsonValue,
 ): ToolAssessment {
-  const finding =
-    risk === "low"
-      ? []
-      : [
-          {
-            severity:
-              risk === "medium" ? ("medium" as const) : risk === "high" ? ("high" as const) : ("critical" as const),
-            category: "file-target",
-            summary: reason,
-            evidence: target,
-          },
-        ]
   return {
     summary,
     targets: [target],
-    risk,
     reason,
-    findings: finding,
     normalizedArguments,
     details: localDetails,
     match: { path: target },
@@ -173,7 +158,7 @@ export function createFileValidator(toolName: "read" | "write" | "edit"): ToolPe
       const input = object(request.arguments)
       const rawPath = input?.path
       if (!input || typeof rawPath !== "string" || !rawPath.trim()) {
-        const invalid = assessment(toolName, "", "critical", "文件路径无效", request.arguments, request.arguments)
+        const invalid = assessment(toolName, "", "文件路径无效", request.arguments, request.arguments)
         return { type: "deny", reason: invalid.reason, assessment: invalid }
       }
       const absolute = resolve(request.cwd, rawPath)
@@ -184,7 +169,6 @@ export function createFileValidator(toolName: "read" | "write" | "edit"): ToolPe
         const invalid = assessment(
           `${toolName} ${absolute}`,
           absolute,
-          "critical",
           error instanceof Error ? error.message : String(error),
           request.arguments,
           details(toolName, absolute, input),
@@ -198,7 +182,6 @@ export function createFileValidator(toolName: "read" | "write" | "edit"): ToolPe
       const analyzed = assessment(
         `${action} ${resolved.target}`,
         resolved.target,
-        "low",
         "目标位于工作区内的普通文件",
         normalized,
         localDetails,
@@ -210,59 +193,23 @@ export function createFileValidator(toolName: "read" | "write" | "edit"): ToolPe
         !Array.isArray(localDetails) &&
         typeof localDetails.previewError === "string"
       ) {
-        analyzed.risk = "high"
         analyzed.reason = `无法可靠预演编辑：${localDetails.previewError}`
-        analyzed.findings = [
-          {
-            severity: "high",
-            category: "edit-preview",
-            summary: "无法生成可靠 diff",
-            evidence: localDetails.previewError,
-          },
-        ]
         return { type: "deny", reason: analyzed.reason, assessment: analyzed }
       }
       const root = await realpath(request.cwd).catch(() => resolve(request.cwd))
       if (!inside(root, resolved.target) || sensitivePath(resolved.target)) {
-        analyzed.risk = "high"
         analyzed.reason = !inside(root, resolved.target) ? "目标位于工作区外" : "目标属于敏感路径"
-        analyzed.findings = [
-          {
-            severity: "high",
-            category: !inside(root, resolved.target) ? "outside-workspace" : "sensitive-path",
-            summary: analyzed.reason,
-            evidence: resolved.target,
-          },
-        ]
         return { type: "needHumanReview", assessment: analyzed }
       }
       if (toolName === "read") return { type: "allow", assessment: analyzed }
       if (containsSensitiveField(request.arguments)) {
-        analyzed.risk = "high"
         analyzed.reason = "工具参数包含敏感字段"
-        analyzed.findings = [
-          {
-            severity: "high",
-            category: "sensitive-argument",
-            summary: analyzed.reason,
-            evidence: resolved.target,
-          },
-        ]
         return { type: "needHumanReview", assessment: analyzed }
       }
       const extension = extname(resolved.target).toLowerCase()
       if (executionSensitive(resolved.target) || (!ordinaryExtensions.has(extension) && extension !== "")) {
         const classifiedByFallback = !executionSensitive(resolved.target)
-        analyzed.risk = "medium"
         analyzed.reason = "目标可能影响后续执行或发布"
-        analyzed.findings = [
-          {
-            severity: "medium",
-            category: "execution-sensitive-file",
-            summary: analyzed.reason,
-            evidence: resolved.target,
-          },
-        ]
         analyzed.coverageGaps = [
           classifiedByFallback
             ? {

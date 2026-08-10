@@ -19,11 +19,11 @@ test("审核拒绝向 Agent 附加实际发生的原因链", () => {
   ).toBe(`Operation denied: User denied permission. Reason: 不允许发布
 
 Permission review:
-1. Validator: needAiReview
+1. Validator: requires AI review
    Reason: 命令会执行发布脚本
-2. AI reviewer: needHumanReview
+2. AI reviewer: requires human review
    Reason: 无法确认目标环境
-3. User: deny
+3. User: denied
    Reason: 不允许发布`)
 })
 

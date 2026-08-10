@@ -2,7 +2,6 @@ import { isAbsolute, relative, resolve } from "node:path"
 import type { JsonValue } from "../../session-format.ts"
 import type {
   PermissionCoverageGap,
-  PermissionFinding,
   ToolAssessment,
   ToolPermissionDecision,
   ToolPermissionRequest,
@@ -187,32 +186,19 @@ function pathArguments(tokens: string[]): string[] {
 
 function assessment(
   command: string,
-  risk: ToolAssessment["risk"],
   reason: string,
   targets: string[] = [],
-  findings: PermissionFinding[] = [],
   coverageGaps: PermissionCoverageGap[] = [],
 ): ToolAssessment {
   return {
     summary: `执行命令：${command}`,
     targets,
-    risk,
     reason,
-    findings,
     ...(coverageGaps.length > 0 ? { coverageGaps } : {}),
     details: { command },
     match: { command },
     recoveryChecks: ["检查命令涉及的文件、进程或远程资源是否已发生变化"],
   }
-}
-
-function finding(
-  severity: PermissionFinding["severity"],
-  category: string,
-  summary: string,
-  evidence: string,
-): PermissionFinding {
-  return { severity, category, summary, evidence }
 }
 
 function coverageGap(
@@ -235,21 +221,13 @@ function networkReview(tokens: string[], request: ToolPermissionRequest, command
   const method =
     methodIndex >= 0 ? unquote(tokens[methodIndex + 1] ?? "").toUpperCase() : executable === "wget" ? "GET" : "GET"
   const reason = "网络请求需要审核"
-  const severity = dynamic || upload || !["GET", "HEAD"].includes(method) ? "high" : "medium"
   const networkGap = coverageGap(
     "bash.network-coarse-rule",
     "coarse-rule",
     "网络命令只按有限参数和请求方法分类",
     command,
   )
-  const analyzed = assessment(
-    command,
-    severity,
-    reason,
-    target ? [unquote(target)] : [],
-    [finding(severity, "network", reason, command)],
-    [networkGap],
-  )
+  const analyzed = assessment(command, reason, target ? [unquote(target)] : [], [networkGap])
   if (dynamic || upload || !["GET", "HEAD"].includes(method)) return { type: "needHumanReview", assessment: analyzed }
   return {
     type: "needAiReview",
@@ -273,9 +251,7 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
       type: "needHumanReview",
       assessment: assessment(
         segment,
-        "high",
         "命令无法可靠解析",
-        [],
         [],
         [coverageGap("bash.parse-failure", "parse-failure", "命令无法可靠解析", segment)],
       ),
@@ -288,13 +264,7 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
   if (humanCommands.has(executable))
     return {
       type: "needHumanReview",
-      assessment: assessment(
-        segment,
-        "high",
-        "命令会修改系统级状态",
-        [],
-        [finding("high", "system-mutation", "命令会修改系统级状态", segment)],
-      ),
+      assessment: assessment(segment, "命令会修改系统级状态"),
     }
   if (networkCommands.has(executable)) return networkReview(tokens, request, segment)
   if (executable === "git") {
@@ -303,25 +273,17 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
       .find((token) => !token.startsWith("-"))
       ?.toLowerCase()
     if (subcommand && safeGitCommands.has(subcommand))
-      return { type: "allow", assessment: assessment(segment, "low", "只读 Git 查询") }
+      return { type: "allow", assessment: assessment(segment, "只读 Git 查询") }
     if (subcommand && remoteMutationCommands.has(subcommand))
       return {
         type: "needHumanReview",
-        assessment: assessment(
-          segment,
-          "high",
-          "Git 远程操作需要用户判断",
-          [],
-          [finding("high", "remote-mutation", "Git 远程操作需要用户判断", segment)],
-        ),
+        assessment: assessment(segment, "Git 远程操作需要用户判断"),
       }
     return {
       type: "needAiReview",
       assessment: assessment(
         segment,
-        "medium",
         "Git 操作可能修改工作区或历史",
-        [],
         [],
         [coverageGap("bash.git-coarse-rule", "coarse-rule", "Git 子命令没有精细规则", segment)],
       ),
@@ -343,13 +305,7 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
     )
       return {
         type: "needHumanReview",
-        assessment: assessment(
-          segment,
-          "high",
-          "rg 参数会调用其他程序",
-          [],
-          [finding("high", "dynamic-execution", "rg 参数会调用其他程序", segment)],
-        ),
+        assessment: assessment(segment, "rg 参数会调用其他程序"),
       }
     const targets = pathArguments(tokens)
       .map((path) => resolve(request.cwd, path))
@@ -357,20 +313,16 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
     if (targets.some((path) => !inside(resolve(request.cwd), path)))
       return {
         type: "needHumanReview",
-        assessment: assessment(segment, "high", "命令读取工作区外路径", targets, [
-          finding("high", "outside-workspace", "命令读取工作区外路径", segment),
-        ]),
+        assessment: assessment(segment, "命令读取工作区外路径", targets),
       }
-    return { type: "allow", assessment: assessment(segment, "low", "命中保守只读命令规则", targets) }
+    return { type: "allow", assessment: assessment(segment, "命中保守只读命令规则", targets) }
   }
   if (packageCommands.has(executable))
     return {
       type: "needAiReview",
       assessment: assessment(
         segment,
-        "medium",
         "包管理或构建命令可能写入文件并执行脚本",
-        [],
         [],
         [coverageGap("bash.package-coarse-rule", "coarse-rule", "包管理命令没有按子命令精细分类", segment)],
       ),
@@ -381,20 +333,13 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
     if (targets.some((path) => !inside(resolve(request.cwd), path)))
       return {
         type: "needHumanReview",
-        assessment: assessment(segment, "high", "命令修改工作区外路径", targets, [
-          finding("high", "outside-workspace", "命令修改工作区外路径", segment),
-        ]),
+        assessment: assessment(segment, "命令修改工作区外路径", targets),
       }
     return {
       type: "needAiReview",
-      assessment: assessment(
-        segment,
-        "medium",
-        "命令会修改工作区文件",
-        targets,
-        [],
-        [coverageGap("bash.filesystem-coarse-rule", "coarse-rule", "文件操作只按目标是否位于工作区分类", segment)],
-      ),
+      assessment: assessment(segment, "命令会修改工作区文件", targets, [
+        coverageGap("bash.filesystem-coarse-rule", "coarse-rule", "文件操作只按目标是否位于工作区分类", segment),
+      ]),
       reviewPayload: { command: segment, targets, declaredIntent: request.declaredIntent },
     }
   }
@@ -402,9 +347,7 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
     type: "needAiReview",
     assessment: assessment(
       segment,
-      "medium",
       "可执行命令未命中只读规则",
-      [],
       [],
       [coverageGap("bash.command-rule-miss", "rule-miss", "可执行命令未命中语义规则", segment)],
     ),
@@ -415,13 +358,11 @@ function simpleDecision(segment: string, request: ToolPermissionRequest): ToolPe
 function combine(left: ToolPermissionDecision, right: ToolPermissionDecision): ToolPermissionDecision {
   const rank = { allow: 0, needAiReview: 1, needHumanReview: 2, deny: 3 } as const
   const selected = rank[right.type] > rank[left.type] ? right : left
-  const findings = [...left.assessment.findings, ...right.assessment.findings]
   const coverageGaps = [...(left.assessment.coverageGaps ?? []), ...(right.assessment.coverageGaps ?? [])]
   const targets = [...new Set([...left.assessment.targets, ...right.assessment.targets])]
   const assessment = {
     ...selected.assessment,
     targets,
-    findings,
     ...(coverageGaps.length > 0 ? { coverageGaps } : {}),
   }
   return selected.type === "deny"
@@ -441,18 +382,12 @@ export function createBashValidator(): ToolPermissionValidator {
       const input = object(request.arguments)
       const command = input?.command
       if (!input || typeof command !== "string" || !command.trim()) {
-        const invalid = assessment("", "critical", "命令为空或格式无效")
+        const invalid = assessment("", "命令为空或格式无效")
         return { type: "deny", reason: invalid.reason, assessment: invalid }
       }
       if (destructiveRoot.test(command) || forkBomb.test(command)) {
         const reason = "命令命中明确的全系统破坏模式"
-        const destructive = assessment(
-          command,
-          "critical",
-          reason,
-          [],
-          [finding("critical", "system-destruction", reason, command)],
-        )
+        const destructive = assessment(command, reason)
         return { type: "deny", reason: destructive.reason, assessment: destructive }
       }
       if (request.environment && object(request.environment)?.shell !== "git-bash")
@@ -460,9 +395,7 @@ export function createBashValidator(): ToolPermissionValidator {
           type: "needHumanReview",
           assessment: assessment(
             command,
-            "high",
             "当前 Shell 不在首期分析范围内",
-            [],
             [],
             [coverageGap("bash.unsupported-shell", "unsupported-environment", "当前 Shell 不在分析范围内")],
           ),
@@ -472,9 +405,7 @@ export function createBashValidator(): ToolPermissionValidator {
           type: "needHumanReview",
           assessment: assessment(
             command,
-            "high",
             "命令使用了首期不可靠支持的动态语法",
-            [],
             [],
             [coverageGap("bash.unsupported-syntax", "unsupported-syntax", "命令使用了不可靠支持的语法", command)],
           ),
@@ -485,9 +416,7 @@ export function createBashValidator(): ToolPermissionValidator {
           type: "needHumanReview",
           assessment: assessment(
             command,
-            "high",
             "命令无法可靠拆分",
-            [],
             [],
             [coverageGap("bash.parse-failure", "parse-failure", "命令无法可靠拆分", command)],
           ),

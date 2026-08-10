@@ -177,7 +177,7 @@ test("真实 pi 链路将权限拒绝结果返回模型", async () => {
     const second = await mock.take({ modelId: option.modelId })
     const messages = JSON.stringify(second.messages)
     expect(messages).toContain("permission-call")
-    expect(messages).toContain('Operation denied: rule \\"unknown\\" requires human approval and was denied.')
+    expect(messages).toContain('Operation denied: rule \\"Unclassifiable\\" requires human approval and was denied.')
     second.respond({ type: "text", text: "已停止操作" })
     expect(await sending).toEqual({ ok: true })
     expect(
@@ -269,7 +269,7 @@ test("批次提交后中止会保留已完成项并停止运行项", async () =>
       toolName,
       validate: async () => ({
         type: "needHumanReview" as const,
-        assessment: { summary: toolName, targets: [], risk: "medium" as const, reason: "测试人工审批", findings: [] },
+        assessment: { summary: toolName, targets: [], reason: "测试人工审批" },
       }),
     })
     const core = new AizenCore({
@@ -413,9 +413,7 @@ test("真实 pi 链路执行项目自有联合注册工具", async () => {
               assessment: {
                 summary: "返回输入文本",
                 targets: [],
-                risk: "low",
                 reason: "无副作用",
-                findings: [],
                 normalizedArguments: request.arguments,
               },
             }),

@@ -57,7 +57,7 @@ function setup(decision: ToolPermissionDecision, aiType: "allow" | "deny" | "nee
   }
 }
 
-const assessment = { summary: "动作", targets: [], risk: "low" as const, reason: "测试", findings: [] }
+const assessment = { summary: "动作", targets: [], reason: "测试" }
 
 describe("ToolPermissionManager", () => {
   test("完全开放模式不启用收集器时不调用验证器", async () => {

@@ -8,12 +8,22 @@ const stageLabels: Record<PermissionReviewStep["stage"], string> = {
   system: "System",
 }
 
+/** 审核档位到英文可读名的映射，避免内部标识直接暴露给 Agent。 */
+const decisionLabels: Record<string, string> = {
+  allow: "allowed",
+  deny: "denied",
+  needAiReview: "requires AI review",
+  needHumanReview: "requires human review",
+  error: "error",
+  aborted: "aborted",
+}
+
 /** 将已经实际发生的审核环节附加到工具结果，供 Agent 理解失败或中断原因。 */
 export function appendPermissionReview(message: string, steps: PermissionReviewStep[] | undefined): string {
   if (!steps || steps.length === 0) return message
   const safeSteps = sanitizeReviewPayload(steps) as unknown as PermissionReviewStep[]
   const lines = safeSteps.flatMap((step, index) => [
-    `${index + 1}. ${stageLabels[step.stage]}: ${step.decision}`,
+    `${index + 1}. ${stageLabels[step.stage]}: ${decisionLabels[step.decision] ?? step.decision}`,
     `   Reason: ${step.reason}`,
   ])
   return `${message}\n\nPermission review:\n${lines.join("\n")}`

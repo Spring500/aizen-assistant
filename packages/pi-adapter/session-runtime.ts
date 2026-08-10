@@ -836,10 +836,15 @@ export class PiSessionRuntime implements PiPort {
   #requireAllowed(authorization: ToolAuthorization): Extract<ToolAuthorization, { type: "allow" }> {
     if (authorization.type === "allow") return authorization
     if (authorization.type === "aborted") throw new Error(permissionFailureMessage(authorization))
-    if (
-      authorization.source === "validator" &&
-      authorization.assessment?.findings.some((item) => item.category === "edit-preview")
-    )
+    // 编辑预览失败不是权限拒绝，而是无法生成可靠 diff，用 Operation failed 呈现。
+    const previewError =
+      authorization.assessment?.details &&
+      typeof authorization.assessment.details === "object" &&
+      !Array.isArray(authorization.assessment.details) &&
+      typeof authorization.assessment.details.previewError === "string"
+        ? authorization.assessment.details.previewError
+        : undefined
+    if (authorization.source === "validator" && previewError !== undefined)
       throw new Error(`Operation failed: ${authorization.reason}`)
     const message = permissionFailureMessage(authorization)
     throw new Error(

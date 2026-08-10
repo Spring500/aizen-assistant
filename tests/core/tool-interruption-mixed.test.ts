@@ -94,7 +94,7 @@ test("多工具批次按各自持久化阶段恢复", async () => {
             type: "allow",
             source: "validator",
             arguments: {},
-            assessment: { summary: "执行", targets: [], risk: "medium", reason: "允许", findings: [] },
+            assessment: { summary: "执行", targets: [], reason: "允许" },
           },
         },
       },

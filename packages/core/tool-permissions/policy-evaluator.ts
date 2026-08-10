@@ -8,6 +8,8 @@ import type {
 export type PermissionClassification = { kind: "claims"; claims: PermissionClaim[] } | { kind: "unknown" }
 
 export type PermissionPolicyEvaluation = {
+  /** 分类结果的语义：claims 表示至少一个分类器作出断言；unknown 表示全员弃权或无法判定。 */
+  kind: "claims" | "unknown"
   disposition: PermissionDisposition
   decisiveKey?: ConfigurablePermissionKey | "violation"
   claims: PermissionClaim[]
@@ -27,6 +29,7 @@ export function evaluatePermissionPolicy(
 ): PermissionPolicyEvaluation {
   if (classification.kind === "unknown") {
     return {
+      kind: "unknown",
       disposition: policy.dispositions.unknown ?? "needHumanReview",
       decisiveKey: "unknown",
       claims: [],
@@ -35,12 +38,13 @@ export function evaluatePermissionPolicy(
   const violation = classification.claims.find((claim) => claim.tag === "violation")
   if (violation) {
     return {
+      kind: "claims",
       disposition: "deny",
       decisiveKey: "violation",
       claims: classification.claims,
     }
   }
-  if (classification.claims.length === 0) return { disposition: "allow", claims: [] }
+  if (classification.claims.length === 0) return { kind: "claims", disposition: "allow", claims: [] }
 
   let disposition: PermissionDisposition = "allow"
   let decisiveKey: ConfigurablePermissionKey | undefined
@@ -53,6 +57,7 @@ export function evaluatePermissionPolicy(
     }
   }
   return {
+    kind: "claims",
     disposition,
     ...(decisiveKey === undefined ? {} : { decisiveKey }),
     claims: classification.claims,

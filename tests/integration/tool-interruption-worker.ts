@@ -126,14 +126,12 @@ async function main(): Promise<void> {
             const assessment = {
               summary: "写入检查点副作用",
               targets: [join(input.root, "effect.txt")],
-              risk: "medium" as const,
               reason:
                 input.checkpoint === "permissionRequested"
                   ? "需要人工确认"
                   : input.checkpoint === "authorizedDenied"
                     ? "测试拒绝执行"
                     : "测试允许执行",
-              findings: [],
             }
             if (input.checkpoint === "permissionRequested") return { type: "needHumanReview" as const, assessment }
             if (input.checkpoint === "authorizedDenied")
