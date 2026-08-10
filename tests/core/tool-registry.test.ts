@@ -4,23 +4,33 @@ import { validateToolRegistrations, type AizenToolRegistration } from "../../pac
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
-function registration(name = "demo", validatorName = name): AizenToolRegistration {
+function registration(name = "demo", classifierName = name): AizenToolRegistration {
   return {
     kind: "inProcess",
     descriptor: { name, label: name, description: "测试工具", parameters: { type: "object" } },
-    validator: {
-      toolName: validatorName,
-      validate: async () => ({
-        type: "allow",
-        assessment: { summary: name, targets: [], reason: "测试" },
-      }),
+    classifier: {
+      id: `user/demo@1`,
+      toolNames: [classifierName],
+      classify: async () => ({ kind: "claims", claims: [] }),
     },
     execute: async () => ({ content: [{ type: "text", text: "完成" }] }),
   }
 }
 
-test("联合注册要求工具和验证器名称一致", () => {
-  expect(() => validateToolRegistrations([registration("demo", "other")])).toThrow("验证器名称不匹配")
+test("联合注册允许不带分类器", () => {
+  expect(
+    validateToolRegistrations([
+      {
+        kind: "inProcess",
+        descriptor: { name: "plain", label: "plain", description: "无分类器", parameters: { type: "object" } },
+        execute: async () => ({ content: [{ type: "text", text: "完成" }] }),
+      },
+    ]),
+  ).toBeUndefined()
+})
+
+test("联合注册要求分类器工具名匹配", () => {
+  expect(() => validateToolRegistrations([registration("demo", "other")])).toThrow("分类器工具名不匹配")
 })
 
 test("联合注册拒绝重复工具名称", () => {

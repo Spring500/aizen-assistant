@@ -12,6 +12,7 @@ import type {
   AiPermissionReviewer,
   HumanPermissionReviewer,
   HumanReviewRequest,
+  PermissionAuditEvent,
   ToolAuthorization,
   ToolPermissionBatchAuthorization,
   ToolPermissionBatchRequest,
@@ -28,6 +29,8 @@ export type PolicyPermissionManagerOptions = {
   registry: PermissionClassifierRegistry
   aiReviewer: AiPermissionReviewer
   humanReviewer: HumanPermissionReviewer
+  /** 授权与人工审核过程的审计事件回调。 */
+  audit?: (event: PermissionAuditEvent) => void | Promise<void>
   now?: () => Date
 }
 
@@ -65,12 +68,14 @@ export class PolicyPermissionManager {
   readonly #registry: PermissionClassifierRegistry
   readonly #aiReviewer: AiPermissionReviewer
   readonly #humanReviewer: HumanPermissionReviewer
+  readonly #audit: (event: PermissionAuditEvent) => void | Promise<void>
   readonly #now: () => Date
 
   constructor(options: PolicyPermissionManagerOptions) {
     this.#registry = options.registry
     this.#aiReviewer = options.aiReviewer
     this.#humanReviewer = options.humanReviewer
+    this.#audit = options.audit ?? (() => {})
     this.#now = options.now ?? (() => new Date())
   }
 
@@ -82,6 +87,8 @@ export class PolicyPermissionManager {
     reviewMode: PermissionReviewMode,
     signal?: AbortSignal,
   ): Promise<ToolPermissionBatchAuthorization> {
+    for (const request of batch.calls)
+      await this.#record({ type: "permissionRequested", request, batchId: batch.batchId, at: this.#timestamp() })
     const prepared = await Promise.all(
       batch.calls.map(async (request) => {
         const classification = await this.#registry.classify(request, context)
@@ -99,18 +106,27 @@ export class PolicyPermissionManager {
     )
     const humanItems = prepared.filter((item) => item.authorization === undefined)
     const human = humanItems.length > 0 ? await this.#humanBatch(batch.batchId, humanItems, signal) : new Map()
-    return {
-      batchId: batch.batchId,
-      authorizations: prepared.map((item) => ({
-        toolCallId: item.request.toolCallId,
-        authorization: item.authorization ??
-          human.get(item.request.toolCallId) ?? {
-            type: "deny",
-            reason: "Operation denied: Permission review returned no result.",
-            source: "system",
-          },
-      })),
+    const authorizations = prepared.map((item) => ({
+      toolCallId: item.request.toolCallId,
+      authorization: item.authorization ??
+        human.get(item.request.toolCallId) ?? {
+          type: "deny",
+          reason: "Operation denied: Permission review returned no result.",
+          source: "system",
+        },
+    }))
+    for (const item of prepared) {
+      const authorization = authorizations.find((entry) => entry.toolCallId === item.request.toolCallId)
+      if (authorization)
+        await this.#record({
+          type: "authorized",
+          request: item.request,
+          batchId: batch.batchId,
+          authorization: authorization.authorization,
+          at: this.#timestamp(),
+        })
     }
+    return { batchId: batch.batchId, authorizations }
   }
 
   /** 依次执行分类、策略求值和审核路由，返回可直接用于工具包装器的授权结果。 */
@@ -270,5 +286,13 @@ export class PolicyPermissionManager {
       assessment: analyzed,
       source: "human",
     }
+  }
+
+  async #record(event: PermissionAuditEvent): Promise<void> {
+    await this.#audit(event)
+  }
+
+  #timestamp(): string {
+    return this.#now().toISOString()
   }
 }
