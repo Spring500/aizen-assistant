@@ -18,7 +18,6 @@ afterEach(async () => {
 const model: ModelReference = {
   providerId: "test",
   modelId: "model",
-  api: "anthropic-messages",
 }
 
 class FakePi implements PiPort {

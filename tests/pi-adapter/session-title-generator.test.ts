@@ -13,7 +13,7 @@ afterEach(() => {
 })
 
 async function setup() {
-  const mock = await startMockServer()
+  const mock = await startMockServer({ modelBehaviors: { "title-model": "test-control" } })
   servers.push(mock)
   const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
   await runtime.setRuntimeApiKey("anthropic", "test-key")

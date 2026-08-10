@@ -46,7 +46,10 @@ async function captureRequest(
   runtime: PiSessionRuntime,
   model: { providerId: string; modelId: string },
 ): Promise<string> {
-  const mock = await startMockServer("完成")
+  const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } }).then((mock) => {
+    mock.handle(() => ({ type: "text", text: "完成" }))
+    return mock
+  })
   try {
     runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
     await runtime.prompt({
@@ -68,7 +71,7 @@ describe("pi 内存会话", () => {
     expect(model).toBeDefined()
     if (!model) return
     await runtime.setRuntimeApiKey(model.providerId, "test-key")
-    const mock = await startMockServer()
+    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } })
     runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
     await runtime.create({ cwd: directory, model, view: emptyView })
     const prompt = runtime.prompt({
@@ -95,7 +98,10 @@ describe("pi 内存会话", () => {
     expect(model).toBeDefined()
     if (!model) return
     await runtime.setRuntimeApiKey(model.providerId, "test-key")
-    const mock = await startMockServer("完成")
+    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } }).then((mock) => {
+      mock.handle(() => ({ type: "text", text: "完成" }))
+      return mock
+    })
     try {
       runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
       await runtime.create({ cwd: directory, model, view: emptyView })
@@ -319,7 +325,7 @@ describe("pi 内存会话", () => {
     expect(model).toBeDefined()
     if (!model) return
     await runtime.setRuntimeApiKey(model.providerId, "test-key")
-    const mock = await startMockServer()
+    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } })
     mock.handle((request) => ({
       type: "text",
       text: JSON.stringify(request.system).includes("context summarization assistant") ? "压缩摘要" : "完成",
@@ -399,7 +405,7 @@ describe("pi 内存会话", () => {
     expect(model).toBeDefined()
     if (!model) return
     await runtime.setRuntimeApiKey(model.providerId, "test-key")
-    const mock = await startMockServer()
+    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } })
     mock.handle((request) => ({
       type: "text",
       text: JSON.stringify(request.system).includes("context summarization assistant") ? "自动摘要" : "新回复",
@@ -521,7 +527,7 @@ describe("pi 内存会话", () => {
     expect(model).toBeDefined()
     if (!model) return
     await runtime.setRuntimeApiKey(model.providerId, "test-key")
-    const mock = await startMockServer()
+    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } })
     let conversationRequests = 0
     mock.handle((request) => {
       if (JSON.stringify(request.system).includes("context summarization assistant"))

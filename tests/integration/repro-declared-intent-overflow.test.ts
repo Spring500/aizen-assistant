@@ -21,7 +21,7 @@ afterEach(async () => {
 test("超长 declaredIntent 被截断保存且不锁死会话", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-repro-intent-"))
   directories.push(root)
-  const mock = await startMockServer()
+  const mock = await startMockServer({ modelBehaviors: { "claude-sonnet-4-6": "test-control" } })
   try {
     const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })
     await pi.setRuntimeApiKey("anthropic", "test-key")

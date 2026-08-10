@@ -1,6 +1,6 @@
 import { afterEach, expect } from "bun:test"
-import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { ModelRuntime } from "@earendil-works/pi-coding-agent"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { startMockServer, type MockServer } from "./mock-server.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
@@ -8,7 +8,12 @@ const test = createDiagnosticTest({ timeoutMs: 5_000 })
 const servers: MockServer[] = []
 
 async function setup() {
-  const mock = await startMockServer()
+  const mock = await startMockServer({
+    modelBehaviors: {
+      "title-model": "test-control",
+      "chat-model": "test-control",
+    },
+  })
   servers.push(mock)
   const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
   await runtime.setRuntimeApiKey("anthropic", "test-key")
@@ -58,4 +63,28 @@ test("模型 Lambda Handler 持续处理指定模型", async () => {
   expect(first.content).toContainEqual(expect.objectContaining({ type: "text", text: "chat-model:1" }))
   expect(second.content).toContainEqual(expect.objectContaining({ type: "text", text: "chat-model:2" }))
   expect(await mock.requests()).toHaveLength(2)
+})
+
+test("测试控制行为必须显式映射且可覆盖内置模型", async () => {
+  const unmapped = await startMockServer()
+  try {
+    expect(() => unmapped.handleModel("unmapped", () => ({ type: "text", text: "不会执行" }))).toThrow(
+      "未注册为 test-control 行为",
+    )
+  } finally {
+    unmapped.stop()
+  }
+
+  const mock = await startMockServer({ modelBehaviors: { "mock-dsl": "test-control" } })
+  servers.push(mock)
+  mock.handleModel("mock-dsl", () => ({ type: "text", text: "已覆盖 DSL 行为" }))
+  const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
+  await runtime.setRuntimeApiKey("anthropic", "test-key")
+  const source = runtime.getModel("anthropic", "claude-sonnet-4-6")
+  if (!source) throw new Error("找不到测试模型")
+  const result = await runtime.completeSimple(
+    { ...source, id: "mock-dsl", baseUrl: mock.url },
+    { messages: [{ role: "user", content: "text 不应执行", timestamp: Date.now() }] },
+  )
+  expect(result.content).toContainEqual(expect.objectContaining({ type: "text", text: "已覆盖 DSL 行为" }))
 })
