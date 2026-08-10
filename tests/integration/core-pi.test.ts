@@ -177,7 +177,7 @@ test("真实 pi 链路将权限拒绝结果返回模型", async () => {
     const second = await mock.take({ modelId: option.modelId })
     const messages = JSON.stringify(second.messages)
     expect(messages).toContain("permission-call")
-    expect(messages).toContain('Operation denied: rule \\"Unclassifiable\\" requires human approval and was denied.')
+    expect(messages).toContain('Operation denied: rule \\"Change system state\\" requires human approval and was denied.')
     second.respond({ type: "text", text: "已停止操作" })
     expect(await sending).toEqual({ ok: true })
     expect(

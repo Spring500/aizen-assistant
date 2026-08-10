@@ -42,7 +42,6 @@ import type {
   PermissionGapRecorder,
   PermissionMode,
 } from "./tool-permissions/types.ts"
-import { createBashValidator } from "./tool-permissions/validators/bash.ts"
 import { type AizenToolRegistration, validateToolRegistrations } from "./tool-registry.ts"
 import {
   type CoreCommand,
@@ -1299,7 +1298,6 @@ export class AizenCore implements CorePort {
   #createPermissionManager(): ToolPermissionManager | undefined {
     if (!this.#pi.setPermissionHandler) return undefined
     const registry = new ToolPermissionRegistry()
-    registry.register(createBashValidator())
     for (const registration of this.#toolRegistrations) registry.register(registration.validator)
     return new ToolPermissionManager({
       registry,
