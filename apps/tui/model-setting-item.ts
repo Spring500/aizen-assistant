@@ -7,6 +7,8 @@ export type ModelSettingReference = {
   providerId: string
   modelId: string
   name?: string
+  /** 当前选择的思考档位名；存在时在显示文本中追加“· 思考等级名”。 */
+  thinkingLevel?: string
 }
 
 export type ModelSettingItemOptions = {
@@ -30,7 +32,8 @@ export type ModelSettingItemOptions = {
 
 /**
  * 模型设置行的统一样式：未选择时显示占位文案；
- * 已选择时显示 [ 供应商显示名 · 模型显示名 ]，供应商名斜体弱化、模型名高亮加粗。
+ * 已选择时显示 [ 供应商显示名 · 模型显示名 ]，存在思考等级时追加“· 思考等级名”；
+ * 供应商名斜体弱化、模型名与思考等级名高亮加粗。
  */
 export type ModelSettingItem<T extends string> = RichSelectorItem<T> & {
   allowEmpty: boolean
@@ -53,6 +56,9 @@ export function modelSettingItem<T extends string>(
           { text: providerName ?? "", italic: true, dim: true },
           { text: " · " },
           { text: modelName ?? model.modelId, color: systemColors.sessionStatus, bold: true },
+          ...(model.thinkingLevel
+            ? [{ text: " · " }, { text: model.thinkingLevel, color: systemColors.sessionStatus, bold: true }]
+            : []),
           { text: " ]" },
         ]
       : [
@@ -62,4 +68,25 @@ export function modelSettingItem<T extends string>(
         ],
     ...(options.description ? { details: [{ text: options.description, dim: true }] } : {}),
   }
+}
+
+/**
+ * 生成纯文本的模型显示：供应商名 · 模型名，存在思考等级时追加“· 思考等级名”；
+ * 无模型时返回占位文案。供状态栏等纯文本场景与设置行共用同一套解析与格式。
+ */
+export function modelDisplayText(
+  model: ModelSettingReference | undefined,
+  models: ModelOption[],
+  providerNames: ReadonlyMap<string, string>,
+  placeholder = "未选择模型",
+): string {
+  if (!model) return placeholder
+  const modelName =
+    model.name ??
+    models.find((item) => item.providerId === model.providerId && item.modelId === model.modelId)?.name ??
+    model.modelId
+  const providerName = providerNames.get(model.providerId) ?? model.providerId
+  return model.thinkingLevel
+    ? `${providerName} · ${modelName} · ${model.thinkingLevel}`
+    : `${providerName} · ${modelName}`
 }

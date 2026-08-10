@@ -46,6 +46,7 @@ import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-edito
 
 import { ActionQueue, dispatchOrPresent, sendPromptWithRecovery } from "./action-runner.ts"
 import { preferenceSettingsItems } from "./preference-settings.ts"
+import { modelDisplayText } from "./model-setting-item.ts"
 import { parseTuiCommand, tuiCommands } from "./commands.ts"
 import { openDirectory, openExternalEditor } from "./external-open.ts"
 import { createPermissionReview, type PermissionReviewController } from "./permission-review.ts"
@@ -244,10 +245,18 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     )
   }
 
+  /** 状态栏模型文本：供应商名 · 模型名，存在思考等级时追加思考等级名。 */
+  const statusBarModelLabel = (snapshot: ReturnType<typeof core.getSnapshot>) =>
+    modelDisplayText(
+      snapshot.currentModel,
+      snapshot.models,
+      providerDisplayNames(snapshot.authProviders, snapshot.modelConfig?.providers ?? [], snapshot.piProviders ?? []),
+    )
+
   const updateStatusBar = () => {
     const snapshot = core.getSnapshot()
     syncTerminalTitle(snapshot)
-    const statusBar = statusBarView(snapshot)
+    const statusBar = statusBarView(snapshot, statusBarModelLabel(snapshot))
     editor.setStatus(statusBar.session)
     editor.setShortcuts(statusBar.shortcuts)
     editor.setSessionTitle(
@@ -274,7 +283,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     if (event.type === "snapshot") {
       void view.update(event.snapshot)
       syncTerminalTitle(event.snapshot)
-      const statusBar = statusBarView(event.snapshot)
+      const statusBar = statusBarView(event.snapshot, statusBarModelLabel(event.snapshot))
       editor.setStatus(statusBar.session)
       editor.setShortcuts(statusBar.shortcuts)
       editor.setSessionTitle(
