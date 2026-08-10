@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect } from "bun:test"
 import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -6,6 +6,9 @@ import { AizenCore } from "../../packages/core/aizen-core.ts"
 import type { PiPort, PiPortEvent } from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
 import { InvalidSessionRecordError, SessionStore } from "../../packages/core/session-store.ts"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
+
+const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const directories: string[] = []
 afterEach(async () => {

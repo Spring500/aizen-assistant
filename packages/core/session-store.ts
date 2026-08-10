@@ -23,11 +23,7 @@ export class SessionLockedError extends Error {
 }
 
 /** 待追加的记录本身不合法（区别于底层存储故障）。调用方可选择单条降级，不应锁死整个会话。 */
-export class InvalidSessionRecordError extends Error {
-  constructor(message: string) {
-    super(message)
-  }
-}
+export class InvalidSessionRecordError extends Error {}
 
 export type SessionSummary = {
   sessionId: string

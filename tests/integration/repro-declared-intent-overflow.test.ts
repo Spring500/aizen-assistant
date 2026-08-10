@@ -74,17 +74,17 @@ test("超长 declaredIntent 被截断保存且不锁死会话", async () => {
 
     // 会话文件应保存两条 assistant 消息：超长被截断为 50 码点，正常值原样保留
     const loaded = await store.read(sessionId)
-    const assistantCalls = loaded.records
-      .filter((record) => record.kind === "message")
-      .map((record) => (record.kind === "message" ? record.message : null))
-      .filter((message): message is { role: "assistant"; parts: Array<{ kind: string; declaredIntent?: string }> } =>
-        !!message && message.role === "assistant" && Array.isArray(message.parts),
-      )
-      .flatMap((message) => message.parts)
-      .filter((part) => part.kind === "tool_call")
+    const assistantCalls: Array<string | undefined> = []
+    for (const record of loaded.records) {
+      if (record.kind !== "message" || record.message.role !== "assistant") continue
+      for (const part of record.message.parts) {
+        if (part.kind !== "tool_call") continue
+        assistantCalls.push(part.declaredIntent)
+      }
+    }
     expect(assistantCalls).toHaveLength(2)
-    expect(assistantCalls[0]?.declaredIntent).toBe("用".repeat(50))
-    expect(assistantCalls[1]?.declaredIntent).toBe("回显测试")
+    expect(assistantCalls[0]).toBe("用".repeat(50))
+    expect(assistantCalls[1]).toBe("回显测试")
 
     // 下一轮用户输入正常（会话未被锁死）
     const secondRoundSending = core.dispatch({ type: "send_prompt", text: "继续" })
