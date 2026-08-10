@@ -1,5 +1,8 @@
 import { afterEach, expect } from "bun:test"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { AizenCore } from "../../packages/core/aizen-core.ts"
+import { SessionStore } from "../../packages/core/session-store.ts"
+import { startMockServer } from "../../tests/utils/mock-server.ts"
 import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
@@ -75,6 +78,74 @@ test("默认模板预配置可用模型、子 Agent 和视图", async () => {
   expect(await new ViewStore(join(data, "views.json")).list()).toContainEqual(
     expect.objectContaining({ id: "mock-default", valid: true }),
   )
+})
+
+test("默认套件完成主回复、命名和 AI 审核", async () => {
+  const root = await mkdtemp(join(tmpdir(), "aizen-mock-default-flow-"))
+  directories.push(root)
+  const templates = join(process.cwd(), "tests", "fixtures", "mock-data-templates")
+  const data = await prepareMockData({ root, templatesDirectory: templates, suite: "default", keep: false })
+  const mock = await startMockServer({ port: 0 })
+  try {
+    const providersPath = join(data, "custom-providers.json")
+    const providers = JSON.parse(await readFile(providersPath, "utf8")) as {
+      providers: Record<string, { baseUrl: string }>
+    }
+    for (const provider of Object.values(providers.providers))
+      provider.baseUrl = mock.url + (provider.baseUrl.endsWith("/v1") ? "/v1" : "")
+    await writeFile(providersPath, `${JSON.stringify(providers, null, 2)}\n`)
+    const preferencesStore = new AppPreferencesStore(join(data, "preferences.json"))
+    const pi = await PiSessionRuntime.create({ authPath: join(data, "auth.json"), customProvidersPath: providersPath })
+    const core = new AizenCore({
+      cwd: root,
+      store: new SessionStore(join(data, "sessions")),
+      pi,
+      preferencesStore,
+      views: new ViewStore(join(data, "views.json")),
+    })
+    try {
+      expect(await core.dispatch({ type: "load_preferences" })).toEqual({ ok: true })
+      const preferences = core.getSnapshot().preferences
+      if (!preferences.newSession.model) throw new Error("默认套件未配置主模型")
+      expect(
+        await core.dispatch({
+          type: "create_session",
+          model: preferences.newSession.model,
+          viewId: preferences.newSession.viewId,
+          permissionMode: preferences.newSession.permissionMode ?? "hybrid",
+          ...(preferences.newSession.permissionPreset === undefined
+            ? {}
+            : { permissionPreset: preferences.newSession.permissionPreset }),
+          ...(preferences.newSession.permissionReviewMode === undefined
+            ? {}
+            : { permissionReviewMode: preferences.newSession.permissionReviewMode }),
+        }),
+      ).toEqual({ ok: true })
+      expect(
+        await core.dispatch({
+          type: "send_prompt",
+          text: "text 主回复\nbash T1 [拒绝] 发布包 | npm publish",
+        }),
+      ).toEqual({ ok: true })
+      for (let attempt = 0; attempt < 50 && !core.getSnapshot().currentSessionName; attempt++) await Bun.sleep(10)
+      expect(core.getSnapshot().currentSessionName).toContain("text 主回复")
+      const requests = await mock.requests()
+      expect(requests.map((request) => request.body.model)).toContain("mock-dsl")
+      expect(requests.map((request) => request.body.model)).toContain("mock-naming")
+      expect(requests.map((request) => request.body.model)).toContain("mock-review")
+      expect(
+        core
+          .getSnapshot()
+          .transcript.some(
+            (entry) => entry.type === "message" && entry.message.role === "tool" && entry.message.isError,
+          ),
+      ).toBe(true)
+    } finally {
+      await core.dispose()
+    }
+  } finally {
+    mock.stop()
+  }
 })
 
 test("未知套件列出可用名称", async () => {
