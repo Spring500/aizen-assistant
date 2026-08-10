@@ -1566,7 +1566,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             if (action === "session-naming") model = undefined
             else reviewModel = undefined
           } else if (selected) {
-            const ref = { providerId: selected.providerId, modelId: selected.modelId }
+            // 保存“使用什么模型”的完整配置：供应商、模型与思考档位
+            const ref = {
+              providerId: selected.providerId,
+              modelId: selected.modelId,
+              ...(selected.thinkingLevel ? { thinkingLevel: selected.thinkingLevel } : {}),
+            }
             if (action === "session-naming") model = ref
             else reviewModel = ref
           }
@@ -1740,12 +1745,11 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         if (!draft.model) continue
         const snapshot = core.getSnapshot()
         const current = snapshot.currentModel
-        // 同一模型的 API 或思考档位变化也属于运行参数变化，不能只比较模型 ID。
+        // 模型、思考档位变化属于运行参数变化，不能只比较模型 ID。
         if (
           !current ||
           current.providerId !== draft.model.providerId ||
           current.modelId !== draft.model.modelId ||
-          current.api !== draft.model.api ||
           current.thinkingLevel !== draft.model.thinkingLevel
         ) {
           if (!(await dispatchWithError({ type: "set_model", model: draft.model }, "切换模型失败")).ok) continue

@@ -1,19 +1,21 @@
 import type { ModelOption } from "../../packages/core/pi-port.ts"
+import type { ModelReference } from "../../packages/core/session-format.ts"
 import type { RichSelectorItem } from "../../packages/tui-kit/rich-selector.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
 
-/** 模型设置项所需的最小模型引用；name 可省，未提供时从 models 列表解析。 */
-export type ModelSettingReference = {
-  providerId: string
-  modelId: string
-  name?: string
-  /** 当前选择的思考档位名；存在时在显示文本中追加“· 思考等级名”。 */
-  thinkingLevel?: string
+/**
+ * 解析模型显示名：引用若自带 name（如 ModelOption）优先使用，
+ * 否则从 models 列表按 providerId/modelId 查表；都无匹配时回退 modelId。
+ * 显示名属于定义层信息，引用层不持久化 name。
+ */
+function modelName(model: ModelReference, models?: ModelOption[]): string | undefined {
+  if ("name" in model && typeof (model as { name?: unknown }).name === "string") return (model as ModelOption).name
+  return models?.find((item) => item.providerId === model.providerId && item.modelId === model.modelId)?.name
 }
 
 export type ModelSettingItemOptions = {
-  /** 当前已选择的模型；省略或传 undefined 表示未选择。 */
-  model?: ModelSettingReference | undefined
+  /** 当前已选择的模型引用；省略或传 undefined 表示未选择。 */
+  model?: ModelReference | undefined
   /** 可用模型列表，用于把 modelId 解析为模型显示名。 */
   models?: ModelOption[]
   /** providerId → 供应商显示名；缺失时回退 providerId。 */
@@ -43,9 +45,7 @@ export function modelSettingItem<T extends string>(
   options: ModelSettingItemOptions & { value: T },
 ): ModelSettingItem<T> {
   const { model } = options
-  const modelName =
-    model?.name ??
-    options.models?.find((item) => item.providerId === model?.providerId && item.modelId === model?.modelId)?.name
+  const resolvedName = model ? modelName(model, options.models) : undefined
   const providerName = model ? (options.providerNames?.get(model.providerId) ?? model.providerId) : undefined
   return {
     value: options.value,
@@ -55,7 +55,7 @@ export function modelSettingItem<T extends string>(
           { text: `${options.label}  [ ` },
           { text: providerName ?? "", italic: true, dim: true },
           { text: " · " },
-          { text: modelName ?? model.modelId, color: systemColors.sessionStatus, bold: true },
+          { text: resolvedName ?? model.modelId, color: systemColors.sessionStatus, bold: true },
           ...(model.thinkingLevel
             ? [{ text: " · " }, { text: model.thinkingLevel, color: systemColors.sessionStatus, bold: true }]
             : []),
@@ -75,18 +75,15 @@ export function modelSettingItem<T extends string>(
  * 无模型时返回占位文案。供状态栏等纯文本场景与设置行共用同一套解析与格式。
  */
 export function modelDisplayText(
-  model: ModelSettingReference | undefined,
+  model: ModelReference | undefined,
   models: ModelOption[],
   providerNames: ReadonlyMap<string, string>,
   placeholder = "未选择模型",
 ): string {
   if (!model) return placeholder
-  const modelName =
-    model.name ??
-    models.find((item) => item.providerId === model.providerId && item.modelId === model.modelId)?.name ??
-    model.modelId
+  const resolvedName = modelName(model, models) ?? model.modelId
   const providerName = providerNames.get(model.providerId) ?? model.providerId
   return model.thinkingLevel
-    ? `${providerName} · ${modelName} · ${model.thinkingLevel}`
-    : `${providerName} · ${modelName}`
+    ? `${providerName} · ${resolvedName} · ${model.thinkingLevel}`
+    : `${providerName} · ${resolvedName}`
 }

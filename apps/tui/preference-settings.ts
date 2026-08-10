@@ -1,4 +1,4 @@
-import type { AgentModelReference } from "../../packages/core/app-preferences-store.ts"
+import type { ModelReference } from "../../packages/core/session-format.ts"
 import type { ModelOption } from "../../packages/core/pi-port.ts"
 import type { RichSelectorItem } from "../../packages/tui-kit/rich-selector.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
@@ -11,8 +11,8 @@ export type PreferenceSettingsItem = RichSelectorItem<PreferenceSettingsAction> 
 
 /** 生成应用偏好菜单；当前仅管理会话自动命名与工具审核模型。 */
 export function preferenceSettingsItems(
-  namingModel: AgentModelReference | undefined,
-  reviewModel: AgentModelReference | undefined,
+  namingModel: ModelReference | undefined,
+  reviewModel: ModelReference | undefined,
   models: ModelOption[],
   providerNames: ReadonlyMap<string, string>,
 ): PreferenceSettingsItem[] {
