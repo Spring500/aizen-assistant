@@ -81,7 +81,6 @@ function sessionModel(model: ModelReference): ModelReference {
   return {
     providerId: model.providerId,
     modelId: model.modelId,
-    api: model.api,
     ...(model.thinkingLevel === undefined ? {} : { thinkingLevel: model.thinkingLevel }),
   }
 }

@@ -146,7 +146,6 @@ function modelReference(model: Model<Api>, thinkingLevel: ThinkingLevel, config:
   return {
     providerId: model.provider,
     modelId: model.id,
-    api: model.api,
     ...(externalLevel === undefined ? {} : { thinkingLevel: externalLevel }),
     contextWindow: model.contextWindow,
   }
@@ -962,7 +961,6 @@ export class PiSessionRuntime implements PiPort {
       return {
         providerId: model.provider,
         modelId: model.id,
-        api: model.api,
         ...(configured
           ? { thinkingLevel: configured.defaultThinkingLevel }
           : preferred
