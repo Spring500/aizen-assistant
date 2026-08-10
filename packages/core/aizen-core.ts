@@ -33,6 +33,7 @@ import { createBuiltinFileClassifier } from "./tool-permissions/classifiers/file
 import { PolicyPermissionManager } from "./tool-permissions/policy-manager.ts"
 import { builtinPermissionPolicies } from "./tool-permissions/policy-types.ts"
 import { sanitizePermissionAuditPayload } from "./tool-permissions/sanitizer.ts"
+import type { PermissionAuditRecorder } from "./tool-permissions/permission-audit.ts"
 import type {
   HumanReviewBatchDecision,
   HumanReviewBatchRequest,
@@ -70,6 +71,8 @@ export type AizenCoreOptions = {
   preferencesStore?: AppPreferencesStore
   toolRegistrations?: AizenToolRegistration[]
   permissionGapRecorder?: PermissionGapRecorder
+  /** 权限判定审计的本地 JSONL 落盘器（含轮转）；不提供时只写会话记录。 */
+  permissionAuditRecorder?: PermissionAuditRecorder
 }
 
 function sessionModel(model: ModelReference): ModelReference {
@@ -101,6 +104,7 @@ export class AizenCore implements CorePort {
   readonly #preferencesStore: AppPreferencesStore | undefined
   readonly #toolRegistrations: AizenToolRegistration[]
   readonly #permissionGapRecorder: PermissionGapRecorder | undefined
+  readonly #permissionAuditRecorder: PermissionAuditRecorder | undefined
   readonly #listeners = new Set<(event: CoreEvent) => void>()
   readonly #unsubscribePi: () => void
   readonly #policyPermissionManager: PolicyPermissionManager | undefined
@@ -152,6 +156,7 @@ export class AizenCore implements CorePort {
     this.#preferencesStore = options.preferencesStore
     this.#toolRegistrations = options.toolRegistrations ?? []
     this.#permissionGapRecorder = options.permissionGapRecorder
+    this.#permissionAuditRecorder = options.permissionAuditRecorder
     validateToolRegistrations(this.#toolRegistrations)
     this.#unsubscribePi = this.#pi.subscribe((event) => this.#handlePiEvent(event))
     this.#policyPermissionManager = this.#createPolicyPermissionManager()
@@ -500,6 +505,7 @@ export class AizenCore implements CorePort {
         try {
           await this.#pi.dispose()
           await this.#permissionGapRecorder?.close?.()
+          await this.#permissionAuditRecorder?.close?.()
         } catch (error) {
           failure ??= error
         } finally {
@@ -1164,7 +1170,10 @@ export class AizenCore implements CorePort {
         },
       },
       humanReviewer: { review: (request, signal) => this.#requestPermissionAnswer(request, signal) },
-      audit: (event) => this.#recordPermissionAudit(event),
+      audit: (event) => {
+        void this.#recordPermissionAudit(event)
+        void this.#permissionAuditRecorder?.record(event)
+      },
     })
   }
 

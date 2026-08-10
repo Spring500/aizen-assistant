@@ -14,6 +14,7 @@ import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { type DiscoveredSkill, type InstalledSkill, SkillStore } from "../../packages/core/skill-store.ts"
 import { JsonlPermissionGapRecorder } from "../../packages/core/tool-permissions/gap-recorder.ts"
+import { JsonlPermissionAuditRecorder } from "../../packages/core/tool-permissions/permission-audit.ts"
 import type { CorePort } from "../../packages/core/types.ts"
 import { type ProjectSources, readViewConfig, writeViewConfig } from "../../packages/core/view-config.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
@@ -122,6 +123,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             ),
           }
         : {}),
+      permissionAuditRecorder: new JsonlPermissionAuditRecorder(join(options.dataDirectory, "permission-audit.jsonl")),
     })
   const view = createChatView(renderer)
   const interactionController = new AbortController()
