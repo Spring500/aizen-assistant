@@ -61,7 +61,12 @@ afterEach(async () => {
 test("真实 pi 链路完成两轮并恢复第三轮", async () => {
   const root = await traceStage("创建临时目录", () => mkdtemp(join(tmpdir(), "aizen-integration-")))
   directories.push(root)
-  const mock = await traceStage("启动 mock server", () => startMockServer("完成"))
+  const mock = await traceStage("启动 mock server", () =>
+    startMockServer({ modelBehaviors: { "claude-sonnet-4-6": "test-control" } }).then((mock) => {
+      mock.handle(() => ({ type: "text", text: "完成" }))
+      return mock
+    }),
+  )
   try {
     const pi = await traceStage("创建首次 pi runtime", () =>
       PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null }),
@@ -140,7 +145,9 @@ test("真实 pi 链路完成两轮并恢复第三轮", async () => {
 test("真实 pi 链路将权限拒绝结果返回模型", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-"))
   directories.push(root)
-  const mock = await startMockServer()
+  const mock = await startMockServer({
+    modelBehaviors: { "claude-sonnet-4-6": "test-control", "claude-haiku-4-5": "test-control" },
+  })
   try {
     const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })
     await pi.setRuntimeApiKey("anthropic", "test-key")
@@ -185,7 +192,9 @@ test("真实 pi 链路将权限拒绝结果返回模型", async () => {
 test("真实 pi 链路统一提交同一消息中的多工具人工审批", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-batch-"))
   directories.push(root)
-  const mock = await startMockServer()
+  const mock = await startMockServer({
+    modelBehaviors: { "claude-sonnet-4-6": "test-control", "claude-haiku-4-5": "test-control" },
+  })
   try {
     const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })
     await pi.setRuntimeApiKey("anthropic", "test-key")
@@ -243,7 +252,9 @@ test("真实 pi 链路统一提交同一消息中的多工具人工审批", asyn
 test("批次提交后中止会保留已完成项并停止运行项", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-batch-abort-"))
   directories.push(root)
-  const mock = await startMockServer()
+  const mock = await startMockServer({
+    modelBehaviors: { "claude-sonnet-4-6": "test-control", "claude-haiku-4-5": "test-control" },
+  })
   let slowStarted = false
   let slowAborted = false
   try {
@@ -368,7 +379,9 @@ test("批次提交后中止会保留已完成项并停止运行项", async () =>
 test("真实 pi 链路执行项目自有联合注册工具", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-registered-tool-"))
   directories.push(root)
-  const mock = await startMockServer()
+  const mock = await startMockServer({
+    modelBehaviors: { "claude-sonnet-4-6": "test-control", "claude-haiku-4-5": "test-control" },
+  })
   try {
     const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })
     await pi.setRuntimeApiKey("anthropic", "test-key")
@@ -448,7 +461,9 @@ test("真实 pi 链路执行项目自有联合注册工具", async () => {
 test("真实 pi 链路并行完成主回复和工具式自动命名", async () => {
   const root = await mkdtemp(join(tmpdir(), "aizen-integration-"))
   directories.push(root)
-  const mock = await startMockServer()
+  const mock = await startMockServer({
+    modelBehaviors: { "claude-sonnet-4-6": "test-control", "claude-haiku-4-5": "test-control" },
+  })
   try {
     mock.handleModel("claude-sonnet-4-6", () => ({ type: "text", text: "主回复完成" }))
     const pi = await PiSessionRuntime.create({ authPath: join(root, "auth.json"), customProvidersPath: null })

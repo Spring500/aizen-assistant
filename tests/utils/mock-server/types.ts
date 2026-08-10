@@ -14,8 +14,6 @@ export type MockTool = {
   name: string
   description?: string
   parameters: Record<string, unknown>
-  /** 保留 Anthropic 原始字段，兼容既有测试的请求断言。 */
-  input_schema?: Record<string, unknown>
 }
 
 /** Mock Server 交给行为模块的协议无关请求上下文。 */
@@ -27,13 +25,13 @@ export type MockRequestContext = {
   headers: Record<string, string>
   protocol: MockProtocol
   modelId?: string
-  /** 原始 HTTP 请求体，仅用于诊断；行为模块不得依赖协议私有字段。 */
-  body: Record<string, unknown>
+  /** 原始 HTTP 请求体，仅用于协议观察；行为模块不得依赖协议私有字段。 */
+  rawBody: Record<string, unknown>
+  /** 原始协议消息，仅用于协议观察；行为模块不得读取。 */
+  rawMessages: unknown[]
   system: string
-  /** 原始协议消息，保留既有测试装置的请求检查语义。 */
-  messages: unknown[]
-  /** 归一化后的消息，仅供行为模块使用。 */
-  normalizedMessages: MockMessage[]
+  /** 已归一化的对话历史；行为模块唯一允许读取的消息字段。 */
+  messages: MockMessage[]
   tools: MockTool[]
   signal: AbortSignal
 }

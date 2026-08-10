@@ -197,7 +197,11 @@ function checkPhoton(): string {
 /** 验证 pi provider 的 HTTP 请求链路可用。 */
 async function checkMockServer(): Promise<string> {
   const expectedText = "架构可行性验证：Mock 链路通过"
-  const mock = await traceArchitectureStage("mockServer / 启动服务", () => startMockServer(expectedText))
+  const mock = await traceArchitectureStage("mockServer / 启动服务", async () => {
+    const server = await startMockServer({ modelBehaviors: { "claude-sonnet-4-6": "test-control" } })
+    server.handle(() => ({ type: "text", text: expectedText }))
+    return server
+  })
   const modelRuntime = await traceArchitectureStage("mockServer / 创建模型运行时", () =>
     ModelRuntime.create({
       credentials: new InMemoryCredentialStore(),

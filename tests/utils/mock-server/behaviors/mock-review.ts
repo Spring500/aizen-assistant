@@ -1,7 +1,7 @@
 import type { MockBehavior, MockRequestContext } from "../types.ts"
 
 function declaredIntent(context: MockRequestContext): string {
-  const source = context.normalizedMessages.find((message) => message.role === "user")?.content ?? ""
+  const source = context.messages.find((message) => message.role === "user")?.content ?? ""
   try {
     const parsed = JSON.parse(source) as { declaredIntent?: unknown }
     return typeof parsed.declaredIntent === "string" ? parsed.declaredIntent : ""

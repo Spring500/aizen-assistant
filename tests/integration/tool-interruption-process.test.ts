@@ -162,7 +162,7 @@ for (const scenario of cases) {
     directories.push(root)
     const readyPath = join(root, "checkpoint.ready")
     const sessionIdPath = join(root, "session-id.txt")
-    const mock = await startMockServer()
+    const mock = await startMockServer({ modelBehaviors: { "claude-sonnet-4-6": "test-control" } })
     let requestSequence = 0
     mock.handle(async () => {
       requestSequence += 1

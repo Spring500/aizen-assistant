@@ -6,7 +6,7 @@ import { startMockServer } from "../../mock-server.ts"
 const test = createDiagnosticTest({ timeoutMs: 10_000 })
 
 async function setup() {
-  const mock = await startMockServer(undefined, { strictModels: true })
+  const mock = await startMockServer()
   const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
   await runtime.setRuntimeApiKey("anthropic", "test-key")
   const source = runtime.getModel("anthropic", "claude-sonnet-4-6")

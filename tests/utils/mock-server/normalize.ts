@@ -127,9 +127,10 @@ export function normalizeRequest(input: {
   return {
     ...input,
     ...(typeof body.model === "string" ? { modelId: body.model } : {}),
+    rawBody: body,
+    rawMessages: Array.isArray(body.messages) ? body.messages : [],
     system,
-    messages: Array.isArray(body.messages) ? body.messages : [],
-    normalizedMessages: messages,
+    messages,
     tools,
   }
 }

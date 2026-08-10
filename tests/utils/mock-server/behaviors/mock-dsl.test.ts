@@ -7,7 +7,7 @@ import { mockDslBehavior } from "./mock-dsl.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
-function context(message: string, messages: MockRequestContext["normalizedMessages"] = []): MockRequestContext {
+function context(message: string, messages: MockRequestContext["messages"] = []): MockRequestContext {
   return {
     id: "request",
     sequence: 1,
@@ -16,10 +16,10 @@ function context(message: string, messages: MockRequestContext["normalizedMessag
     headers: {},
     protocol: "anthropic-messages",
     modelId: "mock-dsl",
-    body: {},
+    rawBody: {},
+    rawMessages: [],
     system: "",
-    messages: [],
-    normalizedMessages: [...messages, { role: "user", content: message }],
+    messages: [...messages, { role: "user", content: message }],
     tools: [],
     signal: new AbortController().signal,
   }
@@ -75,7 +75,7 @@ text 目录：{{T1.Result}}`
   expect(
     await events({
       ...context(source),
-      normalizedMessages: [
+      messages: [
         { role: "user", content: source },
         { role: "assistant", content: "" },
         { role: "tool", toolCallId: "T1", toolName: "bash", content: "README.md" },
@@ -94,7 +94,7 @@ text {{T1.Result}} / {{T2.Result}}`
   expect(
     await events({
       ...context(source),
-      normalizedMessages: [
+      messages: [
         { role: "user", content: source },
         { role: "assistant", content: "" },
         { role: "tool", toolCallId: "T1", toolName: "bash", content: "first-result" },
@@ -121,7 +121,7 @@ text {{T1.Result}}`),
 })
 
 test("Mock Server 将 mock-dsl 注册为内置行为", async () => {
-  const mock = await startMockServer(undefined, { strictModels: true })
+  const mock = await startMockServer()
   try {
     expect(mock.registeredModels()).toContain("mock-dsl")
     const response = await fetch(`${mock.url}/v1/messages`, {

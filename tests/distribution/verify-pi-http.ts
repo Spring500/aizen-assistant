@@ -14,7 +14,8 @@ mkdirSync(sandbox)
 const executable = join(sandbox, "pi-http-probe.exe")
 copyFileSync(source, executable)
 const expected = "pi HTTP 单文件探针通过"
-const mock = await startMockServer(expected)
+const mock = await startMockServer({ modelBehaviors: { "claude-sonnet-4-6": "test-control" } })
+mock.handle(() => ({ type: "text", text: expected }))
 try {
   const systemRoot = globalThis.process.env.SystemRoot ?? "C:\\Windows"
   const child = Bun.spawn({

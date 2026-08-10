@@ -66,7 +66,7 @@ export async function runMockDevelopment(args: string[] = process.argv.slice(2))
       templatesDirectory: join(root, "tests", "fixtures", "mock-data-templates"),
       ...options,
     })
-    const mock = await startMockServer(undefined, { port: mockPort, strictModels: true })
+    const mock = await startMockServer({ port: mockPort })
     try {
       return await runTui(["--data-dir", dataDirectory])
     } finally {
