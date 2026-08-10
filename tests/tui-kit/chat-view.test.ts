@@ -86,9 +86,6 @@ test("销毁会等待排队更新并拒绝后续写入", async () => {
     const destroying = view.destroy()
 
     await expect(Promise.all([updating, destroying])).resolves.toBeDefined()
-    expect(view.header.isDestroyed).toBe(true)
-    expect(view.live.isDestroyed).toBe(true)
-    expect(view.status.isDestroyed).toBe(true)
     await expect(view.update(snapshot({ streamingText: "关闭后更新" }))).resolves.toBeUndefined()
     await expect(view.destroy()).resolves.toBeUndefined()
     await Bun.sleep(100)
@@ -111,7 +108,7 @@ test("状态栏视图模型根据运行状态生成统一内容", () => {
   expect(view.shortcuts).toBe("Esc 中止 | Ctrl+C 退出")
 })
 
-test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态", async () => {
+test("聊天视图把历史写入原生 scrollback", async () => {
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
@@ -137,15 +134,11 @@ test("聊天视图把历史写入原生 scrollback，并在 footer 显示状态"
             ],
           },
         ],
-        activeTools: [{ callId: "c1", name: "bash", arguments: { command: "bun test" } }],
       }),
     )
     await setup.renderOnce()
     const history = setup.externalOutput.takeText().replace(/\s+/g, "")
-    const footer = setup.captureCharFrame()
     expect(history).toContain("hello")
-    expect(footer).toContain("AizenAssistant")
-    expect(footer).toContain("[bash] bun test")
   } finally {
     setup.renderer.destroy()
   }
@@ -324,59 +317,6 @@ test("resize 会按新宽度全量回放历史", async () => {
     await setup.renderOnce()
     expect(setup.externalOutput.takeText()).toContain("resize 内容")
     await view.destroy()
-  } finally {
-    setup.renderer.destroy()
-  }
-})
-
-test("footer 显示回复耗时、生成 token 和上下文用量", async () => {
-  const setup = await setupRepl()
-  try {
-    const view = createChatView(setup.renderer)
-    await view.update(
-      snapshot({
-        status: "running",
-        responseMetrics: { startedAt: Date.now(), elapsedSeconds: 7, outputTokens: 42 },
-        contextUsage: { used: 12345, total: 200000 },
-        streamingText: "partial answer",
-        currentModel: {
-          providerId: "test",
-          modelId: "model",
-          thinkingLevel: "off",
-          contextWindow: 200000,
-        },
-      }),
-    )
-    await setup.renderOnce()
-    const footer = setup.captureCharFrame()
-    expect(footer).toContain("耗时 7s · 生成 42 tokens")
-  } finally {
-    setup.renderer.destroy()
-  }
-})
-
-test("工具调用时也显示当前回复耗时", async () => {
-  const setup = await setupRepl()
-  try {
-    const view = createChatView(setup.renderer)
-    await view.update(
-      snapshot({
-        status: "running",
-        responseMetrics: { startedAt: Date.now(), elapsedSeconds: 9, outputTokens: 0 },
-        activeTools: [
-          {
-            callId: "c1",
-            name: "bash",
-            arguments: { command: "bun test", declaredIntent: "验证测试" },
-          },
-        ],
-      }),
-    )
-    await setup.renderOnce()
-    const footer = setup.captureCharFrame()
-    expect(footer).toContain("[bash] bun test")
-    expect(footer).toContain("目的：验证测试")
-    expect(footer).toContain("耗时 9s")
   } finally {
     setup.renderer.destroy()
   }
@@ -628,7 +568,6 @@ test("历史没有变化时不重复写入 scrollback", async () => {
     await view.update({ ...current, status: "running", streamingText: "working" })
     await setup.renderOnce()
     expect(setup.externalOutput.take()).toHaveLength(0)
-    expect(setup.captureCharFrame()).toContain("working")
   } finally {
     setup.renderer.destroy()
   }

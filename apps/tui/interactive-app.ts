@@ -25,6 +25,7 @@ import { cycleMenu } from "../../packages/tui-kit/cycle-menu.ts"
 import { selectEditableItem } from "../../packages/tui-kit/editable-selector.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { editInline } from "../../packages/tui-kit/inline-input.ts"
+import type { OutputData, OutputTool } from "../../packages/tui-kit/output-panel.ts"
 import {
   modelProviderChoices,
   providerDisplayNames,
@@ -40,7 +41,7 @@ import {
 } from "../../packages/tui-kit/renderer.ts"
 import { selectRichItem } from "../../packages/tui-kit/rich-selector.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
-import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
+import { sessionStateView, statusBarView } from "../../packages/tui-kit/status-bar.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
 import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-editor.ts"
 
@@ -208,7 +209,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       onAbort: () => void core.dispatch({ type: "abort" }),
       onQuit: quit,
     },
-    overlays,
     tuiCommands,
   )
   editor.setInputVisible(false)
@@ -253,12 +253,53 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       providerDisplayNames(snapshot.authProviders, snapshot.modelConfig?.providers ?? [], snapshot.piProviders ?? []),
     )
 
+  /** 从工具调用参数中提取声明目的文本。 */
+  const toolIntent = (argumentsValue: unknown): string | undefined => {
+    if (argumentsValue !== null && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)) {
+      const intent = (argumentsValue as Record<string, unknown>).declaredIntent
+      if (typeof intent === "string" && intent.trim()) return intent.trim()
+    }
+    return undefined
+  }
+
+  /**
+   * 组装 footer 输出区数据：展示尚未被历史归档的活动工具（历史归档判定：
+   * transcript 中已存在该 callId 的 tool 结果消息）+ 流式输出与回复指标。
+   */
+  const outputDataFrom = (snapshot: ReturnType<typeof core.getSnapshot>): OutputData => {
+    const archived = new Set<string>()
+    for (const entry of snapshot.transcript) {
+      if (entry.type === "message" && entry.message.role === "tool") archived.add(entry.message.callId)
+    }
+    const tools: OutputTool[] = snapshot.activeTools
+      .filter((tool) => !archived.has(tool.callId))
+      .map((tool) => {
+        const intent = toolIntent(tool.arguments)
+        return {
+          id: tool.callId,
+          name: tool.name,
+          ...(intent ? { intent } : {}),
+          ...(tool.outputPreview !== undefined ? { outputPreview: tool.outputPreview } : {}),
+          isFinished: tool.isFinished ?? false,
+          isError: tool.isError ?? false,
+        }
+      })
+    return {
+      streamingText: snapshot.streamingText,
+      streamingThinking: snapshot.streamingThinking,
+      ...(snapshot.responseMetrics ? { metrics: snapshot.responseMetrics } : {}),
+      tools,
+    }
+  }
+
   const updateStatusBar = () => {
     const snapshot = core.getSnapshot()
     syncTerminalTitle(snapshot)
     const statusBar = statusBarView(snapshot, statusBarModelLabel(snapshot))
     editor.setStatus(statusBar.session)
     editor.setShortcuts(statusBar.shortcuts)
+    editor.setSessionStatus(sessionStateView(snapshot))
+    editor.setOutput(outputDataFrom(snapshot))
     editor.setSessionTitle(
       snapshot.currentSessionId
         ? { name: snapshot.currentSessionName ?? "", sessionId: snapshot.currentSessionId }
@@ -286,6 +327,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       const statusBar = statusBarView(event.snapshot, statusBarModelLabel(event.snapshot))
       editor.setStatus(statusBar.session)
       editor.setShortcuts(statusBar.shortcuts)
+      editor.setSessionStatus(sessionStateView(event.snapshot))
+      editor.setOutput(outputDataFrom(event.snapshot))
       editor.setSessionTitle(
         event.snapshot.currentSessionId
           ? { name: event.snapshot.currentSessionName ?? "", sessionId: event.snapshot.currentSessionId }

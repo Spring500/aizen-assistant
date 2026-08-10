@@ -24,7 +24,6 @@ test("首个有效字符为斜杠时显示并过滤命令候选", async () => {
     const editor = createChatEditor(
       setup.renderer,
       { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} },
-      undefined,
       commands,
     )
     editor.input.setText("  /mo")
@@ -47,7 +46,6 @@ test("正文或命令参数中的斜杠不触发候选", async () => {
     const editor = createChatEditor(
       setup.renderer,
       { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} },
-      undefined,
       commands,
     )
     for (const value of ["路径 a/b", "第一段\n/new", "/new 参数"]) {
@@ -69,7 +67,6 @@ test("Enter 和 Tab 只补全命令且必须再次 Enter 才执行", async () =>
     const editor = createChatEditor(
       setup.renderer,
       { onSubmit: (value) => submitted.push(value), onAbort: () => {}, onQuit: () => {} },
-      undefined,
       commands,
     )
     editor.input.setText("/n")
@@ -94,21 +91,16 @@ test("Enter 和 Tab 只补全命令且必须再次 Enter 才执行", async () =>
 test("超过五个命令时候选窗口跟随选中项滚动", async () => {
   const setup = await createTestRenderer({ width: 60, height: 18 })
   try {
-    const editor = createChatEditor(
-      setup.renderer,
-      { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} },
-      undefined,
-      [
-        { name: "/one", description: "命令一" },
-        { name: "/two", description: "命令二" },
-        { name: "/three", description: "命令三" },
-        { name: "/four", description: "命令四" },
-        { name: "/five", description: "命令五" },
-        { name: "/six", description: "命令六" },
-        { name: "/seven", description: "命令七" },
-        { name: "/eight", description: "命令八" },
-      ],
-    )
+    const editor = createChatEditor(setup.renderer, { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} }, [
+      { name: "/one", description: "命令一" },
+      { name: "/two", description: "命令二" },
+      { name: "/three", description: "命令三" },
+      { name: "/four", description: "命令四" },
+      { name: "/five", description: "命令五" },
+      { name: "/six", description: "命令六" },
+      { name: "/seven", description: "命令七" },
+      { name: "/eight", description: "命令八" },
+    ])
     editor.input.setText("/")
     await Bun.sleep(1)
     for (let index = 0; index < 6; index += 1) emitKey(setup.renderer, "\x1b[B")
@@ -128,21 +120,16 @@ test("超过五个命令时候选窗口跟随选中项滚动", async () => {
 test("命令候选尽可能让选中项居中并在首尾收敛", async () => {
   const setup = await createTestRenderer({ width: 60, height: 18 })
   try {
-    const editor = createChatEditor(
-      setup.renderer,
-      { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} },
-      undefined,
-      [
-        { name: "/one", description: "命令一" },
-        { name: "/two", description: "命令二" },
-        { name: "/three", description: "命令三" },
-        { name: "/four", description: "命令四" },
-        { name: "/five", description: "命令五" },
-        { name: "/six", description: "命令六" },
-        { name: "/seven", description: "命令七" },
-        { name: "/eight", description: "命令八" },
-      ],
-    )
+    const editor = createChatEditor(setup.renderer, { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} }, [
+      { name: "/one", description: "命令一" },
+      { name: "/two", description: "命令二" },
+      { name: "/three", description: "命令三" },
+      { name: "/four", description: "命令四" },
+      { name: "/five", description: "命令五" },
+      { name: "/six", description: "命令六" },
+      { name: "/seven", description: "命令七" },
+      { name: "/eight", description: "命令八" },
+    ])
     editor.input.setText("/")
     await Bun.sleep(1)
     for (let index = 0; index < 4; index += 1) emitKey(setup.renderer, "\x1b[B")
@@ -166,13 +153,12 @@ test("命令候选尽可能让选中项居中并在首尾收敛", async () => {
   }
 })
 
-test("矮终端优先保留状态、快捷键和错误行", async () => {
+test("矮终端优先保留状态和错误行并隐藏快捷键提示", async () => {
   const setup = await createTestRenderer({ width: 60, height: 9, screenMode: "split-footer", footerHeight: 8 })
   try {
     const editor = createChatEditor(
       setup.renderer,
       { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} },
-      undefined,
       commands,
     )
     editor.setStatus("模型状态必须可见")
@@ -183,8 +169,9 @@ test("矮终端优先保留状态、快捷键和错误行", async () => {
     await setup.renderOnce()
     const frame = setup.captureCharFrame()
     expect(frame).toContain("模型状态必须可见")
-    expect(frame).toContain("快捷键状态必须可见")
     expect(frame).toContain("错误状态必须可见")
+    // 矮终端不足以容纳固定 5 + 输入 1 + 输出区 3，优先隐藏快捷键提示行。
+    expect(frame).not.toContain("快捷键状态必须可见")
     expect(setup.renderer.footerHeight).toBeLessThanOrEqual(setup.renderer.terminalHeight)
     editor.destroy()
   } finally {
@@ -199,7 +186,6 @@ test("上下键切换候选且 Esc 关闭后保留输入", async () => {
     const editor = createChatEditor(
       setup.renderer,
       { onSubmit: () => {}, onAbort: () => aborted++, onQuit: () => {} },
-      undefined,
       commands,
     )
     editor.input.setText("/")

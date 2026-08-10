@@ -69,7 +69,12 @@ test("编辑器支持光标前反斜杠回车换行，并用 Enter 发送", asyn
 })
 
 test("编辑器可只隐藏输入框并保持底部状态栏可见", async () => {
-  const setup = await createTestRenderer({ width: 120, height: 8 })
+  const setup = await createTestRenderer({
+    width: 120,
+    height: 12,
+    screenMode: "split-footer",
+    footerHeight: 12,
+  })
   try {
     const editor = createChatEditor(setup.renderer, {
       onSubmit: () => {},
@@ -99,7 +104,7 @@ test("编辑器高度随视觉行数变化并显示带标题分割线", async ()
     width: 40,
     height: 16,
     screenMode: "split-footer",
-    footerHeight: 9,
+    footerHeight: 12,
   })
   try {
     const editor = createChatEditor(setup.renderer, {
@@ -111,17 +116,19 @@ test("编辑器高度随视觉行数变化并显示带标题分割线", async ()
     editor.input.setText("第一行\n第二行\n第三行")
     await Bun.sleep(1)
     await setup.renderOnce()
+    // 输入区按内容行数取（上限 = footer 总高 - 固定 5 - 输出区保底 3）。
     expect(editor.input.height).toBe(3)
-    expect(setup.renderer.footerHeight).toBe(11)
+    expect(setup.renderer.footerHeight).toBe(12)
     const frame = setup.captureCharFrame()
     expect(frame).toContain("修复登录重试  otter-builds-bridge──")
     expect(frame).toContain("第一行")
     expect(frame).toContain("第三行")
 
     editor.input.setText(Array.from({ length: 12 }, (_, index) => `第 ${index} 行`).join("\n"))
-    for (let attempt = 0; attempt < 20 && editor.input.height !== 8; attempt += 1) await Bun.sleep(5)
-    expect(editor.input.height).toBe(8)
-    expect(setup.renderer.footerHeight).toBe(16)
+    for (let attempt = 0; attempt < 20 && editor.input.height !== 4; attempt += 1) await Bun.sleep(5)
+    // 内容行数超过上限时输入区封顶，footer 总高度不变。
+    expect(editor.input.height).toBe(4)
+    expect(setup.renderer.footerHeight).toBe(12)
     editor.destroy()
   } finally {
     setup.renderer.destroy()

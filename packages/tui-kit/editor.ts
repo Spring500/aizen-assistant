@@ -9,13 +9,18 @@ import {
   TextareaRenderable,
   TextRenderable,
 } from "@opentui/core"
-import { overlayManager, type OverlayManager } from "./overlay-manager.ts"
+import { createOutputPanel, type OutputData } from "./output-panel.ts"
 import { shortcutText } from "./status-bar.ts"
 import { systemColors } from "./theme.ts"
 
 export type CommandOption = {
   name: `/${string}`
   description: string
+}
+
+export type SessionStatus = {
+  text: string
+  tone: "idle" | "running" | "error"
 }
 
 export type EditorHandlers = {
@@ -36,12 +41,19 @@ export type ChatEditor = {
   setError(content: string): void
   setBusy(busy: boolean): void
   setInputVisible(visible: boolean): void
+  /** 更新第二条分割线内嵌的会话状态（空闲/处理中/错误）。 */
+  setSessionStatus(status: SessionStatus): void
+  /** 更新 footer 输出区（流式输出与活动工具行）。 */
+  setOutput(data: OutputData): void
   destroy(): void
 }
 
 const minInputHeight = 1
 const maxInputHeight = 8
-const chatViewHeight = 3
+/** footer 固定行：第一条分割线 + 第二条分割线 + 信息行 + 快捷键提示行 + 错误提示行。 */
+const FIXED_FOOTER_ROWS = 5
+/** 输出区最小行数（流式输出保底）。 */
+const MIN_OUTPUT_ROWS = 3
 
 function escapedNewline(input: TextareaRenderable): boolean {
   const value = input.plainText
@@ -103,21 +115,50 @@ function titledSeparator(width: number, session: { name: string; sessionId: stri
   return new StyledText(chunks)
 }
 
+/** 第二条分割线：横线居中内嵌会话状态文本，与第一条分割线内嵌对话标题采用同一手法。 */
+function sessionStatusSeparator(width: number, status: SessionStatus): StyledText {
+  const safeWidth = Math.max(1, width)
+  const label = status.text ? ` ${status.text} ` : ""
+  const labelWidth = Bun.stringWidth(label)
+  const remaining = Math.max(0, safeWidth - labelWidth)
+  const left = Math.floor(remaining / 2)
+  const right = remaining - left
+  const color =
+    status.tone === "error"
+      ? systemColors.statusError
+      : status.tone === "running"
+        ? systemColors.statusRunning
+        : systemColors.statusIdle
+  const chunks: TextChunk[] = [{ __isChunk: true, text: "─".repeat(left), fg: parseColor(systemColors.shortcuts) }]
+  if (status.text)
+    chunks.push({
+      __isChunk: true,
+      text: label,
+      fg: parseColor(color),
+      attributes: createTextAttributes({ bold: true }),
+    })
+  chunks.push({ __isChunk: true, text: "─".repeat(right), fg: parseColor(systemColors.shortcuts) })
+  return new StyledText(chunks)
+}
+
 export function createChatEditor(
   renderer: CliRenderer,
   handlers: EditorHandlers,
-  manager: OverlayManager = overlayManager(renderer),
   commands: readonly CommandOption[] = [],
 ): ChatEditor {
   let busy = false
   let inputVisible = true
   let sessionTitle: { name: string; sessionId: string } | undefined
+  let sessionStatus: SessionStatus = { text: "", tone: "idle" }
   let destroyed = false
   let commandSelected = 0
   let commandOffset = 0
   let commandFilter = ""
   let commandDismissedFor = ""
   let commandMatches: CommandOption[] = []
+
+  const outputPanel = createOutputPanel(renderer)
+  renderer.root.add(outputPanel.root, 0)
 
   const commandList = new TextRenderable(renderer, {
     id: "editor-command-list",
@@ -169,6 +210,8 @@ export function createChatEditor(
           `${commandOffset + index === commandSelected ? "▶" : " "} ${command.name.padEnd(10)} ${command.description}`,
       )
       .join("\n")
+    // 命令补全激活时替换输出区，二者互斥。
+    outputPanel.setVisible(!commandList.visible)
   }
   const completeCommand = () => {
     const command = commandMatches[commandSelected]
@@ -182,18 +225,23 @@ export function createChatEditor(
   const updateLayout = () => {
     if (destroyed || input.isDestroyed) return
     const measuredLines = inputVisualLines(input.plainText, renderer.terminalWidth)
+    // 矮终端降级：footer 高度不足以容纳“固定 5 + 输入 1 + 输出区保底 3”时，先隐藏快捷键提示行。
+    const shortcutsVisible = renderer.footerHeight >= FIXED_FOOTER_ROWS + minInputHeight + MIN_OUTPUT_ROWS
+    shortcuts.visible = shortcutsVisible
+    const fixedRows = shortcutsVisible ? FIXED_FOOTER_ROWS : FIXED_FOOTER_ROWS - 1
+    // 输入区按内容行数取，但不多吃：上限 = footer 总高 - 固定行 - 输出区最小行。
+    const maxInputRows = Math.max(minInputHeight, renderer.footerHeight - fixedRows - MIN_OUTPUT_ROWS)
     const nextHeight = Math.max(
       minInputHeight,
-      Math.min(maxInputHeight, Math.max(measuredLines, input.virtualLineCount || input.lineCount || 1)),
+      Math.min(maxInputHeight, maxInputRows, Math.max(measuredLines, input.virtualLineCount || input.lineCount || 1)),
     )
     input.height = nextHeight
-    const fixedFooterHeight = chatViewHeight + (inputVisible ? nextHeight + 2 : 0) + 3
-    updateCommands(inputVisible ? renderer.terminalHeight - fixedFooterHeight : 0)
+    // 剩余空间全部给输出区（含命令补全），输出区保底 3 行。
+    const outputHeight = Math.max(MIN_OUTPUT_ROWS, renderer.footerHeight - fixedRows - nextHeight)
+    outputPanel.setHeight(outputHeight)
+    updateCommands(inputVisible ? outputHeight : 0)
     topSeparator.content = titledSeparator(renderer.terminalWidth, sessionTitle)
-    bottomSeparator.content = "─".repeat(Math.max(1, renderer.terminalWidth))
-    manager.setBaseFooterHeight(
-      Math.min(renderer.terminalHeight, fixedFooterHeight + (commandList.visible ? commandList.height : 0)),
-    )
+    bottomSeparator.content = sessionStatusSeparator(renderer.terminalWidth, sessionStatus)
   }
   input = new TextareaRenderable(renderer, {
     id: "editor",
@@ -335,10 +383,19 @@ export function createChatEditor(
       else input.blur()
       updateLayout()
     },
+    setSessionStatus(statusValue) {
+      sessionStatus = statusValue
+      if (destroyed) return
+      bottomSeparator.content = sessionStatusSeparator(renderer.terminalWidth, sessionStatus)
+    },
+    setOutput(data) {
+      outputPanel.update(data)
+    },
     destroy() {
       destroyed = true
       renderer.keyInput.off("keypress", onKeyPress)
       renderer.off(CliRenderEvents.RESIZE, onResize)
+      outputPanel.destroy()
       commandList.destroy()
       topSeparator.destroy()
       input.destroy()

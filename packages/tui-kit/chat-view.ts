@@ -21,13 +21,10 @@ import { isMathCodeBlock, prepareMarkdownForTerminal } from "./markdown.ts"
 import { systemColors } from "./theme.ts"
 
 export type ChatView = {
-  header: TextRenderable
-  live: TextRenderable
-  status: TextRenderable
   destroy(): Promise<void>
   update(snapshot: CoreSnapshot): Promise<void>
   getFoldPreferences(): FoldPreferences
-  /** 应用折叠设置并全量回放；message 为状态栏反馈文案，缺省用通用提示。 */
+  /** 应用折叠设置并全量回放；message 保留以兼容旧调用，footer 不再展示该提示文案。 */
   setFoldPreferences(fold: FoldPreferences, message?: string): Promise<void>
 }
 
@@ -182,11 +179,6 @@ function jsonPreview(value: unknown): string {
   }
 }
 
-function declaredIntentText(argumentsValue: unknown): string {
-  const intent = objectValue(argumentsValue)?.declaredIntent
-  return typeof intent === "string" && intent.trim() ? intent.trim() : ""
-}
-
 function toolInputText(name: string, argumentsValue: unknown): string {
   const argumentsObject = objectValue(argumentsValue)
   if (name === "bash" && typeof argumentsObject?.command === "string") return oneLine(argumentsObject.command)
@@ -206,10 +198,6 @@ function toolInputText(name: string, argumentsValue: unknown): string {
     return `${oneLine(argumentsObject.path)} · 写入 ${contentLength} 字符`
   }
   return jsonPreview(argumentsValue)
-}
-
-function toolCallText(name: string, argumentsValue: unknown): string {
-  return `[${name}] ${toolInputText(name, argumentsValue)}`
 }
 
 /** 将毫秒时长格式化为紧凑的天、时、分、秒文本。 */
@@ -530,56 +518,7 @@ function createHistoryBlock(
   return root
 }
 
-function liveText(snapshot: CoreSnapshot): string {
-  const metrics = snapshot.responseMetrics
-  const metricText = metrics
-    ? ` | 耗时 ${formatDurationText(metrics.elapsedSeconds * 1000)} · 生成 ${metrics.outputTokens} tokens`
-    : ""
-  const active = snapshot.activeTools.at(-1)
-  if (active) {
-    const output = active.outputPreview ? outputPreview(active.outputPreview) : "等待输出"
-    const intent = declaredIntentText(active.arguments)
-    return `${toolCallText(active.name, active.arguments)}${intent ? ` | 目的：${intent}` : ""} | ${active.isFinished ? "完成" : "运行中"}：${output}${metricText}`
-  }
-  if (snapshot.streamingText) return `[助手流式] ${outputPreview(snapshot.streamingText)}${metricText}`
-  if (snapshot.streamingThinking) return `[思考流式] ${outputPreview(snapshot.streamingThinking)}${metricText}`
-  return metrics ? `助手回复中${metricText}` : ""
-}
-
-function statusText(snapshot: CoreSnapshot): string {
-  if (snapshot.lastError) return `错误：${snapshot.lastError}`
-  return {
-    idle: "空闲",
-    running: "处理中",
-    compacting: "正在压缩上下文",
-    aborting: "正在中止",
-    authenticating: "等待输入认证信息",
-    refreshing: "正在刷新供应商模型",
-    error: "发生错误",
-  }[snapshot.status]
-}
-
 export function createChatView(renderer: CliRenderer): ChatView {
-  const header = new TextRenderable(renderer, {
-    id: "header",
-    height: 1,
-    fg: systemColors.header,
-    content: "AizenAssistant",
-  })
-  const live = new TextRenderable(renderer, {
-    id: "live",
-    width: "100%",
-    height: 1,
-    wrapMode: "none",
-    truncate: true,
-    fg: systemColors.live,
-    content: "",
-  })
-  const status = new TextRenderable(renderer, { id: "status", height: 1, fg: systemColors.statusIdle, content: "空闲" })
-  renderer.root.add(header)
-  renderer.root.add(live)
-  renderer.root.add(status)
-
   const assistantMarkdownStyles = createAssistantMarkdownStyles()
   let blocks: DisplayBlock[] = []
   let fold: FoldPreferences = {
@@ -588,8 +527,6 @@ export function createChatView(renderer: CliRenderer): ChatView {
     toolDetailsExpanded: false,
   }
   let committedFingerprints: string[] = []
-  let latestSnapshot: CoreSnapshot | undefined
-  let notice = ""
   let resizeTimer: ReturnType<typeof setTimeout> | undefined
   let operationQueue = Promise.resolve()
   let lifecycle: "active" | "closing" | "destroyed" = "active"
@@ -650,20 +587,6 @@ export function createChatView(renderer: CliRenderer): ChatView {
     return result
   }
 
-  const refreshFooter = () => {
-    if (lifecycle !== "active" || !latestSnapshot || header.isDestroyed || live.isDestroyed || status.isDestroyed)
-      return
-    header.content = "AizenAssistant"
-    live.content = liveText(latestSnapshot)
-    status.content = notice || statusText(latestSnapshot)
-    status.fg =
-      latestSnapshot.lastError || latestSnapshot.status === "error"
-        ? systemColors.statusError
-        : latestSnapshot.status === "idle"
-          ? systemColors.statusIdle
-          : systemColors.statusRunning
-  }
-
   const onResize = () => {
     if (lifecycle !== "active") return
     if (resizeTimer) clearTimeout(resizeTimer)
@@ -671,29 +594,21 @@ export function createChatView(renderer: CliRenderer): ChatView {
       resizeTimer = undefined
       void queueOperation(async () => {
         await syncHistory(true)
-        refreshFooter()
       }).catch((error) => console.error("聊天视图 resize 回放失败", error))
     }, 75)
   }
   renderer.on(CliRenderEvents.RESIZE, onResize)
 
   return {
-    header,
-    live,
-    status,
     destroy() {
       if (destroyPromise) return destroyPromise
       lifecycle = "closing"
-      latestSnapshot = undefined
       if (resizeTimer) {
         clearTimeout(resizeTimer)
         resizeTimer = undefined
       }
       renderer.off(CliRenderEvents.RESIZE, onResize)
       destroyPromise = operationQueue.then(() => {
-        if (!header.isDestroyed) header.destroy()
-        if (!live.isDestroyed) live.destroy()
-        if (!status.isDestroyed) status.destroy()
         assistantMarkdownStyles.markdown.destroy()
         assistantMarkdownStyles.code.destroy()
         lifecycle = "destroyed"
@@ -702,23 +617,18 @@ export function createChatView(renderer: CliRenderer): ChatView {
     },
     update(snapshot) {
       return queueOperation(async () => {
-        latestSnapshot = snapshot
-        notice = ""
         fold = { ...snapshot.preferences.fold }
         blocks = displayBlocks(snapshot)
-        refreshFooter()
         await syncHistory()
       })
     },
     getFoldPreferences() {
       return { ...fold }
     },
-    setFoldPreferences(next, message = "已应用折叠设置，并全量回放会话") {
+    setFoldPreferences(next, _message) {
       return queueOperation(async () => {
         fold = { ...next }
-        notice = message
         await syncHistory(true)
-        refreshFooter()
       })
     },
   }

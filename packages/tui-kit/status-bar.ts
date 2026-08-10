@@ -70,6 +70,26 @@ export function shortcutText(context: ShortcutContext): string {
   return `Enter 发送 | Shift+Enter 换行 | 光标前 \\ 后 Enter 换行 | Esc 中止 | ${global}`
 }
 
+export type SessionState = {
+  text: string
+  tone: "idle" | "running" | "error"
+}
+
+/** 会话运行状态文本（供第二条分割线内嵌显示），错误优先展示错误消息。 */
+export function sessionStateView(snapshot: CoreSnapshot): SessionState {
+  if (snapshot.lastError) return { text: `错误：${snapshot.lastError}`, tone: "error" }
+  const text = {
+    idle: "空闲",
+    running: "处理中",
+    compacting: "正在压缩上下文",
+    aborting: "正在中止",
+    authenticating: "等待输入认证信息",
+    refreshing: "正在刷新供应商模型",
+    error: "发生错误",
+  }[snapshot.status]
+  return { text, tone: snapshot.status === "idle" ? "idle" : "running" }
+}
+
 export function statusBarView(snapshot: CoreSnapshot, modelLabel?: string): StatusBarViewModel {
   return {
     session: sessionStatusText(snapshot, modelLabel),

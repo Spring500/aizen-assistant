@@ -1,0 +1,143 @@
+import { BoxRenderable, type CliRenderer, TextRenderable } from "@opentui/core"
+import type { ResponseMetrics } from "../core/types.ts"
+import { systemColors } from "./theme.ts"
+
+export type OutputTool = {
+  id: string
+  name: string
+  intent?: string
+  outputPreview?: string
+  isFinished: boolean
+  isError: boolean
+}
+
+export type OutputData = {
+  streamingText: string
+  streamingThinking: string
+  metrics?: ResponseMetrics
+  tools: OutputTool[]
+}
+
+export type OutputPanel = {
+  /** 输出区根节点，由调用方添加到 renderer.root 的指定位置。 */
+  readonly root: BoxRenderable
+  readonly isDestroyed: boolean
+  /** 调整输出区总高度（行数），并重排工具行与流式行的分配。 */
+  setHeight(height: number): void
+  /** 用最新快照数据更新工具行与流式行内容。 */
+  update(data: OutputData): void
+  setVisible(visible: boolean): void
+  destroy(): void
+}
+
+/** 流式输出保底行数：即使有工具行挤压，流式输出区也不少于该行数。 */
+const MIN_STREAM_ROWS = 3
+
+function lastLine(text: string): string {
+  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n+$/, "")
+  if (!normalized) return ""
+  const lines = normalized.split("\n")
+  return lines.at(-1) ?? ""
+}
+
+function lastLines(text: string, maxLines: number): string {
+  if (maxLines <= 0) return ""
+  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n")
+  if (lines.length <= maxLines) return lines.join("\n")
+  return `… 前面 ${lines.length - maxLines} 行省略\n${lines.slice(-maxLines).join("\n")}`
+}
+
+function toolLine(tool: OutputTool): string {
+  const status = tool.isError ? "失败" : tool.isFinished ? "完成" : "运行中"
+  const output = tool.outputPreview ? lastLine(tool.outputPreview) : "等待输出"
+  return `[${tool.name}] ${tool.intent?.trim() || "未提供目的"} | ${status}：${output}`
+}
+
+function metricText(metrics: ResponseMetrics | undefined): string {
+  if (!metrics) return ""
+  const hours = Math.floor(metrics.elapsedSeconds / 3600)
+  const minutes = Math.floor((metrics.elapsedSeconds % 3600) / 60)
+  const seconds = metrics.elapsedSeconds % 60
+  const duration = [hours ? `${hours}h` : "", minutes ? `${minutes}m` : "", `${seconds}s`].filter(Boolean).join(" ")
+  return ` | 耗时 ${duration} · 生成 ${metrics.outputTokens} tokens`
+}
+
+/** 创建聊天 footer 的输出区：工具行（每工具一行，超出截断）在上，流式输出（保底 3 行）在下。 */
+export function createOutputPanel(renderer: CliRenderer): OutputPanel {
+  const root = new BoxRenderable(renderer, {
+    id: "footer-output",
+    width: "100%",
+    height: 1,
+    flexDirection: "column",
+  })
+  const toolsText = new TextRenderable(renderer, {
+    id: "footer-output-tools",
+    width: "100%",
+    height: 0,
+    wrapMode: "none",
+    truncate: true,
+    fg: systemColors.live,
+  })
+  const streamText = new TextRenderable(renderer, {
+    id: "footer-output-stream",
+    width: "100%",
+    height: 1,
+    wrapMode: "word",
+    fg: systemColors.live,
+  })
+  root.add(toolsText)
+  root.add(streamText)
+
+  let height = MIN_STREAM_ROWS
+  let data: OutputData = { streamingText: "", streamingThinking: "", tools: [] }
+  let destroyed = false
+
+  const render = () => {
+    // 工具行上限 = 总高 - 流式保底；超出时截断并补一行"还有 k 个"提示。
+    const maxToolRows = Math.max(0, height - MIN_STREAM_ROWS)
+    let toolRows: string[] = []
+    if (data.tools.length > 0 && maxToolRows > 0) {
+      if (data.tools.length > maxToolRows) {
+        const shown = data.tools.slice(0, Math.max(1, maxToolRows - 1))
+        toolRows = [...shown.map(toolLine), `… 还有 ${data.tools.length - shown.length} 个工具`]
+      } else toolRows = data.tools.map(toolLine)
+    }
+    toolsText.content = toolRows.join("\n")
+    toolsText.height = toolRows.length
+    const streamRows = Math.max(1, height - toolRows.length)
+    const source = data.streamingText
+      ? `[助手流式] ${data.streamingText}`
+      : data.streamingThinking
+        ? `[思考流式] ${data.streamingThinking}`
+        : ""
+    streamText.content = source ? `${lastLines(source, streamRows)}${metricText(data.metrics)}` : ""
+    streamText.height = streamRows
+  }
+
+  return {
+    root,
+    get isDestroyed() {
+      return destroyed
+    },
+    setHeight(next) {
+      if (destroyed) return
+      height = Math.max(MIN_STREAM_ROWS, next)
+      root.height = height
+      render()
+    },
+    update(next) {
+      if (destroyed) return
+      data = next
+      render()
+    },
+    setVisible(visible) {
+      if (destroyed) return
+      root.visible = visible
+    },
+    destroy() {
+      if (destroyed) return
+      destroyed = true
+      root.destroyRecursively()
+    },
+  }
+}
