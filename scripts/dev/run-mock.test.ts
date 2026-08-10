@@ -48,7 +48,7 @@ test("默认模板预配置可用模型、子 Agent 和视图", async () => {
   const data = await prepareMockData({ root, templatesDirectory: templates, suite: "default", keep: false })
   const preferences = await new AppPreferencesStore(join(data, "preferences.json")).read()
   expect(preferences.newSession).toMatchObject({
-    model: { providerId: "mock-anthropic", modelId: "mock-dsl", api: "anthropic-messages" },
+    model: { providerId: "mock-anthropic", modelId: "mock-dsl" },
     viewId: "mock-default",
     permissionReviewMode: "aiReview",
   })

@@ -2,8 +2,7 @@
   "newSession": {
     "model": {
       "providerId": "mock-anthropic",
-      "modelId": "mock-dsl",
-      "api": "anthropic-messages"
+      "modelId": "mock-dsl"
     },
     "viewId": "mock-default",
     "permissionMode": "hybrid",
