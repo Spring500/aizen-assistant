@@ -29,10 +29,16 @@ export async function createAizenRenderer(): Promise<CliRenderer> {
     externalOutputMode: "capture-stdout",
     useMouse: false,
   })
-  // footer 高度按视口行数校准；终端尺寸变化时重算——此时历史全量重绘本就预期发生。
+  // footer 高度按视口行数校准。仅在终端行数真正变化时重算（此时历史全量重绘
+  // 本就在预期内）；OverlayManager 为 overlay 临时调整 footerHeight 也会触发
+  // RESIZE 事件，但终端尺寸未变，必须跳过以免覆盖 overlay 的临时高度。
+  let lastTerminalHeight = -1
   const syncFooterHeight = () => {
     if (renderer.isDestroyed) return
-    const next = computeFooterHeight(renderer.terminalHeight)
+    const terminalHeight = renderer.terminalHeight
+    if (terminalHeight === lastTerminalHeight) return
+    lastTerminalHeight = terminalHeight
+    const next = computeFooterHeight(terminalHeight)
     if (next !== renderer.footerHeight) renderer.footerHeight = next
   }
   syncFooterHeight()
