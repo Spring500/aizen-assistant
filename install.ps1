@@ -11,6 +11,9 @@
 $ErrorActionPreference = "Stop"
 
 $Repository = "Spring500/aizen-assistant"
+# 发布 API 与下载基地址；可用 AIZEN_RELEASE_API / AIZEN_RELEASE_DOWNLOAD 覆盖（本地 mock 测试或自建镜像）。
+$ReleaseApi = if ($env:AIZEN_RELEASE_API) { $env:AIZEN_RELEASE_API } else { "https://api.github.com/repos/$Repository" }
+$ReleaseDownload = if ($env:AIZEN_RELEASE_DOWNLOAD) { $env:AIZEN_RELEASE_DOWNLOAD } else { "https://github.com/$Repository/releases/download" }
 $ConfigDir = Join-Path $env:USERPROFILE ".aizen"
 $InstallDir = Join-Path $ConfigDir "bin"
 $PathEntry = '%USERPROFILE%\.aizen\bin'
@@ -29,7 +32,7 @@ function Get-Platform {
 
 # 查询最新发布版本号（去掉 v 前缀）。
 function Get-LatestVersion {
-  $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$Repository/releases/latest" -Headers @{ "User-Agent" = "aizen-assistant" }
+  $release = Invoke-RestMethod -Uri "$ReleaseApi/releases/latest" -Headers @{ "User-Agent" = "aizen-assistant" }
   return $release.tag_name.TrimStart("v")
 }
 
@@ -37,7 +40,7 @@ function Get-LatestVersion {
 function Install-Release {
   param([string]$Version, [string]$Platform)
 
-  $baseUrl = "https://github.com/$Repository/releases/download/v$Version"
+  $baseUrl = "$ReleaseDownload/v$Version"
   $zipName = "aizen-assistant-$Version-$Platform.zip"
   $tmpDir = Join-Path $env:TEMP ("aizen-install-" + [guid]::NewGuid().ToString("N"))
   New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null

@@ -84,18 +84,31 @@ async function removeAizenDirectory(home: string, executablePath: string): Promi
     } catch {
       // bin 目录不存在时跳过
     }
-    // 延迟删除自身 exe 与 bin 目录：写临时 ps1 并由独立 PowerShell 进程在进程退出后执行
+    // 延迟删除自身 exe 与整个 ~/.aizen：写临时 ps1，由 Start-Process 启动独立 PowerShell 在进程退出后执行。
+    // 不能用 Bun.spawn 直接跑（其子进程随父进程退出被终止，经实验验证）。
     const script = join(tmpdir(), `aizen-uninstall-${Date.now()}.ps1`)
     const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`
     await writeFile(
       script,
-      `Start-Sleep -Seconds 1\nRemove-Item -Recurse -Force ${quoted(binDir)}\nRemove-Item -Force ${quoted(script)}\n`,
+      [
+        "Start-Sleep -Seconds 1",
+        `Remove-Item -Recurse -Force ${quoted(binDir)}`,
+        `Remove-Item -Recurse -Force ${quoted(aizenDir)}`,
+        `Remove-Item -Force ${quoted(script)}`,
+        "",
+      ].join("\n"),
     )
-    Bun.spawn({
-      cmd: ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
-      stdout: "ignore",
-      stderr: "ignore",
-    })
+    const launch = `Start-Process -WindowStyle Hidden powershell -ArgumentList ${[
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      script,
+    ]
+      .map((value) => `'${value.replaceAll("'", "''")}'`)
+      .join(",")}`
+    await Bun.spawn({ cmd: ["powershell", "-NoProfile", "-Command", launch], stdout: "ignore", stderr: "ignore" })
+      .exited
   } else {
     // POSIX 允许删除运行中的可执行文件，整个目录一并删除
     await rm(aizenDir, { recursive: true, force: true })

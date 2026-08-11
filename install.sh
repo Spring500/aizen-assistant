@@ -10,6 +10,9 @@
 set -euo pipefail
 
 REPOSITORY="Spring500/aizen-assistant"
+# 发布 API 与下载基地址；可用 AIZEN_RELEASE_API / AIZEN_RELEASE_DOWNLOAD 覆盖（本地 mock 测试或自建镜像）。
+RELEASE_API="${AIZEN_RELEASE_API:-https://api.github.com/repos/${REPOSITORY}}"
+RELEASE_DOWNLOAD="${AIZEN_RELEASE_DOWNLOAD:-https://github.com/${REPOSITORY}/releases/download}"
 HOME_DIR="${HOME:-}"
 CONFIG_DIR="$HOME_DIR/.aizen"
 INSTALL_DIR="$CONFIG_DIR/bin"
@@ -50,7 +53,7 @@ detect_platform() {
 
 # 查询最新发布版本号（去掉 v 前缀）。
 fetch_latest_version() {
-  curl -fsSL "https://api.github.com/repos/${REPOSITORY}/releases/latest" |
+  curl -fsSL "${RELEASE_API}/releases/latest" |
     grep -o '"tag_name"[[:space:]]*:[[:space:]]*"v[^"]*"' |
     head -1 |
     sed 's/.*"v\([^"]*\)"/\1/'
@@ -68,7 +71,7 @@ file_sha256() {
 # 下载、校验并解压指定版本，把可执行文件放入安装目录；输出实际安装版本号。
 download_and_install() {
   local version="$1" platform="$2"
-  local base_url="https://github.com/${REPOSITORY}/releases/download/v${version}"
+  local base_url="${RELEASE_DOWNLOAD}/v${version}"
   local zip_name="aizen-assistant-${version}-${platform}.zip"
   local tmp_dir extracted_dir expected actual installed_version
   tmp_dir="$(mktemp -d)"

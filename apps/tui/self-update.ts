@@ -11,8 +11,11 @@ import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises"
 import { $ } from "bun"
 import { readInstallRecord, writeInstallRecord } from "../../packages/core/install-record.ts"
 
-/** 发布仓库标识（与 git remote 一致），用于查询 release 与匹配资产。 */
-const GITHUB_REPOSITORY = "Spring500/aizen-assistant"
+/**
+ * GitHub API 基地址，用于查询最新 release。
+ * 可用 AIZEN_RELEASE_API 环境变量覆盖（本地 mock 测试或自建镜像场景）；资产 URL 取自返回 JSON，无需单独覆盖。
+ */
+const releaseApiBase = process.env.AIZEN_RELEASE_API ?? "https://api.github.com/repos/Spring500/aizen-assistant"
 
 /** 比较语义化版本 x.y.z：a 大于 b 返回正数，相等返回 0，否则负数。 */
 function compareVersions(a: string, b: string): number {
@@ -40,7 +43,7 @@ type LatestRelease = {
 
 /** 查询仓库最新 release。 */
 async function fetchLatestRelease(): Promise<LatestRelease> {
-  const response = await fetch(`https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest`, {
+  const response = await fetch(`${releaseApiBase}/releases/latest`, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": "aizen-assistant" },
   })
   if (!response.ok) throw new Error(`查询最新版本失败：HTTP ${response.status}`)
@@ -76,9 +79,13 @@ async function extractZip(zipPath: string, destDir: string): Promise<void> {
   }
 }
 
-/** 用新可执行文件替换当前进程的可执行文件；Windows 下运行中 exe 被锁，延迟替换。 */
-async function replaceExecutable(newExecutable: string, currentExecutable: string): Promise<void> {
+/**
+ * 用新可执行文件替换当前进程的可执行文件；Windows 下运行中 exe 被锁，延迟替换。
+ * cleanupDir：Windows 延迟替换时由延迟脚本负责删除的临时目录（调用方不得提前删除其中的新文件）。
+ */
+async function replaceExecutable(newExecutable: string, currentExecutable: string, cleanupDir?: string): Promise<void> {
   if (process.platform === "win32") {
+    // 写临时 ps1，由 Start-Process 启动独立 PowerShell 在进程退出后执行（Bun.spawn 子进程会随父退出被终止）。
     const script = join(tmpdir(), `aizen-update-${Date.now()}.ps1`)
     const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`
     await writeFile(
@@ -87,15 +94,22 @@ async function replaceExecutable(newExecutable: string, currentExecutable: strin
         "Start-Sleep -Seconds 1",
         `Remove-Item -Force ${quoted(currentExecutable)}`,
         `Move-Item -Force ${quoted(newExecutable)} ${quoted(currentExecutable)}`,
+        ...(cleanupDir ? [`Remove-Item -Recurse -Force ${quoted(cleanupDir)}`] : []),
         `Remove-Item -Force ${quoted(script)}`,
         "",
       ].join("\n"),
     )
-    Bun.spawn({
-      cmd: ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script],
-      stdout: "ignore",
-      stderr: "ignore",
-    })
+    const launch = `Start-Process -WindowStyle Hidden powershell -ArgumentList ${[
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      script,
+    ]
+      .map((value) => `'${value.replaceAll("'", "''")}'`)
+      .join(",")}`
+    await Bun.spawn({ cmd: ["powershell", "-NoProfile", "-Command", launch], stdout: "ignore", stderr: "ignore" })
+      .exited
   } else {
     await rename(newExecutable, currentExecutable)
   }
@@ -137,6 +151,8 @@ export async function runUpdate(): Promise<number> {
   }
 
   const workDir = await mkdtemp(join(tmpdir(), "aizen-update-"))
+  // Windows 下已调度延迟替换时，workDir 由延迟脚本清理，主流程不得提前删除（否则新文件丢失）。
+  let delayReplaceScheduled = false
   try {
     const zipPath = join(workDir, assetName)
     await download(asset.url, zipPath)
@@ -160,7 +176,8 @@ export async function runUpdate(): Promise<number> {
     const newExecutable = join(workDir, "extracted", basename(process.execPath))
     if (!(await Bun.file(newExecutable).exists())) throw new Error("压缩包内未找到可执行文件")
 
-    await replaceExecutable(newExecutable, process.execPath)
+    await replaceExecutable(newExecutable, process.execPath, workDir)
+    delayReplaceScheduled = true
     await writeInstallRecord({ channel: "github", version: release.version, platform: record.platform })
     console.log(`更新完成：${record.version} → ${release.version}`)
     return 0
@@ -168,6 +185,6 @@ export async function runUpdate(): Promise<number> {
     console.error(`更新失败：${error instanceof Error ? error.message : String(error)}`)
     return 1
   } finally {
-    await rm(workDir, { recursive: true, force: true })
+    if (!delayReplaceScheduled) await rm(workDir, { recursive: true, force: true })
   }
 }
