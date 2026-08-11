@@ -1,4 +1,4 @@
-# AizenAssistant 安装脚本（Windows）
+﻿# AizenAssistant 安装脚本（Windows）
 #
 # 用法：
 #   irm https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.ps1 | iex
