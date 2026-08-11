@@ -14,6 +14,7 @@ import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { type DiscoveredSkill, type InstalledSkill, SkillStore } from "../../packages/core/skill-store.ts"
 import { JsonlPermissionGapRecorder } from "../../packages/core/tool-permissions/gap-recorder.ts"
+import { JsonlPermissionAuditRecorder } from "../../packages/core/tool-permissions/permission-audit.ts"
 import type { CorePort } from "../../packages/core/types.ts"
 import { type ProjectSources, readViewConfig, writeViewConfig } from "../../packages/core/view-config.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
@@ -122,6 +123,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             ),
           }
         : {}),
+      permissionAuditRecorder: new JsonlPermissionAuditRecorder(join(options.dataDirectory, "permission-audit.jsonl")),
     })
   const view = createChatView(renderer)
   const interactionController = new AbortController()
@@ -1630,7 +1632,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   async function openSessionSettings(mode: "new" | "existing"): Promise<boolean> {
     let draft: SessionSettingsDraft = {
       viewId: null,
-      permissionMode: "hybrid",
       permissionPreset: "edit",
       permissionReviewMode: "manual",
     }
@@ -1651,21 +1652,18 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           draft = {
             model: modelWithPreferredThinkingLevel(available, preferred.model),
             viewId: preferred.viewId,
-            permissionMode: preferred.permissionMode ?? "hybrid",
             permissionPreset: preferred.permissionPreset ?? "edit",
             permissionReviewMode: preferred.permissionReviewMode ?? "manual",
           }
         } else
           draft = {
             viewId: preferred.viewId,
-            permissionMode: preferred.permissionMode ?? "hybrid",
             permissionPreset: preferred.permissionPreset ?? "edit",
             permissionReviewMode: preferred.permissionReviewMode ?? "manual",
           }
       } else
         draft = {
           viewId: preferred.viewId,
-          permissionMode: preferred.permissionMode ?? "hybrid",
           permissionPreset: preferred.permissionPreset ?? "edit",
           permissionReviewMode: preferred.permissionReviewMode ?? "manual",
         }
@@ -1686,7 +1684,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
           ...(listed?.offThinkingLevel ? { offThinkingLevel: listed.offThinkingLevel } : {}),
         },
         viewId: snapshot.currentViewId ?? null,
-        permissionMode: snapshot.currentPermissionMode ?? "hybrid",
         permissionPreset: snapshot.currentPermissionPreset ?? "edit",
         permissionReviewMode: snapshot.currentPermissionReviewMode ?? "manual",
       }
@@ -1762,7 +1759,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               type: "create_session",
               model: draft.model,
               viewId: draft.viewId,
-              permissionMode: draft.permissionMode ?? "hybrid",
               permissionPreset: draft.permissionPreset ?? "edit",
               permissionReviewMode: draft.permissionReviewMode ?? "manual",
             },

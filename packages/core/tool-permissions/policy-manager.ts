@@ -1,12 +1,18 @@
 import type { PermissionClassifierRegistry } from "./classifier-registry.ts"
 import type { PermissionClassifyContext, PermissionClassifyInput } from "./classifier-types.ts"
 import { evaluatePermissionPolicy, type PermissionPolicyEvaluation } from "./policy-evaluator.ts"
-import type { PermissionPolicy, PermissionReviewMode } from "./policy-types.ts"
+import {
+  permissionRuleName,
+  permissionTagNames,
+  type PermissionPolicy,
+  type PermissionReviewMode,
+} from "./policy-types.ts"
 import { resolvePermissionDisposition } from "./review-router.ts"
 import type {
   AiPermissionReviewer,
   HumanPermissionReviewer,
   HumanReviewRequest,
+  PermissionAuditEvent,
   ToolAuthorization,
   ToolPermissionBatchAuthorization,
   ToolPermissionBatchRequest,
@@ -23,25 +29,38 @@ export type PolicyPermissionManagerOptions = {
   registry: PermissionClassifierRegistry
   aiReviewer: AiPermissionReviewer
   humanReviewer: HumanPermissionReviewer
+  /** 授权与人工审核过程的审计事件回调。 */
+  audit?: (event: PermissionAuditEvent) => void | Promise<void>
   now?: () => Date
 }
 
 function assessment(evaluation: PermissionPolicyEvaluation) {
+  // unknown：分类器无法做出任何陈述，需人工判断。与“正面担保”语义相反，必须单独文案。
+  if (evaluation.kind === "unknown") {
+    return {
+      summary: "Unclassifiable",
+      targets: [],
+      reason: "Classifiers cannot determine the risk; manual review required.",
+      tags: [],
+      unclassified: true,
+    }
+  }
+  const tags = evaluation.claims.map((claim) => ({
+    tag: claim.tag,
+    name: permissionTagNames[claim.tag] ?? claim.tag,
+    ...(claim.reason ? { evidence: claim.reason } : {}),
+  }))
+  // 声称缺理由时用标签可读名兜底；claims 为空即正面担保，仅审计文案。
+  const reason =
+    evaluation.claims
+      .map((claim) => claim.reason ?? permissionTagNames[claim.tag] ?? claim.tag)
+      .filter(Boolean)
+      .join("；") || "Classifiers found no notable behavior to flag."
   return {
-    summary: evaluation.decisiveKey ?? "无需标注的行为",
+    summary: permissionRuleName(evaluation.decisiveKey) ?? "无需标注的行为",
     targets: [],
-    risk: evaluation.disposition === "deny" ? ("critical" as const) : ("medium" as const),
-    reason:
-      evaluation.claims
-        .map((claim) => claim.reason)
-        .filter(Boolean)
-        .join("；") || "分类器正面担保无需标注",
-    findings: evaluation.claims.map((claim) => ({
-      severity: evaluation.disposition === "deny" ? ("critical" as const) : ("medium" as const),
-      category: claim.tag,
-      summary: claim.tag,
-      evidence: claim.reason ?? claim.tag,
-    })),
+    reason,
+    tags,
   }
 }
 
@@ -49,12 +68,14 @@ export class PolicyPermissionManager {
   readonly #registry: PermissionClassifierRegistry
   readonly #aiReviewer: AiPermissionReviewer
   readonly #humanReviewer: HumanPermissionReviewer
+  readonly #audit: (event: PermissionAuditEvent) => void | Promise<void>
   readonly #now: () => Date
 
   constructor(options: PolicyPermissionManagerOptions) {
     this.#registry = options.registry
     this.#aiReviewer = options.aiReviewer
     this.#humanReviewer = options.humanReviewer
+    this.#audit = options.audit ?? (() => {})
     this.#now = options.now ?? (() => new Date())
   }
 
@@ -66,6 +87,8 @@ export class PolicyPermissionManager {
     reviewMode: PermissionReviewMode,
     signal?: AbortSignal,
   ): Promise<ToolPermissionBatchAuthorization> {
+    for (const request of batch.calls)
+      await this.#record({ type: "permissionRequested", request, batchId: batch.batchId, at: this.#timestamp() })
     const prepared = await Promise.all(
       batch.calls.map(async (request) => {
         const classification = await this.#registry.classify(request, context)
@@ -83,18 +106,27 @@ export class PolicyPermissionManager {
     )
     const humanItems = prepared.filter((item) => item.authorization === undefined)
     const human = humanItems.length > 0 ? await this.#humanBatch(batch.batchId, humanItems, signal) : new Map()
-    return {
-      batchId: batch.batchId,
-      authorizations: prepared.map((item) => ({
-        toolCallId: item.request.toolCallId,
-        authorization: item.authorization ??
-          human.get(item.request.toolCallId) ?? {
-            type: "deny",
-            reason: "Operation denied: Permission review returned no result.",
-            source: "system",
-          },
-      })),
+    const authorizations = prepared.map((item) => ({
+      toolCallId: item.request.toolCallId,
+      authorization: item.authorization ??
+        human.get(item.request.toolCallId) ?? {
+          type: "deny",
+          reason: "Operation denied: Permission review returned no result.",
+          source: "system",
+        },
+    }))
+    for (const item of prepared) {
+      const authorization = authorizations.find((entry) => entry.toolCallId === item.request.toolCallId)
+      if (authorization)
+        await this.#record({
+          type: "authorized",
+          request: item.request,
+          batchId: batch.batchId,
+          authorization: authorization.authorization,
+          at: this.#timestamp(),
+        })
     }
+    return { batchId: batch.batchId, authorizations }
   }
 
   /** 依次执行分类、策略求值和审核路由，返回可直接用于工具包装器的授权结果。 */
@@ -130,7 +162,7 @@ export class PolicyPermissionManager {
     if (route === "deny")
       return {
         type: "deny",
-        reason: `Operation denied: rule "${evaluation.decisiveKey ?? "permission policy"}" is not allowed.`,
+        reason: `Operation denied: rule "${permissionRuleName(evaluation.decisiveKey) ?? "permission policy"}" is not allowed.`,
         assessment: analyzed,
         source: "policy",
       } as ToolAuthorization
@@ -204,8 +236,8 @@ export class PolicyPermissionManager {
         results.set(review.toolCallId, {
           type: "deny",
           reason: answer?.reason
-            ? `Operation denied: rule "${item.evaluation.decisiveKey ?? "permission policy"}" requires human approval and was denied.\nUser reason: ${answer.reason}`
-            : `Operation denied: rule "${item.evaluation.decisiveKey ?? "permission policy"}" requires human approval and was denied.`,
+            ? `Operation denied: rule "${permissionRuleName(item.evaluation.decisiveKey) ?? "permission policy"}" requires human approval and was denied.\nUser reason: ${answer.reason}`
+            : `Operation denied: rule "${permissionRuleName(item.evaluation.decisiveKey) ?? "permission policy"}" requires human approval and was denied.`,
           assessment: item.analyzed,
           source: "human",
         })
@@ -249,10 +281,18 @@ export class PolicyPermissionManager {
     return {
       type: "deny",
       reason: answer?.reason
-        ? `Operation denied: rule "${evaluation.decisiveKey ?? "permission policy"}" requires human approval and was denied.\nUser reason: ${answer.reason}`
-        : `Operation denied: rule "${evaluation.decisiveKey ?? "permission policy"}" requires human approval and was denied.`,
+        ? `Operation denied: rule "${permissionRuleName(evaluation.decisiveKey) ?? "permission policy"}" requires human approval and was denied.\nUser reason: ${answer.reason}`
+        : `Operation denied: rule "${permissionRuleName(evaluation.decisiveKey) ?? "permission policy"}" requires human approval and was denied.`,
       assessment: analyzed,
       source: "human",
     }
+  }
+
+  async #record(event: PermissionAuditEvent): Promise<void> {
+    await this.#audit(event)
+  }
+
+  #timestamp(): string {
+    return this.#now().toISOString()
   }
 }

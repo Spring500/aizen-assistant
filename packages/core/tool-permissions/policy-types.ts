@@ -47,6 +47,44 @@ export type PermissionClaim = {
   reason?: string
 }
 
+/** 标签到英文可读名的映射，用于审查界面、AI 审核输入与拒绝消息。 */
+export const permissionTagNames: Record<PermissionTag, string> = {
+  "read-workspace": "Read workspace files",
+  "read-home": "Read files in the home directory",
+  "read-system": "Read system files",
+  "read-sensitive": "Read sensitive files",
+  "edit-workspace": "Modify workspace files",
+  "edit-home": "Modify files in the home directory",
+  "edit-system": "Modify system files",
+  "edit-sensitive": "Modify sensitive files",
+  "network-fetch": "Fetch data from the network",
+  "network-send": "Send data over the network",
+  "system-change": "Change system state",
+  violation: "Unsafe operation",
+}
+
+/** 可配置策略键（含 unknown 伪标签）到英文可读名的映射，用于拒绝消息与摘要。 */
+export const permissionKeyNames: Record<ConfigurablePermissionKey, string> = {
+  "read-workspace": "Read workspace files",
+  "read-home": "Read files in the home directory",
+  "read-system": "Read system files",
+  "read-sensitive": "Read sensitive files",
+  "edit-workspace": "Modify workspace files",
+  "edit-home": "Modify files in the home directory",
+  "edit-system": "Modify system files",
+  "edit-sensitive": "Modify sensitive files",
+  "network-fetch": "Fetch data from the network",
+  "network-send": "Send data over the network",
+  "system-change": "Change system state",
+  unknown: "Unclassifiable",
+}
+
+/** 将处置档位对应的策略键解析为可读名；violation 与缺失键回退到标签表或原值。 */
+export function permissionRuleName(key: ConfigurablePermissionKey | "violation" | undefined): string | undefined {
+  if (!key) return undefined
+  return permissionKeyNames[key as ConfigurablePermissionKey] ?? permissionTagNames[key as PermissionTag] ?? key
+}
+
 export type PermissionClassifyResult = { kind: "claims"; claims: PermissionClaim[] } | { kind: "abstain" }
 
 export type PermissionPolicy = {

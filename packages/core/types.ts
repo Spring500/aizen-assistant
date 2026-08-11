@@ -11,7 +11,7 @@ import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewI
 import { workingDirectoryChangeText } from "./session-projection.ts"
 import type { SessionSummary } from "./session-store.ts"
 import type { PermissionPresetId, PermissionReviewMode } from "./tool-permissions/policy-types.ts"
-import type { HumanReviewRequest, PermissionMode } from "./tool-permissions/types.ts"
+import type { HumanReviewRequest } from "./tool-permissions/types.ts"
 import type { ViewOption } from "./view-store.ts"
 
 export type CoreStatus = "idle" | "running" | "compacting" | "aborting" | "authenticating" | "refreshing" | "error"
@@ -56,7 +56,6 @@ export type CoreSnapshot = {
   currentSessionName?: string
   currentModel?: ModelRuntimeInfo
   currentViewId?: ViewId
-  currentPermissionMode?: PermissionMode
   currentPermissionPreset?: PermissionPresetId
   currentPermissionReviewMode?: PermissionReviewMode
   pendingPermissionRequests?: HumanReviewRequest[]
@@ -87,7 +86,6 @@ export type CoreCommand =
       type: "create_session"
       model: ModelReference
       viewId: ViewId
-      permissionMode?: PermissionMode
       permissionPreset?: PermissionPresetId
       permissionReviewMode?: PermissionReviewMode
     }
@@ -112,7 +110,6 @@ export type CoreCommand =
   | { type: "delete_model"; revision: string; providerId: string; modelId: string }
   | { type: "set_model"; model: ModelReference }
   | { type: "set_view"; viewId: ViewId }
-  | { type: "set_permission_mode"; permissionMode: PermissionMode }
   | { type: "set_permission_settings"; preset: PermissionPresetId; reviewMode: PermissionReviewMode }
   | {
       type: "answer_permission_batch"

@@ -1,6 +1,10 @@
 # 参与开发
 
-本项目当前由单人配合 AI Agent 开发。所有变更从最新 `main` 创建短生命周期分支，并通过 Draft PR 交付。
+感谢你对 AizenAssistant 的兴趣。本文说明如何本地开发、验证变更并提交 PR。日常使用方法见[使用文档](https://spring500.github.io/aizen-assistant/)。
+
+## 反馈问题
+
+遇到问题或有改进建议，请先通过 GitHub Issue 反馈，说明复现步骤与环境信息。功能改动请先通过 Issue 讨论方案，避免返工。
 
 ## 环境准备
 
@@ -10,47 +14,7 @@
 bun install --frozen-lockfile
 ```
 
-安装依赖时会自动配置仓库的 Git hooks。
-
-## 启动 TUI
-
-推荐使用开发命令：
-
-```powershell
-bun run dev:tui
-```
-
-该命令直接运行 TypeScript 源码，不编译可执行文件，也不会自动重启。无论从 worktree 内哪个目录执行，工作目录均为 worktree 根目录，默认数据目录为 `<worktree>/.aizen/dev-data`。
-
-需要隔离开发数据时，可以指定其它目录：
-
-```powershell
-bun run dev:tui --data-dir .aizen/另一组数据
-```
-
-相对路径以 worktree 根目录为基准，数据目录不能直接指定为 worktree 根目录。
-
-也可以直接运行入口：
-
-```powershell
-bun apps/tui/main.ts --data-dir <目录>
-```
-
-直接运行入口时必须指定 `--data-dir`，相对路径以执行命令时的当前目录为基准。
-
-## 构建与运行
-
-构建单文件可执行程序（默认 Windows x64）：
-
-```powershell
-bun run build:tui
-```
-
-需要其它平台时通过 `--target` 指定（如 `bun run build:tui --target bun-linux-x64`）。产物位于 `dist/aizen-assistant.exe`（Windows；其余平台为 `dist/aizen-assistant`），运行时不要求另行安装 Node.js 或 Bun。默认数据目录为可执行文件同目录的 `data`，也可以显式指定：
-
-```powershell
-.\dist\aizen-assistant.exe --data-dir <目录>
-```
+安装依赖时会自动配置仓库的 Git hooks。本地开发运行方式见[安装与运行](https://spring500.github.io/aizen-assistant/zh/core/installation.html)。
 
 ## 检查与测试
 
@@ -90,6 +54,16 @@ bun run check:config
 5. 由项目负责人审查、转为 Ready，并使用 Squash merge。
 
 功能分支内部提交不强制 Conventional Commits；PR 标题和 Squash 后的主线提交必须符合仓库标题校验规则。
+
+## 文档与 wiki
+
+仓库 `docs/` 目录是对外文档的源内容，通过 GitHub Pages 对外发布：
+
+- 所有对外文档位于 `docs/zh/`，按模块内聚（如 `docs/zh/permission/`）；
+- 每篇文档头部需标注 frontmatter（`title`、`type`、`module`、`sort`），侧边栏由此自动生成，勿手工维护；
+- 修改对外文档后，运行 `bun run docs:build` 确认构建通过；
+- 内部工作文档（TODO、交接记录等）放入 `internal/`，不对外发布；
+- 敏感内容（设计草案、PR 交接等）放入被忽略的本地私有目录，禁止提交。
 
 ## 主分支与文件边界
 

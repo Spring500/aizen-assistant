@@ -30,20 +30,16 @@ import type { SkillStore } from "./skill-store.ts"
 import { PermissionClassifierRegistry } from "./tool-permissions/classifier-registry.ts"
 import { createBuiltinBashClassifier } from "./tool-permissions/classifiers/bash.ts"
 import { createBuiltinFileClassifier } from "./tool-permissions/classifiers/file.ts"
-import { ToolPermissionManager } from "./tool-permissions/manager.ts"
 import { PolicyPermissionManager } from "./tool-permissions/policy-manager.ts"
 import { builtinPermissionPolicies } from "./tool-permissions/policy-types.ts"
-import { ToolPermissionRegistry } from "./tool-permissions/registry.ts"
 import { sanitizePermissionAuditPayload } from "./tool-permissions/sanitizer.ts"
+import type { PermissionAuditRecorder } from "./tool-permissions/permission-audit.ts"
 import type {
   HumanReviewBatchDecision,
   HumanReviewBatchRequest,
   PermissionAuditEvent,
   PermissionGapRecorder,
-  PermissionMode,
 } from "./tool-permissions/types.ts"
-import { createBashValidator } from "./tool-permissions/validators/bash.ts"
-import { createFileValidator } from "./tool-permissions/validators/file.ts"
 import { type AizenToolRegistration, validateToolRegistrations } from "./tool-registry.ts"
 import {
   type CoreCommand,
@@ -75,6 +71,8 @@ export type AizenCoreOptions = {
   preferencesStore?: AppPreferencesStore
   toolRegistrations?: AizenToolRegistration[]
   permissionGapRecorder?: PermissionGapRecorder
+  /** 权限判定审计的本地 JSONL 落盘器（含轮转）；不提供时只写会话记录。 */
+  permissionAuditRecorder?: PermissionAuditRecorder
 }
 
 function sessionModel(model: ModelReference): ModelReference {
@@ -106,9 +104,9 @@ export class AizenCore implements CorePort {
   readonly #preferencesStore: AppPreferencesStore | undefined
   readonly #toolRegistrations: AizenToolRegistration[]
   readonly #permissionGapRecorder: PermissionGapRecorder | undefined
+  readonly #permissionAuditRecorder: PermissionAuditRecorder | undefined
   readonly #listeners = new Set<(event: CoreEvent) => void>()
   readonly #unsubscribePi: () => void
-  readonly #permissionManager: ToolPermissionManager | undefined
   readonly #policyPermissionManager: PolicyPermissionManager | undefined
   readonly #pendingPermissionAnswers = new Map<
     string,
@@ -158,13 +156,13 @@ export class AizenCore implements CorePort {
     this.#preferencesStore = options.preferencesStore
     this.#toolRegistrations = options.toolRegistrations ?? []
     this.#permissionGapRecorder = options.permissionGapRecorder
+    this.#permissionAuditRecorder = options.permissionAuditRecorder
     validateToolRegistrations(this.#toolRegistrations)
     this.#unsubscribePi = this.#pi.subscribe((event) => this.#handlePiEvent(event))
-    this.#permissionManager = this.#createPermissionManager()
     this.#policyPermissionManager = this.#createPolicyPermissionManager()
     this.#pi.setToolRegistrations?.(this.#toolRegistrations)
     this.#pi.setPermissionBatchHandler?.((batch, signal) => {
-      if (!this.#permissionManager)
+      if (!this.#policyPermissionManager)
         return Promise.resolve({
           batchId: batch.batchId,
           authorizations: batch.calls.map((request) => ({
@@ -172,55 +170,44 @@ export class AizenCore implements CorePort {
             authorization: { type: "deny" as const, reason: "权限管理器不可用", source: "system" as const },
           })),
         })
-      if (
-        batch.calls.every(
-          (request) =>
-            request.permissionPreset &&
-            ["read", "write", "edit", "grep", "find", "ls", "bash"].includes(request.toolName),
-        )
-      )
-        return this.#authorizePolicyBatch(batch, signal)
-      return this.#permissionManager.authorizeBatch(batch, signal)
+      return this.#authorizePolicyBatch(batch, signal)
     })
     this.#pi.setPermissionHandler?.((request, signal) => {
-      if (!this.#permissionManager)
+      if (!this.#policyPermissionManager)
         return Promise.resolve({ type: "deny", reason: "权限管理器不可用", source: "system" })
-      if (
-        request.permissionPreset &&
-        this.#policyPermissionManager &&
-        ["read", "write", "edit", "grep", "find", "ls", "bash"].includes(request.toolName)
+      return this.#policyPermissionManager.authorize(
+        request,
+        {
+          workspaceRoot: this.#cwd,
+          homeDirectory: homedir(),
+          sensitivePaths: [
+            ".env",
+            ".npmrc",
+            ".pypirc",
+            "credentials",
+            "credentials.json",
+            "id_rsa",
+            "id_ed25519",
+            ".ssh",
+            ".git",
+            ".aizen",
+            "auth.json",
+          ],
+          shell:
+            request.environment &&
+            typeof request.environment === "object" &&
+            !Array.isArray(request.environment) &&
+            typeof request.environment.shell === "string"
+              ? request.environment.shell
+              : "unknown",
+          platform: process.platform,
+        },
+        builtinPermissionPolicies[
+          request.permissionPreset === "custom" ? "edit" : (request.permissionPreset ?? "edit")
+        ],
+        request.permissionReviewMode ?? "manual",
+        signal,
       )
-        return this.#policyPermissionManager.authorize(
-          request,
-          {
-            workspaceRoot: this.#cwd,
-            homeDirectory: homedir(),
-            sensitivePaths: [
-              ".env",
-              ".npmrc",
-              ".pypirc",
-              "credentials",
-              "id_rsa",
-              "id_ed25519",
-              ".ssh",
-              ".git",
-              ".aizen",
-              "auth.json",
-            ],
-            shell:
-              request.environment &&
-              typeof request.environment === "object" &&
-              !Array.isArray(request.environment) &&
-              typeof request.environment.shell === "string"
-                ? request.environment.shell
-                : "unknown",
-            platform: process.platform,
-          },
-          builtinPermissionPolicies[request.permissionPreset === "custom" ? "edit" : request.permissionPreset],
-          request.permissionReviewMode ?? "manual",
-          signal,
-        )
-      return this.#permissionManager.authorize(request, signal)
     })
     this.#pi.setPermissionExecutionHandler?.((event) => this.#recordPermissionExecution(event))
   }
@@ -355,7 +342,6 @@ export class AizenCore implements CorePort {
           await this.#createSession(
             command.model,
             command.viewId,
-            command.permissionMode ?? this.#snapshot.preferences.newSession.permissionMode ?? "hybrid",
             command.permissionPreset ?? this.#snapshot.preferences.newSession.permissionPreset ?? "edit",
             command.permissionReviewMode ?? this.#snapshot.preferences.newSession.permissionReviewMode ?? "manual",
           )
@@ -389,9 +375,6 @@ export class AizenCore implements CorePort {
           break
         case "set_view":
           await this.#setView(command.viewId)
-          break
-        case "set_permission_mode":
-          await this.#setPermissionMode(command.permissionMode)
           break
         case "set_permission_settings": {
           const sessionId = this.#snapshot.currentSessionId
@@ -522,6 +505,7 @@ export class AizenCore implements CorePort {
         try {
           await this.#pi.dispose()
           await this.#permissionGapRecorder?.close?.()
+          await this.#permissionAuditRecorder?.close?.()
         } catch (error) {
           failure ??= error
         } finally {
@@ -546,11 +530,7 @@ export class AizenCore implements CorePort {
   }
 
   /** 仅保存新会话默认值，不参与当前会话记录和 runtime 的一致性判断。 */
-  async #rememberSessionDefaults(
-    model: ModelReference,
-    viewId: ViewId,
-    permissionMode?: PermissionMode,
-  ): Promise<void> {
+  async #rememberSessionDefaults(model: ModelReference, viewId: ViewId): Promise<void> {
     if (!this.#preferencesLoaded) {
       this.#snapshot.preferences = await this.#readPreferences()
       this.#preferencesLoaded = true
@@ -560,7 +540,6 @@ export class AizenCore implements CorePort {
       newSession: {
         model: sessionModel(model),
         viewId,
-        permissionMode: permissionMode ?? this.#snapshot.currentPermissionMode ?? "hybrid",
         permissionPreset: this.#snapshot.currentPermissionPreset ?? "edit",
         permissionReviewMode: this.#snapshot.currentPermissionReviewMode ?? "manual",
       },
@@ -568,13 +547,9 @@ export class AizenCore implements CorePort {
   }
 
   /** 会话操作落盘后，默认偏好只是便利设置；写入失败应提示，但不能把已完成的操作报告为失败。 */
-  async #tryRememberSessionDefaults(
-    model: ModelReference,
-    viewId: ViewId,
-    permissionMode?: PermissionMode,
-  ): Promise<void> {
+  async #tryRememberSessionDefaults(model: ModelReference, viewId: ViewId): Promise<void> {
     try {
-      await this.#rememberSessionDefaults(model, viewId, permissionMode)
+      await this.#rememberSessionDefaults(model, viewId)
     } catch (error) {
       this.#reportError(`保存默认会话设置失败：${error instanceof Error ? error.message : String(error)}`)
     }
@@ -609,7 +584,6 @@ export class AizenCore implements CorePort {
   async #createSession(
     model: ModelReference,
     viewId: ViewId,
-    permissionMode: PermissionMode,
     permissionPreset?: import("./tool-permissions/policy-types.ts").PermissionPresetId,
     permissionReviewMode?: import("./tool-permissions/policy-types.ts").PermissionReviewMode,
   ): Promise<void> {
@@ -620,7 +594,6 @@ export class AizenCore implements CorePort {
     const records: SessionRecord[] = [
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(actualModel) },
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
-      { kind: "permission_mode_changed", recordId: crypto.randomUUID(), at, permissionMode },
       ...(permissionPreset
         ? [
             {
@@ -646,7 +619,6 @@ export class AizenCore implements CorePort {
     this.#snapshot.currentModel = actualModel
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.currentViewId = viewId
-    this.#snapshot.currentPermissionMode = permissionMode
     if (permissionPreset) {
       this.#snapshot.currentPermissionPreset = permissionPreset
       this.#snapshot.currentPermissionReviewMode = permissionReviewMode ?? "manual"
@@ -662,7 +634,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
     this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
-    await this.#tryRememberSessionDefaults(actualModel, viewId, permissionMode)
+    await this.#tryRememberSessionDefaults(actualModel, viewId)
   }
 
   /**
@@ -687,9 +659,6 @@ export class AizenCore implements CorePort {
       }
       const modelRecord = [...loaded.records].reverse().find((record) => record.kind === "model_changed")
       const viewRecord = [...loaded.records].reverse().find((record) => record.kind === "view_changed")
-      const permissionRecord = [...loaded.records]
-        .reverse()
-        .find((record) => record.kind === "permission_mode_changed" || record.kind === "turn_started")
       if (modelRecord?.kind !== "model_changed") throw new Error("会话没有模型记录")
       if (viewRecord?.kind !== "view_changed") throw new Error("会话没有视图记录")
       const recoveryRecords = this.#recoverInterruptedTools(loaded.records)
@@ -707,12 +676,6 @@ export class AizenCore implements CorePort {
       this.#snapshot.currentModel = modelRecord.model
       this.#snapshot.contextUsage = this.#contextUsageFromRecords()
       this.#snapshot.currentViewId = viewRecord.viewId
-      this.#snapshot.currentPermissionMode =
-        permissionRecord?.kind === "permission_mode_changed"
-          ? permissionRecord.permissionMode
-          : permissionRecord?.kind === "turn_started"
-            ? (permissionRecord.permissionMode ?? "hybrid")
-            : (this.#snapshot.preferences.newSession.permissionMode ?? "hybrid")
       const permissionSettings = [...loaded.records]
         .reverse()
         .find((record) => record.kind === "permission_settings_changed")
@@ -734,11 +697,7 @@ export class AizenCore implements CorePort {
       if (loaded.warnings.length > 0) this.#reportError(loaded.warnings.join("；"))
       else if (recoveryRecords.length > 0)
         this.#reportError("检测到上次异常退出时存在未完成的工具调用；已记录中断状态，未自动重试")
-      await this.#tryRememberSessionDefaults(
-        this.#snapshot.currentModel,
-        viewRecord.viewId,
-        this.#snapshot.currentPermissionMode,
-      )
+      await this.#tryRememberSessionDefaults(this.#snapshot.currentModel, viewRecord.viewId)
       await this.#store.activate(sessionId)
       this.#snapshot.sessions = await this.#store.list()
       this.#reportStoreWarnings()
@@ -776,15 +735,6 @@ export class AizenCore implements CorePort {
     }
     this.#snapshot.currentModel = modelRecord.model
     this.#snapshot.currentViewId = viewRecord.viewId
-    const permissionRecord = [...records]
-      .reverse()
-      .find((record) => record.kind === "permission_mode_changed" || record.kind === "turn_started")
-    this.#snapshot.currentPermissionMode =
-      permissionRecord?.kind === "permission_mode_changed"
-        ? permissionRecord.permissionMode
-        : permissionRecord?.kind === "turn_started"
-          ? (permissionRecord.permissionMode ?? "hybrid")
-          : "hybrid"
     this.#snapshot.pendingPermissionRequests = []
     this.#snapshot.transcript = recordsToTranscript(projectVisibleSessionRecords(records))
     this.#snapshot.streamingText = ""
@@ -816,7 +766,7 @@ export class AizenCore implements CorePort {
       const actual = await this.#pi.restore({ cwd: this.#cwd, model, view, records: this.#records })
       this.#snapshot.currentModel = actual
       delete this.#snapshot.runtimeIssue
-      await this.#tryRememberSessionDefaults(actual, viewId, this.#snapshot.currentPermissionMode)
+      await this.#tryRememberSessionDefaults(actual, viewId)
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
       this.#snapshot.runtimeIssue = {
@@ -847,12 +797,6 @@ export class AizenCore implements CorePort {
       ...retained,
       { kind: "model_changed", recordId: crypto.randomUUID(), at, model: sessionModel(model) },
       { kind: "view_changed", recordId: crypto.randomUUID(), at, viewId },
-      {
-        kind: "permission_mode_changed",
-        recordId: crypto.randomUUID(),
-        at,
-        permissionMode: this.#snapshot.currentPermissionMode ?? "hybrid",
-      },
       ...(renamed ? [{ kind: "session_renamed" as const, recordId: crypto.randomUUID(), at, name }] : []),
       ...(normalizeProjectPath(previousCwd) === normalizeProjectPath(this.#cwd)
         ? []
@@ -957,14 +901,12 @@ export class AizenCore implements CorePort {
       { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text }] },
     ]
     const firstUserMessage = this.#firstUserMessage() ?? text
-    const permissionMode = this.#snapshot.currentPermissionMode ?? "hybrid"
     const started: TurnStartedRecord = {
       kind: "turn_started",
       recordId: crypto.randomUUID(),
       turnId,
       at: new Date().toISOString(),
       viewId,
-      permissionMode,
       items,
     }
     await this.#store.append(sessionId, started)
@@ -987,7 +929,6 @@ export class AizenCore implements CorePort {
         sessionId,
         turnId,
         viewId,
-        permissionMode,
         ...(this.#snapshot.currentPermissionPreset ? { permissionPreset: this.#snapshot.currentPermissionPreset } : {}),
         ...(this.#snapshot.currentPermissionReviewMode
           ? { permissionReviewMode: this.#snapshot.currentPermissionReviewMode }
@@ -1096,23 +1037,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.currentViewId = viewId
     this.#snapshot.currentModel = actual
     delete this.#snapshot.runtimeIssue
-    await this.#tryRememberSessionDefaults(actual, viewId, this.#snapshot.currentPermissionMode)
-  }
-
-  async #setPermissionMode(permissionMode: PermissionMode): Promise<void> {
-    const sessionId = this.#snapshot.currentSessionId
-    if (!sessionId) throw new Error("请先新建或恢复会话")
-    const record: SessionRecord = {
-      kind: "permission_mode_changed",
-      recordId: crypto.randomUUID(),
-      at: new Date().toISOString(),
-      permissionMode,
-    }
-    await this.#store.append(sessionId, record)
-    this.#records.push(record)
-    this.#snapshot.currentPermissionMode = permissionMode
-    const model = this.#snapshot.currentModel
-    if (model) await this.#tryRememberSessionDefaults(model, this.#snapshot.currentViewId ?? null, permissionMode)
+    await this.#tryRememberSessionDefaults(actual, viewId)
   }
 
   /**
@@ -1201,11 +1126,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.currentModel = actual
     delete this.#snapshot.runtimeIssue
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
-    await this.#tryRememberSessionDefaults(
-      actual,
-      this.#snapshot.currentViewId ?? null,
-      this.#snapshot.currentPermissionMode,
-    )
+    await this.#tryRememberSessionDefaults(actual, this.#snapshot.currentViewId ?? null)
   }
 
   /**
@@ -1235,6 +1156,10 @@ export class AizenCore implements CorePort {
     const registry = new PermissionClassifierRegistry()
     registry.registerBuiltin(createBuiltinBashClassifier())
     registry.registerBuiltin(createBuiltinFileClassifier())
+    // 第三方工具的可选分类器与内置分类器并集生效；未提供的工具按 unknown 人工兜底。
+    for (const registration of this.#toolRegistrations) {
+      if (registration.classifier) registry.registerUser(registration.classifier)
+    }
     return new PolicyPermissionManager({
       registry,
       aiReviewer: {
@@ -1245,6 +1170,10 @@ export class AizenCore implements CorePort {
         },
       },
       humanReviewer: { review: (request, signal) => this.#requestPermissionAnswer(request, signal) },
+      audit: (event) => {
+        void this.#recordPermissionAudit(event)
+        void this.#permissionAuditRecorder?.record(event)
+      },
     })
   }
 
@@ -1273,6 +1202,7 @@ export class AizenCore implements CorePort {
           ".npmrc",
           ".pypirc",
           "credentials",
+          "credentials.json",
           "id_rsa",
           "id_ed25519",
           ".ssh",
@@ -1293,37 +1223,6 @@ export class AizenCore implements CorePort {
       first.permissionReviewMode ?? "manual",
       signal,
     )
-  }
-
-  #createPermissionManager(): ToolPermissionManager | undefined {
-    if (!this.#pi.setPermissionHandler) return undefined
-    const registry = new ToolPermissionRegistry()
-    registry.register(createBashValidator())
-    registry.register(createFileValidator("read"))
-    registry.register(createFileValidator("write"))
-    registry.register(createFileValidator("edit"))
-    for (const registration of this.#toolRegistrations) registry.register(registration.validator)
-    return new ToolPermissionManager({
-      registry,
-      aiReviewer: {
-        review: (request, signal) => {
-          const model = this.#snapshot.preferences.agents.permissionReview?.model
-          if (!model || !this.#pi.permissionReviewer) throw new Error("未配置可用的工具审核模型")
-          return this.#pi.permissionReviewer(model).review(request, signal)
-        },
-      },
-      humanReviewer: { review: (request, signal) => this.#requestPermissionAnswer(request, signal) },
-      audit: (event) => this.#recordPermissionAudit(event),
-      ...(this.#permissionGapRecorder
-        ? {
-            gapRecorder: this.#permissionGapRecorder,
-            reportGapRecordingError: (error: Error) => {
-              this.#reportError(`记录权限规则缺口失败：${error.message}`)
-              this.#notify()
-            },
-          }
-        : {}),
-    })
   }
 
   #requestPermissionAnswer(batch: HumanReviewBatchRequest, signal?: AbortSignal): Promise<HumanReviewBatchDecision> {

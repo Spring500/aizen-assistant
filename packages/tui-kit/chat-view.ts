@@ -464,6 +464,8 @@ function styledToolText(tool: ToolDisplay, detailsExpanded: boolean): StyledText
     tool.timing ? timingText(tool.timing) : "",
   ].filter(Boolean)
   if (metadata.length > 0) push(`  ·  ${metadata.join(" · ")}`, systemColors.secondary, { dim: true })
+  // 详情折叠时也要让失败可见：行尾追加失败标记，避免失败被隐藏成“无结果”。
+  if (!detailsExpanded && tool.isError) push("  ×", systemColors.statusError, { bold: true })
   if (detailsExpanded) {
     push("\n  › ", systemColors.secondary, { dim: true })
     push(tool.input, systemColors.secondary, { dim: true, italic: true })

@@ -23,7 +23,19 @@ async function fixture() {
     context: {
       workspaceRoot: workspace,
       homeDirectory: home,
-      sensitivePaths: [".env", ".aizen"],
+      sensitivePaths: [
+        ".env",
+        ".npmrc",
+        ".pypirc",
+        "credentials",
+        "credentials.json",
+        "id_rsa",
+        "id_ed25519",
+        ".ssh",
+        ".git",
+        ".aizen",
+        "auth.json",
+      ],
       shell: "bash",
       platform: process.platform,
     },
@@ -74,6 +86,36 @@ describe("内置文件工具分类器", () => {
       context,
     )
     expect(tags(result)).toEqual(["edit-workspace", "edit-home", "edit-sensitive", "violation"])
+  })
+
+  test("私钥与证书扩展名路径声称敏感", async () => {
+    const { workspace, context } = await fixture()
+    const result = await createBuiltinFileClassifier().classify(
+      { toolName: "write", arguments: { path: "keys/backup.pem" }, cwd: workspace },
+      context,
+    )
+    expect(tags(result)).toContain("edit-sensitive")
+  })
+
+  test("credentials.json 与 .ssh 路径声称敏感", async () => {
+    const { home, context } = await fixture()
+    const classifier = createBuiltinFileClassifier()
+    const credential = await classifier.classify(
+      { toolName: "read", arguments: { path: join(home, ".ssh", "credentials.json") }, cwd: home },
+      context,
+    )
+    expect(tags(credential)).toEqual(["read-home", "read-sensitive"])
+  })
+
+  test("工作区和用户目录之外的路径声称 system", async () => {
+    const { workspace, context } = await fixture()
+    const outside = join(tmpdir(), `aizen-outside-${crypto.randomUUID()}`)
+    roots.push(outside)
+    const result = await createBuiltinFileClassifier().classify(
+      { toolName: "read", arguments: { path: outside }, cwd: workspace },
+      context,
+    )
+    expect(tags(result)).toEqual(["read-system"])
   })
 
   test("参数无效时弃权", async () => {

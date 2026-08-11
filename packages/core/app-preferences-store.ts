@@ -7,7 +7,6 @@ import {
   permissionPresetIds,
   permissionReviewModes,
 } from "./tool-permissions/policy-types.ts"
-import { type PermissionMode, permissionModes } from "./tool-permissions/types.ts"
 
 export type AgentPreferences = {
   sessionNaming: {
@@ -28,7 +27,6 @@ export type AppPreferences = {
   newSession: {
     model?: ModelReference
     viewId: ViewId
-    permissionMode?: PermissionMode
     permissionPreset?: PermissionPresetId
     permissionReviewMode?: PermissionReviewMode
   }
@@ -45,7 +43,6 @@ export const defaultFoldPreferences: FoldPreferences = {
 export const defaultAppPreferences: AppPreferences = {
   newSession: {
     viewId: null,
-    permissionMode: "hybrid",
     permissionPreset: "edit",
     permissionReviewMode: "manual",
   },
@@ -78,11 +75,6 @@ function permissionReviewMode(value: unknown): PermissionReviewMode {
   return value as PermissionReviewMode
 }
 
-function permissionMode(value: unknown): PermissionMode {
-  if (!permissionModes.includes(value as PermissionMode)) throw new Error("newSession.permissionMode 无效")
-  return value as PermissionMode
-}
-
 function foldPreferences(value: unknown): FoldPreferences {
   const fold = object(value, "fold")
   exact(fold, ["thinkingExpanded", "toolGroupExpanded", "toolDetailsExpanded"], "fold")
@@ -98,7 +90,7 @@ export function parseAppPreferences(value: unknown): AppPreferences {
   const source = object(value, "preferences.json")
   exact(source, ["newSession", "agents", "fold"], "preferences.json")
   const newSession = object(source.newSession, "newSession")
-  exact(newSession, ["model", "viewId", "permissionMode", "permissionPreset", "permissionReviewMode"], "newSession")
+  exact(newSession, ["model", "viewId", "permissionPreset", "permissionReviewMode"], "newSession")
   if (newSession.viewId !== null && typeof newSession.viewId !== "string")
     throw new Error("newSession.viewId 必须是字符串或 null")
   const agents = object(source.agents, "agents")
@@ -111,7 +103,6 @@ export function parseAppPreferences(value: unknown): AppPreferences {
     newSession: {
       ...(newSession.model === undefined ? {} : { model: parseModelReference(newSession.model, "newSession.model") }),
       viewId: newSession.viewId as ViewId,
-      permissionMode: permissionMode(newSession.permissionMode),
       permissionPreset:
         newSession.permissionPreset === undefined ? "edit" : permissionPreset(newSession.permissionPreset),
       permissionReviewMode:
@@ -176,12 +167,7 @@ function readStoredPreferences(value: unknown): { preferences: AppPreferences; w
 
   const newSession = recordOrDefault(source.newSession, "newSession", warnings)
   if (newSession) {
-    unknownFields(
-      newSession,
-      ["model", "viewId", "permissionMode", "permissionPreset", "permissionReviewMode"],
-      "newSession",
-      warnings,
-    )
+    unknownFields(newSession, ["model", "viewId", "permissionPreset", "permissionReviewMode"], "newSession", warnings)
     defaults.newSession.viewId = field(
       newSession.viewId,
       "newSession.viewId",
@@ -191,13 +177,6 @@ function readStoredPreferences(value: unknown): { preferences: AppPreferences; w
         if (item !== null && typeof item !== "string") throw new Error("newSession.viewId 必须是字符串或 null")
         return item as ViewId
       },
-    )
-    defaults.newSession.permissionMode = field(
-      newSession.permissionMode,
-      "newSession.permissionMode",
-      defaults.newSession.permissionMode ?? "hybrid",
-      warnings,
-      permissionMode,
     )
     defaults.newSession.permissionPreset = field(
       newSession.permissionPreset,

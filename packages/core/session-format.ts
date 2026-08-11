@@ -1,6 +1,5 @@
 import { Buffer } from "node:buffer"
 import type { PermissionPresetId, PermissionReviewMode } from "./tool-permissions/policy-types.ts"
-import type { PermissionMode } from "./tool-permissions/types.ts"
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
@@ -75,13 +74,6 @@ export type PermissionSettingsChangedRecord = {
   reviewMode: PermissionReviewMode
 }
 
-export type PermissionModeChangedRecord = {
-  kind: "permission_mode_changed"
-  recordId: string
-  at: string
-  permissionMode: PermissionMode
-}
-
 export type WorkingDirectoryChangedRecord = {
   kind: "working_directory_changed"
   recordId: string
@@ -105,7 +97,6 @@ export type TurnStartedRecord = {
   turnId: string
   at: string
   viewId: ViewId
-  permissionMode?: PermissionMode
   items: TurnInputItem[]
 }
 
@@ -173,7 +164,6 @@ export type SessionRecord =
   | ModelChangedRecord
   | ViewChangedRecord
   | WorkingDirectoryChangedRecord
-  | PermissionModeChangedRecord
   | PermissionSettingsChangedRecord
   | ToolPermissionRecord
   | TurnStartedRecord
@@ -251,12 +241,6 @@ function permissionReviewMode(value: unknown): PermissionReviewMode {
     value !== "autoDeny"
   )
     throw new Error(`未知的审核方式：${String(value)}`)
-  return value
-}
-
-function permissionMode(value: unknown): PermissionMode {
-  if (value !== "unrestricted" && value !== "hybrid" && value !== "hybridConfirmDenials" && value !== "aiOnly")
-    throw new Error(`未知的权限模式：${String(value)}`)
   return value
 }
 
@@ -470,13 +454,6 @@ export function parseSessionValue(value: unknown): SessionLine {
       reviewMode: permissionReviewMode(source.reviewMode),
     }
   }
-  if (kind === "permission_mode_changed") {
-    return {
-      kind,
-      ...baseRecord(source, ["kind", "recordId", "at", "permissionMode"]),
-      permissionMode: permissionMode(source.permissionMode),
-    }
-  }
   if (kind === "tool_permission") {
     return {
       kind,
@@ -487,14 +464,13 @@ export function parseSessionValue(value: unknown): SessionLine {
     }
   }
   if (kind === "turn_started") {
-    const base = baseRecord(source, ["kind", "recordId", "turnId", "at", "viewId", "permissionMode", "items"])
+    const base = baseRecord(source, ["kind", "recordId", "turnId", "at", "viewId", "items"])
     if (!Array.isArray(source.items)) throw new Error("items 必须是数组")
     return {
       kind,
       ...base,
       turnId: string(source.turnId, "turnId"),
       viewId: viewId(source.viewId),
-      ...(source.permissionMode === undefined ? {} : { permissionMode: permissionMode(source.permissionMode) }),
       items: source.items.map(turnInputItem),
     }
   }
