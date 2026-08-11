@@ -16,10 +16,7 @@ export default defineConfig({
     "/zh/": { label: "中文", lang: "zh-CN" },
   },
   themeConfig: {
-    nav: [
-      { text: "用户指南", link: "/zh/permission/usage" },
-      { text: "开发者文档", link: "/zh/permission/spec" },
-    ],
+    nav: [{ text: "首页", link: "/zh/" }],
     sidebar,
   },
 })
