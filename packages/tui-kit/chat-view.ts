@@ -565,6 +565,8 @@ export function createChatView(renderer: CliRenderer): ChatView {
   let operationQueue = Promise.resolve()
   let lifecycle: "active" | "closing" | "destroyed" = "active"
   let destroyPromise: Promise<void> | undefined
+  /** 上次构建 blocks 的 transcript 长度；流式期间 transcript 不变，用于跳过全量重算。 */
+  let lastTranscriptLength = -1
 
   const renderedFingerprints = () => blocks.map((block) => JSON.stringify({ block, fold }))
 
@@ -651,7 +653,19 @@ export function createChatView(renderer: CliRenderer): ChatView {
     },
     update(snapshot) {
       return queueOperation(async () => {
-        fold = { ...snapshot.preferences.fold }
+        const nextFold = { ...snapshot.preferences.fold }
+        // 流式期间（transcript 与折叠偏好均未变化）历史块无需重建：
+        // 每次 delta 都全量 displayBlocks + JSON.stringify 指纹会随会话线性放大，
+        // 是回复中后段卡顿的主要来源，这里直接跳过。
+        const transcriptUnchanged =
+          blocks.length > 0 &&
+          snapshot.transcript.length === lastTranscriptLength &&
+          nextFold.thinkingExpanded === fold.thinkingExpanded &&
+          nextFold.toolGroupExpanded === fold.toolGroupExpanded &&
+          nextFold.toolDetailsExpanded === fold.toolDetailsExpanded
+        if (transcriptUnchanged) return
+        lastTranscriptLength = snapshot.transcript.length
+        fold = nextFold
         blocks = displayBlocks(snapshot)
         await syncHistory()
       })

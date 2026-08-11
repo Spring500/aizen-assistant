@@ -484,12 +484,34 @@ describe("核心编排", () => {
   test("文本增量事件实时累积到流式输出快照", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
-    const pi = new FakePi()
+    // 延迟版 FakePi：先发 text_delta，停留超过节流窗口后再完成轮次，
+    // 确保流式中间快照能在窗口内到达订阅者。
+    const pi = new (class extends FakePi {
+      override async prompt(input: unknown): Promise<void> {
+        this.prompts.push(input)
+        for (const listener of this.listeners) listener({ type: "text_delta", delta: "完成" })
+        await Bun.sleep(40)
+        for (const listener of this.listeners) {
+          listener({
+            type: "message",
+            recordId: crypto.randomUUID(),
+            record: {
+              role: "assistant",
+              parts: [{ kind: "text", text: "完成" }],
+              source: { providerId: "test", modelId: "model", api: "anthropic-messages" },
+              stopReason: "stop",
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            },
+          })
+          listener({ type: "settled" })
+        }
+      }
+    })()
     const core = new AizenCore({ cwd: "E:\\project", store: new SessionStore(root), pi })
     await core.dispatch({ type: "create_session", model, viewId: null })
 
-    // 记录运行期间的流式文本快照；FakePi.prompt 同步发射 text_delta，
-    // 若快照缺失说明 text_delta 未被核心累积（回归保护：删除处理即失败）
+    // 记录运行期间的流式文本快照；若快照缺失说明 text_delta 未被核心累积
+    // （回归保护：删除处理即失败）
     const streamingValues: string[] = []
     let sawRunning = false
     core.subscribe((event) => {
@@ -500,6 +522,7 @@ describe("核心编排", () => {
     })
 
     expect(await core.dispatch({ type: "send_prompt", text: "测试流式" })).toEqual({ ok: true })
+    await Bun.sleep(30)
     expect(sawRunning).toBe(true)
     expect(streamingValues).toContain("完成")
     await core.dispose()
