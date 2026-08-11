@@ -39,6 +39,38 @@ Agent 在执行工具前需要用自然语言简要说明调用目的，让连�
 - 当前提供 TUI 界面，GUI 尚在规划中。
 - 暂时基于 [pi](https://github.com/earendil-works/pi) SDK 构建，后续考虑使用 `pi-ai` 并自行设计 Agent Loop。
 
+## 安装（分发版本）
+
+macOS / Linux：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.sh | bash
+```
+
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.ps1 | iex
+```
+
+国内网络可改用 jsDelivr 镜像脚本（可选）：
+
+```bash
+curl -fsSL https://cdn.jsdelivr.net/gh/Spring500/aizen-assistant@main/install.sh | bash
+```
+
+安装到 `~/.aizen/bin/`（Windows 为 `%USERPROFILE%\.aizen\bin`），只修改用户级环境，全程无需管理员权限；重复执行安全。需要指定历史版本时：`bash install.sh 0.1.0`。
+
+**更新**：运行 `aizen-assistant update`，自动从 GitHub Releases 下载最新版并原子替换自身。
+
+**卸载**：运行 `aizen-assistant uninstall`，确认后删除 `~/.aizen` 并回滚 PATH。
+
+**macOS 提示**：未签名的发布版首次运行可能被 Gatekeeper 拦截，请右键点击打开，或在终端执行：
+
+```bash
+xattr -d com.apple.quarantine ~/.aizen/bin/aizen-assistant
+```
+
 ## 从源码运行
 
 项目使用 Bun workspace。安装锁定依赖并启动 TUI：
@@ -78,11 +110,12 @@ AizenAssistant 的数据保存在本地：
 
 - 通过 `bun run dev:tui` 启动时，默认数据目录为 `<worktree>/.aizen/dev-data`；相对路径以 worktree 根目录为基准；
 - 直接运行 `bun apps/tui/main.ts` 时必须指定 `--data-dir <目录>`；相对路径以执行命令时的当前目录为基准；
-- 运行 `aizen-assistant` 时，默认数据目录为 `<可执行文件所在目录>/data`；
+- 运行 `aizen-assistant`（通过安装脚本安装到 `~/.aizen/bin/`）时，默认数据目录为 `<可执行文件所在目录>/data`，即 `~/.aizen/bin/data`；
+- 直接拷贝可执行文件到任意目录运行时，数据目录跟随可执行文件，位于其同目录的 `data/`（便携模式）；
 - 以上启动方式都可以通过 `--data-dir <目录>` 改用指定的数据目录，数据目录不能直接指定为当前工作目录。
 
 数据目录包含会话、视图、模型配置、应用偏好和认证信息。会话按工作目录分组保存在 `sessions/` 下，每个会话对应一个 JSONL 文件；文件名由本地创建时间和助记词 ID 组成，可以在应用外改名。会话文件是完整记录的事实来源，摘要索引只是可重建缓存。全局技能登记表保存在 `skills.json`，技能仓库缓存位于 `skill-sources/`。
 
-建议备份整个数据目录。由于其中包含认证信息，分享、同步或提交文件前请先检查敏感内容。
+**备份**：数据全部位于 `~/.aizen/bin/data`（便携模式为可执行文件旁的 `data/`），其余内容（可执行文件、`install.json`）均可重新安装获得。备份时复制数据目录即可。由于其中包含认证信息，分享、同步或提交前请先检查敏感内容。
 
 开发、验证和 PR 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
