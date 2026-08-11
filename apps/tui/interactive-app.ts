@@ -286,25 +286,23 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   }
 
-  /** 将快照中的会话运行错误写入独立错误提示行。 */
-  const syncErrorLine = (snapshot: ReturnType<typeof core.getSnapshot>) =>
-    editor.setError(snapshot.lastError ? `错误：${snapshot.lastError}` : "")
-
-  const updateStatusBar = () => {
-    const snapshot = core.getSnapshot()
+  /** 根据最新快照刷新 footer 各栏：终端标题、状态栏、会话状态、输出区与错误提示行。 */
+  const applySnapshotToFooter = (snapshot: ReturnType<typeof core.getSnapshot>) => {
     syncTerminalTitle(snapshot)
     const statusBar = statusBarView(snapshot, statusBarModelLabel(snapshot))
     editor.setStatus(statusBar.session)
     editor.setShortcuts(statusBar.shortcuts)
     editor.setSessionStatus(sessionStateView(snapshot))
     editor.setOutput(outputDataFrom(snapshot))
-    syncErrorLine(snapshot)
+    editor.setError(snapshot.lastError ? `错误：${snapshot.lastError}` : "")
     editor.setSessionTitle(
       snapshot.currentSessionId
         ? { name: snapshot.currentSessionName ?? "", sessionId: snapshot.currentSessionId }
         : undefined,
     )
   }
+
+  const updateStatusBar = () => applySnapshotToFooter(core.getSnapshot())
   updateStatusBar()
 
   const beginInteraction = () => {
@@ -322,18 +320,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const unsubscribe = core.subscribe((event) => {
     if (event.type === "snapshot") {
       void view.update(event.snapshot)
-      syncTerminalTitle(event.snapshot)
-      const statusBar = statusBarView(event.snapshot, statusBarModelLabel(event.snapshot))
-      editor.setStatus(statusBar.session)
-      editor.setShortcuts(statusBar.shortcuts)
-      editor.setSessionStatus(sessionStateView(event.snapshot))
-      editor.setOutput(outputDataFrom(event.snapshot))
-      syncErrorLine(event.snapshot)
-      editor.setSessionTitle(
-        event.snapshot.currentSessionId
-          ? { name: event.snapshot.currentSessionName ?? "", sessionId: event.snapshot.currentSessionId }
-          : undefined,
-      )
+      applySnapshotToFooter(event.snapshot)
       editor.setBusy(event.snapshot.status !== "idle")
 
       editor.setInputVisible(

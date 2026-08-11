@@ -9,6 +9,7 @@ import {
   TextareaRenderable,
   TextRenderable,
 } from "@opentui/core"
+import { FOOTER_FIXED_ROWS, MIN_INPUT_ROWS, MIN_OUTPUT_ROWS } from "./footer-layout.ts"
 import { createOutputPanel, type OutputData } from "./output-panel.ts"
 import { shortcutText } from "./status-bar.ts"
 import { systemColors } from "./theme.ts"
@@ -48,12 +49,7 @@ export type ChatEditor = {
   destroy(): void
 }
 
-const minInputHeight = 1
 const maxInputHeight = 8
-/** footer 固定行：第一条分割线 + 第二条分割线 + 信息行 + 快捷键提示行 + 错误提示行。 */
-const FIXED_FOOTER_ROWS = 5
-/** 输出区最小行数（流式输出保底）。 */
-const MIN_OUTPUT_ROWS = 3
 
 function escapedNewline(input: TextareaRenderable): boolean {
   const value = input.plainText
@@ -228,13 +224,13 @@ export function createChatEditor(
     if (destroyed || input.isDestroyed) return
     const measuredLines = inputVisualLines(input.plainText, renderer.terminalWidth)
     // 矮终端降级：footer 高度不足以容纳“固定 5 + 输入 1 + 输出区保底 3”时，先隐藏快捷键提示行。
-    const shortcutsVisible = renderer.footerHeight >= FIXED_FOOTER_ROWS + minInputHeight + MIN_OUTPUT_ROWS
+    const shortcutsVisible = renderer.footerHeight >= FOOTER_FIXED_ROWS + MIN_INPUT_ROWS + MIN_OUTPUT_ROWS
     shortcuts.visible = shortcutsVisible
-    const fixedRows = shortcutsVisible ? FIXED_FOOTER_ROWS : FIXED_FOOTER_ROWS - 1
+    const fixedRows = shortcutsVisible ? FOOTER_FIXED_ROWS : FOOTER_FIXED_ROWS - 1
     // 输入区按内容行数取，但不多吃：上限 = footer 总高 - 固定行 - 输出区最小行。
-    const maxInputRows = Math.max(minInputHeight, renderer.footerHeight - fixedRows - MIN_OUTPUT_ROWS)
+    const maxInputRows = Math.max(MIN_INPUT_ROWS, renderer.footerHeight - fixedRows - MIN_OUTPUT_ROWS)
     const nextHeight = Math.max(
-      minInputHeight,
+      MIN_INPUT_ROWS,
       Math.min(maxInputHeight, maxInputRows, Math.max(measuredLines, input.virtualLineCount || input.lineCount || 1)),
     )
     input.height = nextHeight
@@ -247,7 +243,7 @@ export function createChatEditor(
   }
   input = new TextareaRenderable(renderer, {
     id: "editor",
-    height: minInputHeight,
+    height: MIN_INPUT_ROWS,
     wrapMode: "word",
     placeholder: "输入消息；Enter 发送，Shift+Enter 或光标前 \\ 后 Enter 换行，Esc 中止",
     keyBindings: [

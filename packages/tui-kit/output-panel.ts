@@ -1,5 +1,6 @@
 import { BoxRenderable, type CliRenderer, TextRenderable } from "@opentui/core"
 import type { ResponseMetrics } from "../core/types.ts"
+import { MIN_OUTPUT_ROWS } from "./footer-layout.ts"
 import { systemColors } from "./theme.ts"
 
 export type OutputTool = {
@@ -29,9 +30,6 @@ export type OutputPanel = {
   setVisible(visible: boolean): void
   destroy(): void
 }
-
-/** 流式输出保底行数：即使有工具行挤压，流式输出区也不少于该行数。 */
-const MIN_STREAM_ROWS = 3
 
 function lastLine(text: string): string {
   const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n+$/, "")
@@ -88,13 +86,13 @@ export function createOutputPanel(renderer: CliRenderer): OutputPanel {
   root.add(toolsText)
   root.add(streamText)
 
-  let height = MIN_STREAM_ROWS
+  let height = MIN_OUTPUT_ROWS
   let data: OutputData = { streamingText: "", streamingThinking: "", tools: [] }
   let destroyed = false
 
   const render = () => {
-    // 工具行上限 = 总高 - 流式保底；超出时截断并补一行"还有 k 个"提示。
-    const maxToolRows = Math.max(0, height - MIN_STREAM_ROWS)
+    // 工具行上限 = 总高 - 流式保底（MIN_OUTPUT_ROWS）；超出时截断并补一行“还有 k 个”提示。
+    const maxToolRows = Math.max(0, height - MIN_OUTPUT_ROWS)
     let toolRows: string[] = []
     if (data.tools.length > 0 && maxToolRows > 0) {
       if (data.tools.length > maxToolRows) {
@@ -121,7 +119,7 @@ export function createOutputPanel(renderer: CliRenderer): OutputPanel {
     },
     setHeight(next) {
       if (destroyed) return
-      height = Math.max(MIN_STREAM_ROWS, next)
+      height = Math.max(MIN_OUTPUT_ROWS, next)
       root.height = height
       render()
     },

@@ -1,13 +1,8 @@
 import { type CliRenderer, CliRenderEvents, createCliRenderer } from "@opentui/core"
+import { MIN_FOOTER_HEIGHT } from "./footer-layout.ts"
 
 /** tui-kit 对业务层暴露的渲染器类型，避免业务代码直接依赖 OpenTUI。 */
 export type TuiRenderer = CliRenderer
-
-/** 默认 footer 高度：终端视口信息就绪前的占位值。 */
-const DEFAULT_FOOTER_HEIGHT = 9
-
-/** footer 最小可行高度（固定行 + 输入 1 + 输出区保底 3，快捷键隐藏时）。 */
-const MIN_FOOTER_HEIGHT = 9
 
 /**
  * 根据终端行数计算 footer 高度。
@@ -19,7 +14,7 @@ const MIN_FOOTER_HEIGHT = 9
  * 触发 RESIZE 事件并导致聊天历史被清除后完整重绘，是卡顿的重要来源。
  */
 export function computeFooterHeight(terminalHeight: number): number {
-  if (terminalHeight <= 0) return DEFAULT_FOOTER_HEIGHT
+  if (terminalHeight <= 0) return MIN_FOOTER_HEIGHT
   return Math.max(MIN_FOOTER_HEIGHT, Math.min(Math.floor(terminalHeight / 2), terminalHeight - 2))
 }
 
@@ -27,7 +22,8 @@ export async function createAizenRenderer(): Promise<CliRenderer> {
   const renderer = await createCliRenderer({
     exitOnCtrlC: false,
     screenMode: "split-footer",
-    footerHeight: DEFAULT_FOOTER_HEIGHT,
+    // 终端视口信息就绪前的占位高度 = footer 最小可行高度。
+    footerHeight: MIN_FOOTER_HEIGHT,
     externalOutputMode: "capture-stdout",
     useMouse: false,
   })
