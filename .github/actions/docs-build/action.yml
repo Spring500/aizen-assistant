@@ -1,0 +1,19 @@
+name: docs-build
+description: 安装依赖、生成侧边栏、校验一致性并构建文档站（供 docs 与 docs-deploy 工作流复用）
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+      with:
+        bun-version-file: .bun-version
+    - name: 安装依赖
+      run: bun install --frozen-lockfile
+      shell: bash
+    - name: 生成侧边栏并校验一致性
+      run: |
+        bun run docs:gen
+        git diff --exit-code docs/.vitepress/sidebar.generated.ts
+      shell: bash
+    - name: 构建文档站
+      run: bun run docs:build
+      shell: bash

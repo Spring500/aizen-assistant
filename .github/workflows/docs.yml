@@ -2,17 +2,9 @@ name: docs
 
 on:
   pull_request:
-  push:
-    branches: [main]
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
-
-concurrency:
-  group: pages
-  cancel-in-progress: false
 
 jobs:
   build:
@@ -20,31 +12,4 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
-        with:
-          bun-version-file: .bun-version
-      - name: 安装依赖
-        run: bun install --frozen-lockfile
-      - name: 生成侧边栏并校验一致性
-        run: |
-          bun run docs:gen
-          git diff --exit-code docs/.vitepress/sidebar.generated.ts
-      - name: 构建文档站
-        run: bun run docs:build
-      - name: 上传构建产物
-        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa
-        with:
-          path: docs/.vitepress/dist
-
-  deploy:
-    needs: build
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: 部署到 GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e
+      - uses: ./.github/actions/docs-build
