@@ -6,15 +6,15 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { removeTemporaryDirectory } from "../utils/temporary-directory.ts"
 
-const exePath = "dist/aizen-tui.exe"
+const exePath = "dist/aizen-assistant.exe"
 if (!existsSync(exePath)) {
   console.error(`产物不存在：${exePath}`)
   process.exit(1)
 }
 
-const sandbox = join(tmpdir(), `aizen-tui-${randomUUID()}`)
+const sandbox = join(tmpdir(), `aizen-assistant-${randomUUID()}`)
 mkdirSync(sandbox)
-const executable = join(sandbox, "aizen-tui.exe")
+const executable = join(sandbox, "aizen-assistant.exe")
 copyFileSync(exePath, executable)
 
 try {
@@ -35,7 +35,7 @@ try {
   }
 
   const files = readdirSync(sandbox)
-  if (files.length !== 1 || files[0] !== "aizen-tui.exe") {
+  if (files.length !== 1 || files[0] !== "aizen-assistant.exe") {
     console.error("产物依赖同目录附加文件")
     process.exit(1)
   }

@@ -40,16 +40,16 @@ bun apps/tui/main.ts --data-dir <目录>
 
 ## 构建与运行
 
-构建 Windows x64 单文件可执行程序：
+构建单文件可执行程序（默认 Windows x64）：
 
 ```powershell
 bun run build:tui
 ```
 
-产物位于 `dist/aizen-tui.exe`，运行时不要求另行安装 Node.js 或 Bun。默认数据目录为可执行文件同目录的 `data`，也可以显式指定：
+需要其它平台时通过 `--target` 指定（如 `bun run build:tui --target bun-linux-x64`）。产物位于 `dist/aizen-assistant.exe`（Windows；其余平台为 `dist/aizen-assistant`），运行时不要求另行安装 Node.js 或 Bun。默认数据目录为可执行文件同目录的 `data`，也可以显式指定：
 
 ```powershell
-.\dist\aizen-tui.exe --data-dir <目录>
+.\dist\aizen-assistant.exe --data-dir <目录>
 ```
 
 ## 检查与测试

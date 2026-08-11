@@ -29,7 +29,7 @@ export function parseArguments(args: string[]): ParsedArguments {
 
 /** 返回 TUI 命令行用法。 */
 export function usage(): string {
-  return ["用法：", "  aizen-tui.exe [--data-dir <目录>] [--collect-permission-gaps]", "    启动多轮终端界面"].join(
+  return ["用法：", "  aizen-assistant [--data-dir <目录>] [--collect-permission-gaps]", "    启动多轮终端界面"].join(
     "\n",
   )
 }

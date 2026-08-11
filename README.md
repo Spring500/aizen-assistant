@@ -50,13 +50,20 @@ bun run dev:tui
 
 `bun run dev:tui` 直接运行 TypeScript 源码，不编译可执行文件，也不会自动重启。无论从 worktree 内哪个目录执行，工作目录均为 worktree 根目录。
 
-构建 Windows x64 单文件可执行程序：
+构建单文件可执行程序（默认 Windows x64）：
 
 ```powershell
 bun run build:tui
 ```
 
-编译后的 `dist/aizen-tui.exe` 运行时不要求用户另行安装 Node.js 或 Bun。
+需要其它平台时通过 `--target` 指定：
+
+```powershell
+bun run build:tui --target bun-linux-x64
+bun run build:tui --target bun-darwin-arm64
+```
+
+产物位于 `dist/`（Windows 为 `aizen-assistant.exe`，其余平台为 `aizen-assistant`），运行时不要求用户另行安装 Node.js 或 Bun。
 
 ## 启动参数
 
@@ -71,7 +78,7 @@ AizenAssistant 的数据保存在本地：
 
 - 通过 `bun run dev:tui` 启动时，默认数据目录为 `<worktree>/.aizen/dev-data`；相对路径以 worktree 根目录为基准；
 - 直接运行 `bun apps/tui/main.ts` 时必须指定 `--data-dir <目录>`；相对路径以执行命令时的当前目录为基准；
-- 运行 `aizen-tui.exe` 时，默认数据目录为 `<可执行文件所在目录>/data`；
+- 运行 `aizen-assistant` 时，默认数据目录为 `<可执行文件所在目录>/data`；
 - 以上启动方式都可以通过 `--data-dir <目录>` 改用指定的数据目录，数据目录不能直接指定为当前工作目录。
 
 数据目录包含会话、视图、模型配置、应用偏好和认证信息。会话按工作目录分组保存在 `sessions/` 下，每个会话对应一个 JSONL 文件；文件名由本地创建时间和助记词 ID 组成，可以在应用外改名。会话文件是完整记录的事实来源，摘要索引只是可重建缓存。全局技能登记表保存在 `skills.json`，技能仓库缓存位于 `skill-sources/`。
