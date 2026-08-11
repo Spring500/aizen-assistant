@@ -1499,9 +1499,7 @@ export class AizenCore implements CorePort {
         this.#snapshot.streamingThinking = ""
       } else if (messageRecord.role === "tool") {
         // 工具结果归档：从 footer 输出区移除该工具行，历史工具组块成为唯一展示。
-        this.#snapshot.activeTools = this.#snapshot.activeTools.filter(
-          (tool) => tool.callId !== messageRecord.callId,
-        )
+        this.#snapshot.activeTools = this.#snapshot.activeTools.filter((tool) => tool.callId !== messageRecord.callId)
       }
     }
     if (event.type === "compaction" && this.#snapshot.currentSessionId) {

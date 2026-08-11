@@ -150,8 +150,7 @@ function sessionStatusSeparator(width: number, status: SessionStatus): StyledTex
       fg: parseColor(color),
       attributes: createTextAttributes({ bold: true }),
     })
-  if (metricsShown)
-    chunks.push({ __isChunk: true, text: metricsShown, fg: parseColor(systemColors.secondary) })
+  if (metricsShown) chunks.push({ __isChunk: true, text: metricsShown, fg: parseColor(systemColors.secondary) })
   chunks.push({ __isChunk: true, text: "──", fg: parseColor(systemColors.shortcuts) })
   return new StyledText(chunks)
 }

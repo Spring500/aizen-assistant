@@ -544,8 +544,7 @@ describe("核心编排", () => {
     const core = new AizenCore({ cwd: "E:\\project", store: new SessionStore(root), pi })
     await core.dispatch({ type: "create_session", model, viewId: null })
     const sending = core.dispatch({ type: "send_prompt", text: "测试归档清空" })
-    for (let attempt = 0; attempt < 50 && core.getSnapshot().status !== "running"; attempt++)
-      await Bun.sleep(2)
+    for (let attempt = 0; attempt < 50 && core.getSnapshot().status !== "running"; attempt++) await Bun.sleep(2)
     expect(core.getSnapshot().streamingText).toBe("正在思考")
 
     // 思考/文本段归档：assistant 消息到达 → 流式字段应清空。
@@ -562,9 +561,7 @@ describe("核心编排", () => {
     expect(core.getSnapshot().streamingText).toBe("")
     expect(core.getSnapshot().streamingThinking).toBe("")
     expect(
-      core.getSnapshot().transcript.some(
-        (entry) => entry.type === "message" && entry.message.role === "assistant",
-      ),
+      core.getSnapshot().transcript.some((entry) => entry.type === "message" && entry.message.role === "assistant"),
     ).toBe(true)
 
     // 工具执行与结果归档：工具结果消息到达 → 从活动列表移除。

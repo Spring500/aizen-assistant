@@ -323,9 +323,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
       // 运行中保持输入区可见可输入（setBusy 负责暗淡与禁止发送）；
       // 仅交互菜单（overlay）与退出时隐藏输入区。
-      editor.setInputVisible(
-        !exiting && interactionDepth === 0 && !!event.snapshot.currentSessionId,
-      )
+      editor.setInputVisible(!exiting && interactionDepth === 0 && !!event.snapshot.currentSessionId)
       permissionReview?.update(event.snapshot.pendingPermissionRequests ?? [])
       if ((event.snapshot.pendingPermissionRequests ?? []).length === 0) permissionReview = undefined
     } else if (event.type === "permission_request") {
