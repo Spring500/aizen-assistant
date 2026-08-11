@@ -1,6 +1,13 @@
+---
+title: 自举套件实现规格
+type: spec
+module: bootstrap-suite
+sort: 3
+---
+
 # 自举套件实现规格
 
-本文是[《自举套件使用说明》](自举套件-使用说明.md)的技术对应文档，面向实现与维护自举套件的开发者。用户可见行为以《使用说明》为准，本文不重复，只描述内部结构、接口契约与边界条件。
+本文是[《自举套件使用说明》](./usage.md)的技术对应文档，面向实现与维护自举套件的开发者。用户可见行为以《使用说明》为准，本文不重复，只描述内部结构、接口契约与边界条件。
 
 ---
 
@@ -145,7 +152,7 @@ type MockBehavior = (context: MockRequestContext) => AsyncIterable<MockEvent>
 
 意图字段超过 50 字符时截断而非报错。该上限来自工具契约中 `declaredIntent` 的定义（`packages/pi-adapter/session-runtime.ts`）。
 
-引用仅允许出现在 `think` 和 `text` 中。工具命令、路径、写入内容、编辑块中的 `{{名.Result}}` 是普通字面量，不替换、不触发切轮。引用不存在或尚未声明的调用名时，整体解析失败。
+引用仅允许出现在 `think` 和 `text` 中。工具命令、路径、写入内容、编辑块中的 `&#123;&#123;名.Result&#125;&#125;` 是普通字面量，不替换、不触发切轮。引用不存在或尚未声明的调用名时，整体解析失败。
 
 `error`、`disconnect`、`hang` 是终止指令，必须是最后一条。`error` 前只能出现 `delay`，以保证 HTTP 错误仍是响应首事件；`disconnect` 用于模拟已输出内容后的真实流中异常。
 
@@ -153,7 +160,7 @@ type MockBehavior = (context: MockRequestContext) => AsyncIterable<MockEvent>
 
 一条指令序列可能跨多轮响应。切分点由**数据依赖**决定，不由人工标注：
 
-> 顺序执行指令，`tool` 指令累积待发；一旦遇到引用了尚无结果的 `{{名.Result}}` 的指令，在此处结束本轮。
+> 顺序执行指令，`tool` 指令累积待发；一旦遇到引用了尚无结果的 `&#123;&#123;名.Result&#125;&#125;` 的指令，在此处结束本轮。
 
 因此连续且互不引用的工具调用会在同一轮并行发出，符合真实模型行为。
 
@@ -162,7 +169,7 @@ type MockBehavior = (context: MockRequestContext) => AsyncIterable<MockEvent>
 1. 取最后一条 user 消息，解析为指令序列；
 2. 扫描该消息之后的历史，收集全部 `tool_result` 及其 `tool_use_id`；
 3. 跳过 `callId` 已在结果集合中的 `tool` 指令，从首个未执行的指令继续；
-4. `{{名.Result}}` 用结果集合中对应内容替换。
+4. `&#123;&#123;名.Result&#125;&#125;` 用结果集合中对应内容替换。
 
 这要求 `tool_use` 的 `callId` 可被识别。**实现采用用户指定的调用名作为 `callId`**，使推导精确且无需计数。
 
