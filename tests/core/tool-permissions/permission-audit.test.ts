@@ -37,8 +37,11 @@ describe("权限审计 JSONL 落盘", () => {
     await recorder.close()
     const lines = (await readFile(join(directory, "permission-audit.jsonl"), "utf8")).trim().split("\n")
     expect(lines).toHaveLength(2)
-    expect(JSON.parse(lines[0]!).request.toolCallId).toBe("call-1")
-    expect(JSON.parse(lines[1]!).request.toolCallId).toBe("call-2")
+    const first = lines[0]
+    const second = lines[1]
+    if (first === undefined || second === undefined) throw new Error("缺少审计行")
+    expect(JSON.parse(first).request.toolCallId).toBe("call-1")
+    expect(JSON.parse(second).request.toolCallId).toBe("call-2")
   })
 
   test("超过大小阈值后轮转并保留窗口内文件", async () => {

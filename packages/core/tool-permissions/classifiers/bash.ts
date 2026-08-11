@@ -103,16 +103,6 @@ function claim(tag: PermissionTag, reason: string): PermissionClaim {
   return { tag, reason }
 }
 
-/** 路径参数对应的作用域标签（读取类）。 */
-function readPathClaims(tokens: string[], cwd: string, context: PermissionClassifyContext): PermissionClaim[] {
-  return tokens
-    .slice(1)
-    .filter((token) => token && !token.startsWith("-"))
-    .map(unquote)
-    .map((path) => resolve(cwd, path))
-    .map((target) => claim(readTag(target, context), `命令会读取目标：${target}`))
-}
-
 /** npm 子命令的细粒度语义（保留既有实现）。 */
 function npmClaims(tokens: string[], cwd: string, context: PermissionClassifyContext): PermissionClaim[] | undefined {
   let index = 1
@@ -201,7 +191,7 @@ function classifyNode(
       .map((path) => resolve(input.cwd, path))
     if (targets.length === 0) return "abstain"
     // 递归删除系统根或盘符根属于任何场景都不应发生的行为。
-    if (destructiveRoot.test(text)) return [claim("violation", "递归删除系统根或盘符根：" + text)]
+    if (destructiveRoot.test(text)) return [claim("violation", `递归删除系统根或盘符根：${text}`)]
     return targets.map((target) => claim(editTag(target, context), `${executable} 会修改目标：${target}`))
   }
   if (safeReadCommands.has(executable)) {
