@@ -6,19 +6,21 @@ export type TuiRenderer = CliRenderer
 /** 默认 footer 高度：终端视口信息就绪前的占位值。 */
 const DEFAULT_FOOTER_HEIGHT = 9
 
+/** footer 最小可行高度（固定行 + 输入 1 + 输出区保底 3，快捷键隐藏时）。 */
+const MIN_FOOTER_HEIGHT = 9
+
 /**
- * 根据终端行数计算 footer 固定高度。
+ * 根据终端行数计算 footer 高度。
  *
- * 规则：目标取 min(12, h/2)，下限 9（保证固定行 + 输入区 1 行 + 输出区 3 行的最小空间），
- * 上限 h-2（保证历史滚动区至少保留 2 行）。
+ * 目标为视口行数的一半（随视口增长、无上限）；下限为最小可行高度 9。
+ * 上限 h-2 仅为防御：保证滚动区至少保留 2 行（正常视口下 h/2 恒小于 h-2）。
  *
  * footer 高度只随终端视口变化，内容变化绝不调整——内容驱动的 footerHeight 变化会
  * 触发 RESIZE 事件并导致聊天历史被清除后完整重绘，是卡顿的重要来源。
  */
 export function computeFooterHeight(terminalHeight: number): number {
   if (terminalHeight <= 0) return DEFAULT_FOOTER_HEIGHT
-  const target = Math.min(12, Math.floor(terminalHeight / 2))
-  return Math.min(Math.max(target, DEFAULT_FOOTER_HEIGHT), terminalHeight - 2)
+  return Math.max(MIN_FOOTER_HEIGHT, Math.min(Math.floor(terminalHeight / 2), terminalHeight - 2))
 }
 
 export async function createAizenRenderer(): Promise<CliRenderer> {

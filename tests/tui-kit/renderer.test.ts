@@ -17,12 +17,13 @@ test("终端标题过滤控制字符并限制长度", () => {
   expect(actual).not.toContain("\u001b")
 })
 
-test("footer 高度随视口行数自适应且有上下限", () => {
-  // 目标 min(12, h/2)、下限 9、上限 h-2（保证滚动区至少 2 行）。
-  expect(computeFooterHeight(10)).toBe(8)
+test("footer 高度为视口一半且保底最小可行高度", () => {
+  // 目标 h/2 随视口增长、无上限；下限 9（压缩行后的最小可行高度）。
+  expect(computeFooterHeight(10)).toBe(9)
   expect(computeFooterHeight(16)).toBe(9)
   expect(computeFooterHeight(20)).toBe(10)
   expect(computeFooterHeight(24)).toBe(12)
-  expect(computeFooterHeight(40)).toBe(12)
+  expect(computeFooterHeight(40)).toBe(20)
+  expect(computeFooterHeight(60)).toBe(30)
   expect(computeFooterHeight(0)).toBe(9)
 })

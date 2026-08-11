@@ -196,13 +196,15 @@ export function createChatEditor(
     if (!prefix || commandDismissedFor === input.plainText) commandMatches = []
     else commandMatches = commands.filter((command) => command.name.startsWith(prefix))
     commandSelected = Math.min(commandSelected, Math.max(0, commandMatches.length - 1))
-    const visibleRows = Math.min(5, commandMatches.length, Math.max(0, maximumVisibleRows))
+    // 可见候选数按容器高度自适应（不再写死 5）：候选足够时填满输出区高度。
+    const visibleRows = Math.min(commandMatches.length, Math.max(0, maximumVisibleRows))
     if (visibleRows > 0) {
       const centeredOffset = commandSelected - Math.floor(visibleRows / 2)
       commandOffset = Math.max(0, Math.min(centeredOffset, commandMatches.length - visibleRows))
     } else commandOffset = 0
     commandList.visible = inputVisible && visibleRows > 0
-    commandList.height = commandList.visible ? visibleRows : 0
+    // 命令补全替换输出区时必须与输出区等高（占满输出区高度），否则 footer 底部出现空白。
+    commandList.height = commandList.visible ? Math.max(1, maximumVisibleRows) : 0
     commandList.content = commandMatches
       .slice(commandOffset, commandOffset + visibleRows)
       .map(

@@ -118,7 +118,7 @@ test("超过五个命令时候选窗口跟随选中项滚动", async () => {
 })
 
 test("命令候选尽可能让选中项居中并在首尾收敛", async () => {
-  const setup = await createTestRenderer({ width: 60, height: 18 })
+  const setup = await createTestRenderer({ width: 60, height: 18, screenMode: "split-footer", footerHeight: 12 })
   try {
     const editor = createChatEditor(setup.renderer, { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} }, [
       { name: "/one", description: "命令一" },
@@ -130,23 +130,24 @@ test("命令候选尽可能让选中项居中并在首尾收敛", async () => {
       { name: "/seven", description: "命令七" },
       { name: "/eight", description: "命令八" },
     ])
+    // 可见候选窗口 = 容器高度（footer 12 - 固定 5 - 输入 1 = 6 行）。
     editor.input.setText("/")
     await Bun.sleep(1)
     for (let index = 0; index < 4; index += 1) emitKey(setup.renderer, "\x1b[B")
     await setup.renderOnce()
     const centered = setup.captureCharFrame()
-    expect(centered).toContain("/three")
     expect(centered).toContain("▶ /five")
+    expect(centered).toContain("/two")
     expect(centered).toContain("/seven")
-    expect(centered).not.toContain("/two")
+    expect(centered).not.toContain("/one")
     expect(centered).not.toContain("/eight")
 
     for (let index = 0; index < 3; index += 1) emitKey(setup.renderer, "\x1b[B")
     await setup.renderOnce()
     const atEnd = setup.captureCharFrame()
-    expect(atEnd).toContain("/four")
     expect(atEnd).toContain("▶ /eight")
-    expect(atEnd).not.toContain("/three")
+    expect(atEnd).toContain("/three")
+    expect(atEnd).not.toContain("/two")
     editor.destroy()
   } finally {
     setup.renderer.destroy()
@@ -220,6 +221,32 @@ test("命令补全弹出与收起不改变 footer 高度", async () => {
     editor.input.setText("普通文本")
     await Bun.sleep(1)
     expect(setup.renderer.footerHeight).toBe(before)
+    editor.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("命令补全替换输出区时与输出区等高，footer 底部无空白", async () => {
+  const setup = await createTestRenderer({ width: 60, height: 16, screenMode: "split-footer", footerHeight: 12 })
+  try {
+    const editor = createChatEditor(
+      setup.renderer,
+      { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} },
+      commands,
+    )
+    // 输出区高度 = footer 12 - 固定 5 - 输入 1 = 6。
+    editor.input.setText("/")
+    await Bun.sleep(1)
+    await setup.renderOnce()
+    expect(setup.renderer.footerHeight).toBe(12)
+    const commandList = setup.renderer.root.getRenderable("editor-command-list")
+    expect(commandList?.height).toBe(6)
+    const frame = setup.captureCharFrame()
+    const lines = frame.split("\n").filter((line) => line.length > 0)
+    expect(lines).toHaveLength(12)
+    // 底部固定行（信息行）仍可见，底部无因高度不一致产生的空白。
+    expect(lines.at(-3) ?? "").toContain("模型")
     editor.destroy()
   } finally {
     setup.renderer.destroy()
