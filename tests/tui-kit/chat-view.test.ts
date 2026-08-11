@@ -780,3 +780,70 @@ test("轮次中止时未响应的工具调用兜底归档", async () => {
     setup.renderer.destroy()
   }
 })
+
+test("最终回复到达时工具组块即归档，且位于回复之前", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    await view.update(
+      snapshot({
+        preferences: {
+          ...structuredClone(defaultAppPreferences),
+          fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
+        },
+        transcript: [
+          {
+            type: "message",
+            turnId: "t1",
+            message: {
+              role: "assistant",
+              parts: [
+                {
+                  kind: "tool_call",
+                  callId: "c1",
+                  name: "bash",
+                  arguments: { command: "bun test" },
+                  declaredIntent: "运行测试",
+                },
+              ],
+              source: { providerId: "test", modelId: "model", api: "a" },
+              stopReason: "tool_use",
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+          {
+            type: "message",
+            turnId: "t1",
+            message: {
+              role: "tool",
+              callId: "c1",
+              name: "bash",
+              parts: [{ kind: "text", text: "all passed" }],
+              isError: false,
+            },
+          },
+          {
+            type: "message",
+            turnId: "t1",
+            message: {
+              role: "assistant",
+              parts: [{ kind: "text", text: "最终回复内容" }],
+              source: { providerId: "test", modelId: "model", api: "a" },
+              stopReason: "stop",
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+          // 不依赖 turn_end：归档由无新工具调用的最终回复消息触发。
+        ],
+      }),
+    )
+    await setup.renderOnce()
+    const output = setup.externalOutput.takeText().replace(/\s+/g, "")
+    const toolIndex = output.indexOf("个工具调用")
+    const replyIndex = output.indexOf("最终回复内容")
+    expect(toolIndex).toBeGreaterThan(-1)
+    expect(replyIndex).toBeGreaterThan(toolIndex)
+  } finally {
+    setup.renderer.destroy()
+  }
+})

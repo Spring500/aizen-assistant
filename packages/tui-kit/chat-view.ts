@@ -275,7 +275,8 @@ function groupTiming(tools: ToolDisplay[]): Timing | undefined {
 function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
   const results = new Map<string, ToolMessage>()
   const calls = new Set<string>()
-  // 记录每个轮次发出的工具调用：轮次结束（turn_end）时统一归档为本轮工具组块。
+  // 记录每个轮次发出的工具调用：在“无新工具调用的 assistant 消息”（最终回复）到达时
+  // 统一归档为本轮工具组块；turn_end 仅作异常兜底。
   const turnCalls = new Map<string, ToolCallPart[]>()
   for (const entry of snapshot.transcript) {
     if (entry.type !== "message") continue
@@ -290,7 +291,34 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
     }
   }
 
+  // 将某个轮次的全部工具调用合并生成一个一次成型的组块；有结果用结果，无结果标记未响应。
+  const archiveTurnTools = (turnId: string): DisplayBlock | undefined => {
+    const turnTools = (turnCalls.get(turnId) ?? []).map((call) => {
+      const result = results.get(call.callId)
+      if (result) return toolDisplay(call, result)
+      return {
+        id: call.callId,
+        name: call.name,
+        ...(call.declaredIntent ? { intent: call.declaredIntent } : {}),
+        input: toolInputText(call.name, call.arguments),
+        output: "未响应（本轮已中止/失败）",
+        isError: true,
+        waiting: false,
+      }
+    })
+    if (turnTools.length === 0) return undefined
+    const timing = groupTiming(turnTools)
+    return {
+      kind: "tool_group",
+      id: `tools-${turnId}`,
+      turnId,
+      tools: turnTools,
+      ...(timing ? { timing } : {}),
+    }
+  }
+
   const blocks: DisplayBlock[] = []
+  const archivedTurns = new Set<string>()
   for (const [entryIndex, entry] of snapshot.transcript.entries()) {
     if (entry.type === "environment") {
       blocks.push({
@@ -314,6 +342,14 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
       }
     } else if (entry.type === "message") {
       if (entry.message.role === "assistant") {
+        const hasToolCalls = entry.message.parts.some((part) => part.kind === "tool_call")
+        // 无新工具调用的 assistant 消息（最终回复/纯文本）：本轮工具已全部确认结束，
+        // 先归档工具组块（插在回复之前），再生成文本。
+        if (!hasToolCalls && !archivedTurns.has(entry.turnId)) {
+          const group = archiveTurnTools(entry.turnId)
+          if (group) blocks.push(group)
+          archivedTurns.add(entry.turnId)
+        }
         for (const [partIndex, part] of entry.message.parts.entries()) {
           if (part.kind === "text")
             blocks.push({
@@ -331,7 +367,7 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
               content: part.text,
               ...(part.timing ? { timing: part.timing } : {}),
             })
-          // tool_call 不在历史生成块：进行中由 footer 输出区展示，轮次结束时统一归档。
+          // tool_call 不在历史生成块：进行中由 footer 输出区展示，确认结束后随组块归档。
         }
       } else if (!calls.has(entry.message.callId)) {
         const tool: ToolDisplay = {
@@ -352,30 +388,11 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
         })
       }
     } else if (entry.type === "turn_end") {
-      // 轮次结束：本轮全部工具调用统一归档为一个组块（一次成型，永不就地变化）。
-      const turnTools = (turnCalls.get(entry.turnId) ?? []).map((call) => {
-        const result = results.get(call.callId)
-        if (result) return toolDisplay(call, result)
-        // 未响应（中止/失败）：轮次已结束，该调用永久不会得到结果。
-        return {
-          id: call.callId,
-          name: call.name,
-          ...(call.declaredIntent ? { intent: call.declaredIntent } : {}),
-          input: toolInputText(call.name, call.arguments),
-          output: "未响应（本轮已中止/失败）",
-          isError: true,
-          waiting: false,
-        }
-      })
-      if (turnTools.length > 0) {
-        const timing = groupTiming(turnTools)
-        blocks.push({
-          kind: "tool_group",
-          id: `tools-${entry.turnId}`,
-          turnId: entry.turnId,
-          tools: turnTools,
-          ...(timing ? { timing } : {}),
-        })
+      // 异常兜底：轮次结束仍未归档（如中止时没有最终回复），补记剩余工具。
+      if (!archivedTurns.has(entry.turnId)) {
+        const group = archiveTurnTools(entry.turnId)
+        if (group) blocks.push(group)
+        archivedTurns.add(entry.turnId)
       }
       if (entry.outcome !== "completed") {
         blocks.push({
