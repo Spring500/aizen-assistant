@@ -174,19 +174,22 @@ test("快捷键提示随状态变化", () => {
   expect(shortcutText({ status: "idle", hasSession: false })).toContain("↑/↓ 选择")
 })
 
-test("第二条分割线内嵌会话状态文本右对齐", async () => {
+test("两条分割线内容右端对齐到同一列", async () => {
   const setup = await createTestRenderer({ width: 40, height: 16, screenMode: "split-footer", footerHeight: 12 })
   try {
     const editor = createChatEditor(setup.renderer, { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} })
+    editor.setSessionTitle({ name: "修复登录重试", sessionId: "otter-builds-bridge" })
     editor.setSessionStatus({ text: "处理中", tone: "running" })
     await setup.renderOnce()
-    const frame = setup.captureCharFrame()
-    const line = frame.split("\n").find((value) => value.includes("处理中"))
-    expect(line).toBeDefined()
-    if (!line) throw new Error("第二条分割线应包含会话状态文本")
-    // 与第一条分割线同构：内容右对齐——label 左侧为横线，右侧不再有横线填充。
-    expect(line.slice(0, line.indexOf("处理中"))).toContain("─")
-    expect(line.split("处理中")[1] ?? "").not.toContain("─")
+    const lines = setup.captureCharFrame().split("\n")
+    const titleLine = lines.find((value) => value.includes("otter-builds-bridge"))
+    const statusLine = lines.find((value) => value.includes("处理中"))
+    if (!titleLine || !statusLine) throw new Error("两条分割线应分别包含标题与会话状态")
+    const titleRight = titleLine.indexOf("otter-builds-bridge") + "otter-builds-bridge".length
+    const statusRight = statusLine.indexOf("处理中") + "处理中".length
+    // 两条分割线内容右端后都紧跟 2 列尾部横线（各自距行尾 2 列，即视觉对齐）。
+    expect(titleLine.slice(titleRight)).toBe("──")
+    expect(statusLine.slice(statusRight)).toBe("──")
     editor.destroy()
   } finally {
     setup.renderer.destroy()

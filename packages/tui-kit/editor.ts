@@ -111,12 +111,13 @@ function titledSeparator(width: number, session: { name: string; sessionId: stri
   return new StyledText(chunks)
 }
 
-/** 第二条分割线：横线在左填充、会话状态文本右对齐，与第一条分割线内嵌对话标题采用同一对齐手法。 */
+/** 第二条分割线：横线在左填充、会话状态文本右对齐，右侧 2 列尾部横线，与第一条分割线内嵌对话标题同构对齐。 */
 function sessionStatusSeparator(width: number, status: SessionStatus): StyledText {
   const safeWidth = Math.max(1, width)
-  const label = status.text ? ` ${status.text} ` : ""
+  const label = status.text ? ` ${status.text}` : ""
   const labelWidth = Bun.stringWidth(label)
-  const leading = Math.max(0, safeWidth - labelWidth)
+  // 内容右端距行尾 2 列（为尾部横线保留），与第一条分割线标题内容右端对齐。
+  const leading = Math.max(0, safeWidth - 2 - labelWidth)
   const color =
     status.tone === "error"
       ? systemColors.statusError
@@ -131,6 +132,7 @@ function sessionStatusSeparator(width: number, status: SessionStatus): StyledTex
       fg: parseColor(color),
       attributes: createTextAttributes({ bold: true }),
     })
+  chunks.push({ __isChunk: true, text: "──", fg: parseColor(systemColors.shortcuts) })
   return new StyledText(chunks)
 }
 
