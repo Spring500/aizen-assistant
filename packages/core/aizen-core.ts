@@ -1488,10 +1488,20 @@ export class AizenCore implements CorePort {
       const sessionId = this.#snapshot.currentSessionId
       this.#enqueueRecord(sessionId, record)
       this.#snapshot.transcript.push({ type: "message", turnId: this.#currentTurnId, message: event.record })
-      if (event.record.role === "assistant") {
-        if (this.#hasContextUsage(event.record))
-          this.#snapshot.contextUsage = this.#contextUsageFromAssistant(event.record)
-        if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.outputTokens = event.record.usage.output
+      // 提取为局部常量以便对消息角色做判别式收窄。
+      const messageRecord = event.record
+      if (messageRecord.role === "assistant") {
+        if (this.#hasContextUsage(messageRecord))
+          this.#snapshot.contextUsage = this.#contextUsageFromAssistant(messageRecord)
+        if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.outputTokens = messageRecord.usage.output
+        // 归档即清空：已完成的思考/文本段进入历史后不再于 footer 输出区占位。
+        this.#snapshot.streamingText = ""
+        this.#snapshot.streamingThinking = ""
+      } else if (messageRecord.role === "tool") {
+        // 工具结果归档：从 footer 输出区移除该工具行，历史工具组块成为唯一展示。
+        this.#snapshot.activeTools = this.#snapshot.activeTools.filter(
+          (tool) => tool.callId !== messageRecord.callId,
+        )
       }
     }
     if (event.type === "compaction" && this.#snapshot.currentSessionId) {

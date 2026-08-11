@@ -528,6 +528,70 @@ describe("核心编排", () => {
     await core.dispose()
   })
 
+  test("归档即清空：消息归档后流式字段清空，工具结果归档后从活动列表移除", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    // 挂起版 FakePi：turn 保持 running，测试内手动驱动事件序列。
+    let releaseTurn!: () => void
+    const turnGate = new Promise<void>((resolve) => (releaseTurn = resolve))
+    const pi = new (class extends FakePi {
+      override async prompt(input: unknown): Promise<void> {
+        this.prompts.push(input)
+        for (const listener of this.listeners) listener({ type: "text_delta", delta: "正在思考" })
+        await turnGate
+      }
+    })()
+    const core = new AizenCore({ cwd: "E:\\project", store: new SessionStore(root), pi })
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    const sending = core.dispatch({ type: "send_prompt", text: "测试归档清空" })
+    for (let attempt = 0; attempt < 50 && core.getSnapshot().status !== "running"; attempt++)
+      await Bun.sleep(2)
+    expect(core.getSnapshot().streamingText).toBe("正在思考")
+
+    // 思考/文本段归档：assistant 消息到达 → 流式字段应清空。
+    const assistantRecord = {
+      role: "assistant" as const,
+      parts: [{ kind: "text" as const, text: "正在思考" }],
+      source: { providerId: "test", modelId: "model", api: "anthropic-messages" as const },
+      stopReason: "stop" as const,
+      usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+    }
+    for (const listener of pi.listeners) {
+      listener({ type: "message", recordId: crypto.randomUUID(), record: assistantRecord })
+    }
+    expect(core.getSnapshot().streamingText).toBe("")
+    expect(core.getSnapshot().streamingThinking).toBe("")
+    expect(
+      core.getSnapshot().transcript.some(
+        (entry) => entry.type === "message" && entry.message.role === "assistant",
+      ),
+    ).toBe(true)
+
+    // 工具执行与结果归档：工具结果消息到达 → 从活动列表移除。
+    for (const listener of pi.listeners) {
+      listener({ type: "tool_started", callId: "archived-call", name: "bash", arguments: { command: "ls" } })
+    }
+    expect(core.getSnapshot().activeTools).toHaveLength(1)
+    for (const listener of pi.listeners) {
+      listener({
+        type: "message",
+        recordId: crypto.randomUUID(),
+        record: {
+          role: "tool" as const,
+          callId: "archived-call",
+          name: "bash",
+          isError: false,
+          parts: [{ kind: "text" as const, text: "完成" }],
+        },
+      })
+    }
+    expect(core.getSnapshot().activeTools).toHaveLength(0)
+
+    releaseTurn()
+    expect(await sending).toEqual({ ok: true })
+    await core.dispose()
+  })
+
   test("认证选择事件保留候选项", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
