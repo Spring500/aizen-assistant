@@ -173,3 +173,22 @@ test("快捷键提示随状态变化", () => {
   expect(shortcutText({ status: "idle", hasSession: true })).not.toContain("/model")
   expect(shortcutText({ status: "idle", hasSession: false })).toContain("↑/↓ 选择")
 })
+
+test("第二条分割线内嵌会话状态文本右对齐", async () => {
+  const setup = await createTestRenderer({ width: 40, height: 16, screenMode: "split-footer", footerHeight: 12 })
+  try {
+    const editor = createChatEditor(setup.renderer, { onSubmit: () => {}, onAbort: () => {}, onQuit: () => {} })
+    editor.setSessionStatus({ text: "处理中", tone: "running" })
+    await setup.renderOnce()
+    const frame = setup.captureCharFrame()
+    const line = frame.split("\n").find((value) => value.includes("处理中"))
+    expect(line).toBeDefined()
+    if (!line) throw new Error("第二条分割线应包含会话状态文本")
+    // 与第一条分割线同构：内容右对齐——label 左侧为横线，右侧不再有横线填充。
+    expect(line.slice(0, line.indexOf("处理中"))).toContain("─")
+    expect(line.split("处理中")[1] ?? "").not.toContain("─")
+    editor.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})

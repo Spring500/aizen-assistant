@@ -111,21 +111,19 @@ function titledSeparator(width: number, session: { name: string; sessionId: stri
   return new StyledText(chunks)
 }
 
-/** 第二条分割线：横线居中内嵌会话状态文本，与第一条分割线内嵌对话标题采用同一手法。 */
+/** 第二条分割线：横线在左填充、会话状态文本右对齐，与第一条分割线内嵌对话标题采用同一对齐手法。 */
 function sessionStatusSeparator(width: number, status: SessionStatus): StyledText {
   const safeWidth = Math.max(1, width)
   const label = status.text ? ` ${status.text} ` : ""
   const labelWidth = Bun.stringWidth(label)
-  const remaining = Math.max(0, safeWidth - labelWidth)
-  const left = Math.floor(remaining / 2)
-  const right = remaining - left
+  const leading = Math.max(0, safeWidth - labelWidth)
   const color =
     status.tone === "error"
       ? systemColors.statusError
       : status.tone === "running"
         ? systemColors.statusRunning
         : systemColors.statusIdle
-  const chunks: TextChunk[] = [{ __isChunk: true, text: "─".repeat(left), fg: parseColor(systemColors.shortcuts) }]
+  const chunks: TextChunk[] = [{ __isChunk: true, text: "─".repeat(leading), fg: parseColor(systemColors.shortcuts) }]
   if (status.text)
     chunks.push({
       __isChunk: true,
@@ -133,7 +131,6 @@ function sessionStatusSeparator(width: number, status: SessionStatus): StyledTex
       fg: parseColor(color),
       attributes: createTextAttributes({ bold: true }),
     })
-  chunks.push({ __isChunk: true, text: "─".repeat(right), fg: parseColor(systemColors.shortcuts) })
   return new StyledText(chunks)
 }
 

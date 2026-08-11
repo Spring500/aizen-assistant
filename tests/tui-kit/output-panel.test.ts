@@ -79,10 +79,10 @@ test("工具行超过输出区上限时截断并提示剩余数量", async () =>
       isFinished: false,
       isError: false,
     }))
-    setup.panel.update(data({ tools }))
+    setup.panel.update(data({ tools, streamingText: "有流式内容" }))
     await setup.renderOnce()
     const frame = setup.captureCharFrame()
-    // 6 行中流式保底 3，工具最多 3 行（显示 2 个 + 剩余提示）。
+    // 有流式内容时为其保留保底行：6 行中流式保底 3，工具最多 3 行（显示 2 个 + 剩余提示）。
     expect(frame).toContain("… 还有 3 个工具")
   } finally {
     setup.renderer.destroy()
@@ -133,6 +133,38 @@ test("工具完成后显示完成状态，失败显示失败状态", async () =>
     const frame = setup.captureCharFrame()
     expect(frame).toContain("[bash] 运行测试 | 完成：all passed")
     expect(frame).toContain("[read] 读取文件 | 失败：not found")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("无内容时输出区高度收缩到最小，footer 底部留白", async () => {
+  const setup = await setupPanel()
+  try {
+    setup.panel.setHeight(6)
+    setup.panel.update(data())
+    await setup.renderOnce()
+    // OpenTUI 布局强制 Box 高度至少为 1：空内容时收缩到最小 1 行。
+    expect(setup.panel.root.height).toBe(1)
+    // 有流式内容时用满分配高度。
+    setup.panel.update(data({ streamingText: "hello" }))
+    await setup.renderOnce()
+    expect(setup.panel.root.height).toBe(6)
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("仅工具无流式内容时输出区高度按内容收缩", async () => {
+  const setup = await setupPanel()
+  try {
+    setup.panel.setHeight(6)
+    setup.panel.update(data({ tools: [{ id: "c1", name: "bash", isFinished: true, isError: false }] }))
+    await setup.renderOnce()
+    // 只有 1 个工具行，高度收缩为 1。
+    expect(setup.panel.root.height).toBe(1)
+    const frame = setup.captureCharFrame()
+    expect(frame).toContain("[bash]")
   } finally {
     setup.renderer.destroy()
   }

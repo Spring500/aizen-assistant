@@ -96,8 +96,9 @@ export function createOutputPanel(renderer: CliRenderer): OutputPanel {
   let destroyed = false
 
   const render = () => {
-    // 工具行上限 = 总高 - 流式保底（MIN_OUTPUT_ROWS）；超出时截断并补一行“还有 k 个”提示。
-    const maxToolRows = Math.max(0, height - MIN_OUTPUT_ROWS)
+    const hasStream = data.streamingText !== "" || data.streamingThinking !== ""
+    // 工具行上限：有流式内容时保留流式保底行，否则工具可占满整个输出区。
+    const maxToolRows = hasStream ? Math.max(0, height - MIN_OUTPUT_ROWS) : Math.max(0, height)
     let toolRows: string[] = []
     if (data.tools.length > 0 && maxToolRows > 0) {
       if (data.tools.length > maxToolRows) {
@@ -107,14 +108,18 @@ export function createOutputPanel(renderer: CliRenderer): OutputPanel {
     }
     toolsText.content = toolRows.join("\n")
     toolsText.height = toolRows.length
-    const streamRows = Math.max(1, height - toolRows.length)
     const source = data.streamingText
       ? `[助手流式] ${data.streamingText}`
       : data.streamingThinking
         ? `[思考流式] ${data.streamingThinking}`
         : ""
+    // 无流式内容时流式区不占行；有流式时尽量用满剩余空间（保底 MIN_OUTPUT_ROWS）。
+    const streamRows = hasStream ? Math.max(1, height - toolRows.length) : 0
     streamText.content = source ? `${lastLines(source, streamRows)}${metricText(data.metrics)}` : ""
     streamText.height = streamRows
+    // 实际占用高度 = 内容所需行数（工具行 + 流式行）；全空时收缩到最小 1 行
+    // （OpenTUI 布局强制 Box 高度至少为 1），footer 底部相应留白。
+    root.height = Math.max(1, toolRows.length + streamRows)
   }
 
   return {
