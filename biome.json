@@ -8,7 +8,8 @@
       "!!.worktrees",
       "!!**/node_modules",
       "!!**/dist",
-      "!!tests/fixtures/app/invalid-model/custom-providers.json"
+      "!!tests/fixtures/app/invalid-model/custom-providers.json",
+      "!!docs/.vitepress/sidebar.generated.ts"
     ]
   },
   "formatter": {
