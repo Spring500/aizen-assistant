@@ -2,6 +2,8 @@ import { basename } from "node:path"
 import { resolveDataDirectory } from "../../packages/core/paths.ts"
 import { parseArguments, usage } from "./args.ts"
 import { runInteractiveApp } from "./interactive-app.ts"
+import { runUninstall } from "./self-uninstall.ts"
+import { runUpdate } from "./self-update.ts"
 
 export async function main(args: string[] = process.argv.slice(2)): Promise<number> {
   let parsed: ReturnType<typeof parseArguments>
@@ -12,6 +14,10 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
     console.error(usage())
     return 2
   }
+
+  // 分发子命令：update / uninstall 不要求真实终端
+  if (parsed.command === "update") return await runUpdate()
+  if (parsed.command === "uninstall") return await runUninstall(parsed.yes)
 
   if (!process.stdin.isTTY || !process.stdout.isTTY) {
     console.error("交互模式需要真实终端")
