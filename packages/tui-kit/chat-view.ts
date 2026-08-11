@@ -273,52 +273,71 @@ function groupTiming(tools: ToolDisplay[]): Timing | undefined {
 }
 
 function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
-  const results = new Map<string, ToolMessage>()
-  const calls = new Set<string>()
-  // 记录每个轮次发出的工具调用：在“无新工具调用的 assistant 消息”（最终回复）到达时
-  // 统一归档为本轮工具组块；turn_end 仅作异常兜底。
-  const turnCalls = new Map<string, ToolCallPart[]>()
-  for (const entry of snapshot.transcript) {
-    if (entry.type !== "message") continue
-    if (entry.message.role === "tool") results.set(entry.message.callId, entry.message)
-    else {
-      const callsInTurn = entry.message.parts.filter((part) => part.kind === "tool_call")
-      if (callsInTurn.length > 0) {
-        const existing = turnCalls.get(entry.turnId) ?? []
-        turnCalls.set(entry.turnId, [...existing, ...callsInTurn])
-      }
-      for (const part of callsInTurn) calls.add(part.callId)
-    }
-  }
-
-  // 将某个轮次的全部工具调用合并生成一个一次成型的组块；有结果用结果，无结果标记未响应。
-  const archiveTurnTools = (turnId: string): DisplayBlock | undefined => {
-    const turnTools = (turnCalls.get(turnId) ?? []).map((call) => {
-      const result = results.get(call.callId)
-      if (result) return toolDisplay(call, result)
-      return {
-        id: call.callId,
-        name: call.name,
-        ...(call.declaredIntent ? { intent: call.declaredIntent } : {}),
-        input: toolInputText(call.name, call.arguments),
-        output: "未响应（本轮已中止/失败）",
-        isError: true,
-        waiting: false,
-      }
-    })
-    if (turnTools.length === 0) return undefined
-    const timing = groupTiming(turnTools)
-    return {
-      kind: "tool_group",
-      id: `tools-${turnId}`,
-      turnId,
-      tools: turnTools,
-      ...(timing ? { timing } : {}),
-    }
-  }
-
   const blocks: DisplayBlock[] = []
-  const archivedTurns = new Set<string>()
+  // 转录中出现的全部工具调用 callId，用于识别孤儿工具结果（无对应调用记录）。
+  const calls = new Set<string>()
+  for (const entry of snapshot.transcript) {
+    if (entry.type !== "message" || entry.message.role !== "assistant") continue
+    for (const part of entry.message.parts) if (part.kind === "tool_call") calls.add(part.callId)
+  }
+  // 每个轮次已发出、尚未归档的工具调用（保持调用顺序）。
+  const pending = new Map<string, ToolCallPart[]>()
+  // 按转录顺序到达的工具结果（callId → 结果消息）。
+  const results = new Map<string, ToolMessage>()
+  const pendingOf = (turnId: string): ToolCallPart[] => {
+    const list = pending.get(turnId) ?? []
+    pending.set(turnId, list)
+    return list
+  }
+  // 将一组工具生成一个一次成型的工具组块。
+  const pushToolGroup = (turnId: string, tools: ToolDisplay[]): void => {
+    if (tools.length === 0) return
+    const timing = groupTiming(tools)
+    blocks.push({
+      kind: "tool_group",
+      id: `tools-${tools.map((tool) => tool.id).join("-")}`,
+      turnId,
+      tools,
+      ...(timing ? { timing } : {}),
+    })
+  }
+  // 思考/对话段边界：把该轮“结果已到达但尚未归档”的工具归档为组块（先工具后文本）。
+  const archiveCompleted = (turnId: string): void => {
+    const list = pendingOf(turnId)
+    const done = list.filter((call) => results.has(call.callId))
+    if (done.length === 0) return
+    pushToolGroup(
+      turnId,
+      done.map((call) => toolDisplay(call, results.get(call.callId))),
+    )
+    pending.set(
+      turnId,
+      list.filter((call) => !results.has(call.callId)),
+    )
+  }
+  // 轮次结束兜底：归档该轮剩余工具，无结果的标记未响应。
+  const archiveRemaining = (turnId: string): void => {
+    const list = pendingOf(turnId)
+    if (list.length === 0) return
+    pushToolGroup(
+      turnId,
+      list.map((call) => {
+        const result = results.get(call.callId)
+        if (result) return toolDisplay(call, result)
+        return {
+          id: call.callId,
+          name: call.name,
+          ...(call.declaredIntent ? { intent: call.declaredIntent } : {}),
+          input: toolInputText(call.name, call.arguments),
+          output: "未响应（本轮已中止/失败）",
+          isError: true,
+          waiting: false,
+        }
+      }),
+    )
+    pending.delete(turnId)
+  }
+
   for (const [entryIndex, entry] of snapshot.transcript.entries()) {
     if (entry.type === "environment") {
       blocks.push({
@@ -342,14 +361,8 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
       }
     } else if (entry.type === "message") {
       if (entry.message.role === "assistant") {
-        const hasToolCalls = entry.message.parts.some((part) => part.kind === "tool_call")
-        // 无新工具调用的 assistant 消息（最终回复/纯文本）：本轮工具已全部确认结束，
-        // 先归档工具组块（插在回复之前），再生成文本。
-        if (!hasToolCalls && !archivedTurns.has(entry.turnId)) {
-          const group = archiveTurnTools(entry.turnId)
-          if (group) blocks.push(group)
-          archivedTurns.add(entry.turnId)
-        }
+        // 思考/对话段边界：先归档此前结果已到达、尚未归档的工具（先工具后思考/文本）。
+        archiveCompleted(entry.turnId)
         for (const [partIndex, part] of entry.message.parts.entries()) {
           if (part.kind === "text")
             blocks.push({
@@ -367,9 +380,10 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
               content: part.text,
               ...(part.timing ? { timing: part.timing } : {}),
             })
-          // tool_call 不在历史生成块：进行中由 footer 输出区展示，确认结束后随组块归档。
+          else if (part.kind === "tool_call") pendingOf(entry.turnId).push(part)
         }
       } else if (!calls.has(entry.message.callId)) {
+        // 孤儿工具结果（转录中无对应调用记录）：独立归档。
         const tool: ToolDisplay = {
           id: entry.message.callId,
           name: entry.message.name,
@@ -386,14 +400,13 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
           tools: [tool],
           ...(tool.timing ? { timing: tool.timing } : {}),
         })
+      } else {
+        // 工具结果到达：登记结果，等下一个段边界/轮次兜底时随组块归档。
+        results.set(entry.message.callId, entry.message)
       }
     } else if (entry.type === "turn_end") {
-      // 异常兜底：轮次结束仍未归档（如中止时没有最终回复），补记剩余工具。
-      if (!archivedTurns.has(entry.turnId)) {
-        const group = archiveTurnTools(entry.turnId)
-        if (group) blocks.push(group)
-        archivedTurns.add(entry.turnId)
-      }
+      // 轮次结束：归档该轮剩余工具（含无结果的中断调用），再输出轮次结果提示。
+      archiveRemaining(entry.turnId)
       if (entry.outcome !== "completed") {
         blocks.push({
           kind: "plain",

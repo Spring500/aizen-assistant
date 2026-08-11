@@ -393,7 +393,7 @@ test("工具组和工具详情分别由布尔开关控制", async () => {
   }
 })
 
-test("同一轮内跨助手消息的连续工具调用合并为一个工具组", async () => {
+test("同一轮内工具随思考/对话段边界分批归档为独立组块", async () => {
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
@@ -475,13 +475,14 @@ test("同一轮内跨助手消息的连续工具调用合并为一个工具组",
     )
     await setup.renderOnce()
     const output = setup.externalOutput.takeText().replace(/\s+/g, "")
-    // 轮次结束统一归档：同一轮的全部工具调用合并为一个组块。
-    expect(output).toContain("▼2个工具调用：bash/bash")
-    expect(output.match(/个工具调用/g)).toHaveLength(1)
+    // 工具随思考/对话段边界分批归档：c1 在 M2 段边界、c2 在 turn_end 兜底，各自独立组块。
+    expect(output.match(/个工具调用/g)).toHaveLength(2)
     expect(output).toContain("[bash]运行测试")
     expect(output).toContain("[bash]检查类型")
     expect(output).toContain("first")
     expect(output).toContain("second")
+    // 两个组块均位于下一轮输入之前。
+    expect(output.indexOf("下一轮")).toBeGreaterThan(output.lastIndexOf("个工具调用"))
   } finally {
     setup.renderer.destroy()
   }
@@ -646,7 +647,7 @@ test("工具调用进行中不生成历史块，轮次结束统一归档", async
   }
 })
 
-test("轮次结束时统一归档本轮工具，不触发全量重放", async () => {
+test("工具完成越过思考/对话段边界即分批归档，全程追加不重放", async () => {
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
@@ -654,85 +655,88 @@ test("轮次结束时统一归档本轮工具，不触发全量重放", async ()
       ...structuredClone(defaultAppPreferences),
       fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
     }
-    const transcript: CoreSnapshot["transcript"] = [
-      {
-        type: "message",
-        turnId: "t1",
-        message: {
-          role: "assistant",
-          parts: [
-            {
-              kind: "tool_call",
-              callId: "c1",
-              name: "bash",
-              arguments: { command: "bun test" },
-              declaredIntent: "运行测试",
-            },
-          ],
-          source: { providerId: "test", modelId: "model", api: "a" },
-          stopReason: "tool_use",
-          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
-        },
+    const m1: CoreSnapshot["transcript"][number] = {
+      type: "message",
+      turnId: "t1",
+      message: {
+        role: "assistant",
+        parts: [
+          {
+            kind: "tool_call",
+            callId: "c1",
+            name: "bash",
+            arguments: { command: "bun test" },
+            declaredIntent: "运行测试",
+          },
+        ],
+        source: { providerId: "test", modelId: "model", api: "a" },
+        stopReason: "tool_use",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
       },
-      {
-        type: "message",
-        turnId: "t1",
-        message: {
-          role: "tool",
-          callId: "c1",
-          name: "bash",
-          parts: [{ kind: "text", text: "first done" }],
-          isError: false,
-        },
+    }
+    const r1: CoreSnapshot["transcript"][number] = {
+      type: "message",
+      turnId: "t1",
+      message: {
+        role: "tool",
+        callId: "c1",
+        name: "bash",
+        parts: [{ kind: "text", text: "first done" }],
+        isError: false,
       },
-      {
-        type: "message",
-        turnId: "t1",
-        message: {
-          role: "assistant",
-          parts: [
-            {
-              kind: "tool_call",
-              callId: "c2",
-              name: "bash",
-              arguments: { command: "bun run typecheck" },
-              declaredIntent: "检查类型",
-            },
-          ],
-          source: { providerId: "test", modelId: "model", api: "a" },
-          stopReason: "tool_use",
-          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
-        },
+    }
+    const m2: CoreSnapshot["transcript"][number] = {
+      type: "message",
+      turnId: "t1",
+      message: {
+        role: "assistant",
+        parts: [
+          {
+            kind: "tool_call",
+            callId: "c2",
+            name: "bash",
+            arguments: { command: "bun run typecheck" },
+            declaredIntent: "检查类型",
+          },
+        ],
+        source: { providerId: "test", modelId: "model", api: "a" },
+        stopReason: "tool_use",
+        usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
       },
-      {
-        type: "message",
-        turnId: "t1",
-        message: {
-          role: "tool",
-          callId: "c2",
-          name: "bash",
-          parts: [{ kind: "text", text: "second done" }],
-          isError: false,
-        },
+    }
+    const r2: CoreSnapshot["transcript"][number] = {
+      type: "message",
+      turnId: "t1",
+      message: {
+        role: "tool",
+        callId: "c2",
+        name: "bash",
+        parts: [{ kind: "text", text: "second done" }],
+        isError: false,
       },
-    ]
-    // 轮次未结束：本轮工具不上屏（由 footer 输出区展示）。
-    await view.update(snapshot({ preferences: foldPref, transcript }))
-    await setup.renderOnce()
-    expect(setup.externalOutput.takeText()).toBe("")
+    }
+    const turnEnd: CoreSnapshot["transcript"][number] = { type: "turn_end", turnId: "t1", outcome: "completed" }
+    const render = async (transcript: CoreSnapshot["transcript"]) => {
+      await view.update(snapshot({ preferences: foldPref, transcript }))
+      await setup.renderOnce()
+      return setup.externalOutput.takeText().replace(/\s+/g, "")
+    }
 
-    // 轮次结束：统一归档一个组块（含全部工具），一次写入、不重放。
-    await view.update(
-      snapshot({
-        preferences: foldPref,
-        transcript: [...transcript, { type: "turn_end", turnId: "t1", outcome: "completed" }],
-      }),
-    )
-    await setup.renderOnce()
-    const appended = setup.externalOutput.takeText().replace(/\s+/g, "")
-    expect(appended).toContain("2个工具调用")
-    expect(appended).toContain("bunruntypecheck")
-    expect(appended).toContain("buntest")
+    // 进行中（无结果）：历史不生成工具块。
+    expect(await render([m1])).toBe("")
+    // 结果已到达但思考/对话段边界未到：仍不上屏。
+    expect(await render([m1, r1])).toBe("")
+    // 下一条助手消息（段边界）到达：c1 先归档上屏（追加），c2 仍在进行中不出现。
+    const first = await render([m1, r1, m2])
+    expect(first).toContain("[bash]运行测试")
+    expect(first).toContain("firstdone")
+    expect(first).not.toContain("检查类型")
+    // c2 结果到达但无段边界：无新增。
+    expect(await render([m1, r1, m2, r2])).toBe("")
+    // 轮次结束：c2 兜底归档（追加）。
+    const second = await render([m1, r1, m2, r2, turnEnd])
+    expect(second).toContain("检查类型")
+    expect(second).toContain("seconddone")
   } finally {
     setup.renderer.destroy()
   }
@@ -776,6 +780,62 @@ test("轮次中止时未响应的工具调用兜底归档", async () => {
     const history = setup.externalOutput.takeText().replace(/\s+/g, "")
     expect(history).toContain("未响应（本轮已中止/失败）")
     expect(history).toContain("[已中止]")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("崩溃恢复的悬空工具以失败组块归档显示", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    // 对应 core 的 recoverInterruptedToolCalls 恢复结果：补中断说明结果 + turn_end(failed)。
+    await view.update(
+      snapshot({
+        preferences: {
+          ...structuredClone(defaultAppPreferences),
+          fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
+        },
+        transcript: [
+          {
+            type: "message",
+            turnId: "t1",
+            message: {
+              role: "assistant",
+              parts: [
+                {
+                  kind: "tool_call",
+                  callId: "c1",
+                  name: "bash",
+                  arguments: { command: "bun test" },
+                  declaredIntent: "运行测试",
+                },
+              ],
+              source: { providerId: "test", modelId: "model", api: "a" },
+              stopReason: "tool_use",
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+          {
+            type: "message",
+            turnId: "t1",
+            message: {
+              role: "tool",
+              callId: "c1",
+              name: "bash",
+              parts: [{ kind: "text", text: "Operation interrupted: The application stopped before execution." }],
+              isError: true,
+            },
+          },
+          { type: "turn_end", turnId: "t1", outcome: "failed" },
+        ],
+      }),
+    )
+    await setup.renderOnce()
+    const history = setup.externalOutput.takeText().replace(/\s+/g, "")
+    expect(history).toContain("1个工具调用")
+    expect(history).toContain("Operationinterrupted")
+    expect(history).toContain("[执行失败]")
   } finally {
     setup.renderer.destroy()
   }
