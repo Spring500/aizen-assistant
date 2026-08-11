@@ -108,8 +108,8 @@ describe("策略权限管理器", () => {
       {
         batchId: "batch",
         calls: [
-          { ...request, toolCallId: "one", mode: "hybrid" },
-          { ...request, toolCallId: "two", mode: "hybrid" },
+          { ...request, toolCallId: "one" },
+          { ...request, toolCallId: "two" },
         ],
       },
       context,

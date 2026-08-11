@@ -36,6 +36,9 @@ async function canonicalPath(path: string): Promise<string> {
 function sensitive(target: string, context: PermissionClassifyContext): boolean {
   const normalized = target.replace(/\\/g, "/").toLowerCase()
   const segments = normalized.split("/")
+  const name = segments.at(-1) ?? ""
+  // 私钥与证书扩展名后缀规则（与路径段规则互补）。
+  if (/\.(pem|key|p12|pfx)$/.test(name)) return true
   return context.sensitivePaths.some((pattern) => {
     const value = pattern.replace(/\\/g, "/").toLowerCase()
     return value.includes("/") ? normalized.includes(value) : segments.includes(value)

@@ -16,7 +16,7 @@ function request(command: string): HumanReviewRequest {
     declaredIntent: "预览命令",
     cwd: process.cwd(),
     arguments: { command },
-    assessment: { summary: "命令", targets: [], risk: "medium", reason: "测试", findings: [] },
+    assessment: { summary: "命令", targets: [], reason: "测试" },
     createdAt: new Date().toISOString(),
   }
 }

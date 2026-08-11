@@ -156,7 +156,7 @@ test("真实 pi 链路将权限拒绝结果返回模型", async () => {
     if (!option) throw new Error("缺少集成测试模型")
     pi.setModelBaseUrl(option.providerId, option.modelId, mock.url)
     const core = new AizenCore({ cwd: root, store: new SessionStore(join(root, "sessions")), pi })
-    await core.dispatch({ type: "create_session", model: option, viewId: null, permissionMode: "hybrid" })
+    await core.dispatch({ type: "create_session", model: option, viewId: null })
     const sending = core.dispatch({ type: "send_prompt", text: "执行测试" })
     const first = await mock.take({ modelId: option.modelId })
     first.respond({
@@ -177,7 +177,9 @@ test("真实 pi 链路将权限拒绝结果返回模型", async () => {
     const second = await mock.take({ modelId: option.modelId })
     const messages = JSON.stringify(second.messages)
     expect(messages).toContain("permission-call")
-    expect(messages).toContain('Operation denied: rule \\"unknown\\" requires human approval and was denied.')
+    expect(messages).toContain(
+      'Operation denied: rule \\"Change system state\\" requires human approval and was denied.',
+    )
     second.respond({ type: "text", text: "已停止操作" })
     expect(await sending).toEqual({ ok: true })
     expect(
@@ -203,7 +205,7 @@ test("真实 pi 链路统一提交同一消息中的多工具人工审批", asyn
     if (!option) throw new Error("缺少集成测试模型")
     pi.setModelBaseUrl(option.providerId, option.modelId, mock.url)
     const core = new AizenCore({ cwd: root, store: new SessionStore(join(root, "sessions")), pi })
-    await core.dispatch({ type: "create_session", model: option, viewId: null, permissionMode: "hybrid" })
+    await core.dispatch({ type: "create_session", model: option, viewId: null })
     const sending = core.dispatch({ type: "send_prompt", text: "执行两个需要确认的命令" })
     const first = await mock.take({ modelId: option.modelId })
     first.respond({
@@ -265,11 +267,12 @@ test("批次提交后中止会保留已完成项并停止运行项", async () =>
     if (!option) throw new Error("缺少集成测试模型")
     pi.setModelBaseUrl(option.providerId, option.modelId, mock.url)
     const store = new SessionStore(join(root, "sessions"))
-    const validator = (toolName: string) => ({
-      toolName,
-      validate: async () => ({
-        type: "needHumanReview" as const,
-        assessment: { summary: toolName, targets: [], risk: "medium" as const, reason: "测试人工审批", findings: [] },
+    const classifier = (toolName: string) => ({
+      id: `user/${toolName.replace(/_/g, "-")}@1`,
+      toolNames: [toolName],
+      classify: async () => ({
+        kind: "claims" as const,
+        claims: [{ tag: "system-change" as const, reason: "测试人工审批" }],
       }),
     })
     const core = new AizenCore({
@@ -280,13 +283,13 @@ test("批次提交后中止会保留已完成项并停止运行项", async () =>
         {
           kind: "inProcess",
           descriptor: { name: "fast_tool", label: "fast", description: "快速完成", parameters: { type: "object" } },
-          validator: validator("fast_tool"),
+          classifier: classifier("fast_tool"),
           execute: async () => ({ content: [{ type: "text", text: "fast completed" }] }),
         },
         {
           kind: "inProcess",
           descriptor: { name: "slow_tool", label: "slow", description: "等待中止", parameters: { type: "object" } },
-          validator: validator("slow_tool"),
+          classifier: classifier("slow_tool"),
           execute: async ({ signal }) => {
             slowStarted = true
             await new Promise<void>((resolve, reject) => {
@@ -310,7 +313,7 @@ test("批次提交后中止会保留已完成项并停止运行项", async () =>
         },
       ],
     })
-    await core.dispatch({ type: "create_session", model: option, viewId: null, permissionMode: "hybrid" })
+    await core.dispatch({ type: "create_session", model: option, viewId: null })
     const sessionId = core.getSnapshot().currentSessionId
     const sending = core.dispatch({ type: "send_prompt", text: "执行并中止两个工具" })
     const first = await mock.take({ modelId: option.modelId })
@@ -406,19 +409,10 @@ test("真实 pi 链路执行项目自有联合注册工具", async () => {
               required: ["text", "declaredIntent"],
             },
           },
-          validator: {
-            toolName: "registered_echo",
-            validate: async (request) => ({
-              type: "allow",
-              assessment: {
-                summary: "返回输入文本",
-                targets: [],
-                risk: "low",
-                reason: "无副作用",
-                findings: [],
-                normalizedArguments: request.arguments,
-              },
-            }),
+          classifier: {
+            id: "user/registered-echo@1",
+            toolNames: ["registered_echo"],
+            classify: async () => ({ kind: "claims" as const, claims: [] }),
           },
           execute: async ({ arguments: args }) => ({
             content: [
@@ -434,7 +428,7 @@ test("真实 pi 链路执行项目自有联合注册工具", async () => {
         },
       ],
     })
-    await core.dispatch({ type: "create_session", model: option, viewId: null, permissionMode: "hybrid" })
+    await core.dispatch({ type: "create_session", model: option, viewId: null })
     const sending = core.dispatch({ type: "send_prompt", text: "调用注册工具" })
     const first = await mock.take({ modelId: option.modelId })
     const registered = (first.tools as Array<{ name?: string; input_schema?: Record<string, unknown> }>).find(
@@ -476,7 +470,7 @@ test("真实 pi 链路并行完成主回复和工具式自动命名", async () =
     pi.setModelBaseUrl(naming.providerId, naming.modelId, mock.url)
     const preferencesStore = new AppPreferencesStore(join(root, "preferences.json"))
     await preferencesStore.write({
-      newSession: { viewId: null, permissionMode: "hybrid" },
+      newSession: { viewId: null },
       agents: {
         sessionNaming: { model: { providerId: naming.providerId, modelId: naming.modelId } },
         permissionReview: {},

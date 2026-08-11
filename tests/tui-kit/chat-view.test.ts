@@ -104,7 +104,7 @@ test("状态栏视图模型根据运行状态生成统一内容", () => {
   const view = statusBarView(current)
   expect(
     typeof view.session === "string" ? view.session : view.session.chunks.map((chunk) => chunk.text).join(""),
-  ).toContain("权限：自动+人工")
+  ).toContain("权限：编辑·完全人工")
   expect(view.shortcuts).toBe("Esc 中止 | Ctrl+C 退出")
 })
 

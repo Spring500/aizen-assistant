@@ -119,30 +119,19 @@ async function main(): Promise<void> {
           description: "写入检查点副作用",
           parameters: { type: "object", properties: {}, required: [] },
         },
-        validator: {
-          toolName: "checkpoint_tool",
-          validate: async () => {
+        classifier: {
+          id: "user/checkpoint-tool@1",
+          toolNames: ["checkpoint_tool"],
+          classify: async () => {
             trace(input.checkpoint, "开始验证工具权限")
-            const assessment = {
-              summary: "写入检查点副作用",
-              targets: [join(input.root, "effect.txt")],
-              risk: "medium" as const,
-              reason:
-                input.checkpoint === "permissionRequested"
-                  ? "需要人工确认"
-                  : input.checkpoint === "authorizedDenied"
-                    ? "测试拒绝执行"
-                    : "测试允许执行",
-              findings: [],
-            }
-            if (input.checkpoint === "permissionRequested") return { type: "needHumanReview" as const, assessment }
+            if (input.checkpoint === "permissionRequested")
+              return { kind: "claims" as const, claims: [{ tag: "system-change" as const, reason: "需要人工确认" }] }
             if (input.checkpoint === "authorizedDenied")
               return {
-                type: "deny" as const,
-                reason: "Operation denied: Test policy rejected the tool call.",
-                assessment,
+                kind: "claims" as const,
+                claims: [{ tag: "violation" as const, reason: "测试拒绝执行" }],
               }
-            return { type: "allow" as const, assessment }
+            return { kind: "claims" as const, claims: [] }
           },
         },
         execute: async () => {
@@ -163,7 +152,7 @@ async function main(): Promise<void> {
   })
   trace(input.checkpoint, "Core 已创建")
   const reference: ModelReference = model
-  await core.dispatch({ type: "create_session", model: reference, viewId: null, permissionMode: "hybrid" })
+  await core.dispatch({ type: "create_session", model: reference, viewId: null })
   trace(input.checkpoint, "会话已创建")
   const sessionId = core.getSnapshot().currentSessionId
   if (!sessionId) throw new Error("会话创建失败")
