@@ -1450,6 +1450,7 @@ export class AizenCore implements CorePort {
         })
       return
     }
+    if (event.type === "text_delta") this.#snapshot.streamingText += event.delta
     if (event.type === "thinking_delta") this.#snapshot.streamingThinking += event.delta
     if (event.type === "usage_updated") {
       if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.outputTokens = event.outputTokens

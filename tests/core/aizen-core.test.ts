@@ -481,6 +481,30 @@ describe("核心编排", () => {
     await core.dispose()
   })
 
+  test("文本增量事件实时累积到流式输出快照", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new FakePi()
+    const core = new AizenCore({ cwd: "E:\\project", store: new SessionStore(root), pi })
+    await core.dispatch({ type: "create_session", model, viewId: null })
+
+    // 记录运行期间的流式文本快照；FakePi.prompt 同步发射 text_delta，
+    // 若快照缺失说明 text_delta 未被核心累积（回归保护：删除处理即失败）
+    const streamingValues: string[] = []
+    let sawRunning = false
+    core.subscribe((event) => {
+      if (event.type !== "snapshot") return
+      if (event.snapshot.status !== "running") return
+      sawRunning = true
+      streamingValues.push(event.snapshot.streamingText)
+    })
+
+    expect(await core.dispatch({ type: "send_prompt", text: "测试流式" })).toEqual({ ok: true })
+    expect(sawRunning).toBe(true)
+    expect(streamingValues).toContain("完成")
+    await core.dispose()
+  })
+
   test("认证选择事件保留候选项", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
