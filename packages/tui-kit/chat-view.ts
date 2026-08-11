@@ -21,13 +21,10 @@ import { isMathCodeBlock, prepareMarkdownForTerminal } from "./markdown.ts"
 import { systemColors } from "./theme.ts"
 
 export type ChatView = {
-  header: TextRenderable
-  live: TextRenderable
-  status: TextRenderable
   destroy(): Promise<void>
   update(snapshot: CoreSnapshot): Promise<void>
   getFoldPreferences(): FoldPreferences
-  /** 应用折叠设置并全量回放；message 为状态栏反馈文案，缺省用通用提示。 */
+  /** 应用折叠设置并全量回放；message 保留以兼容旧调用，footer 不再展示该提示文案。 */
   setFoldPreferences(fold: FoldPreferences, message?: string): Promise<void>
 }
 
@@ -182,11 +179,6 @@ function jsonPreview(value: unknown): string {
   }
 }
 
-function declaredIntentText(argumentsValue: unknown): string {
-  const intent = objectValue(argumentsValue)?.declaredIntent
-  return typeof intent === "string" && intent.trim() ? intent.trim() : ""
-}
-
 function toolInputText(name: string, argumentsValue: unknown): string {
   const argumentsObject = objectValue(argumentsValue)
   if (name === "bash" && typeof argumentsObject?.command === "string") return oneLine(argumentsObject.command)
@@ -206,10 +198,6 @@ function toolInputText(name: string, argumentsValue: unknown): string {
     return `${oneLine(argumentsObject.path)} · 写入 ${contentLength} 字符`
   }
   return jsonPreview(argumentsValue)
-}
-
-function toolCallText(name: string, argumentsValue: unknown): string {
-  return `[${name}] ${toolInputText(name, argumentsValue)}`
 }
 
 /** 将毫秒时长格式化为紧凑的天、时、分、秒文本。 */
@@ -284,37 +272,72 @@ function groupTiming(tools: ToolDisplay[]): Timing | undefined {
   }
 }
 
-function mergeConsecutiveToolGroups(blocks: DisplayBlock[]): DisplayBlock[] {
-  const merged: DisplayBlock[] = []
-  for (const block of blocks) {
-    const previous = merged.at(-1)
-    if (block.kind !== "tool_group" || previous?.kind !== "tool_group" || previous.turnId !== block.turnId) {
-      merged.push(block)
-      continue
-    }
-    const tools = [...previous.tools, ...block.tools]
-    const timing = groupTiming(tools)
-    merged[merged.length - 1] = {
-      kind: "tool_group",
-      id: `tools-${tools.map((tool) => tool.id).join("-")}`,
-      turnId: block.turnId,
-      tools,
-      ...(timing ? { timing } : {}),
-    }
-  }
-  return merged
-}
-
 function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
-  const results = new Map<string, ToolMessage>()
+  const blocks: DisplayBlock[] = []
+  // 转录中出现的全部工具调用 callId，用于识别孤儿工具结果（无对应调用记录）。
   const calls = new Set<string>()
   for (const entry of snapshot.transcript) {
-    if (entry.type !== "message") continue
-    if (entry.message.role === "tool") results.set(entry.message.callId, entry.message)
-    else for (const part of entry.message.parts) if (part.kind === "tool_call") calls.add(part.callId)
+    if (entry.type !== "message" || entry.message.role !== "assistant") continue
+    for (const part of entry.message.parts) if (part.kind === "tool_call") calls.add(part.callId)
+  }
+  // 每个轮次已发出、尚未归档的工具调用（保持调用顺序）。
+  const pending = new Map<string, ToolCallPart[]>()
+  // 按转录顺序到达的工具结果（callId → 结果消息）。
+  const results = new Map<string, ToolMessage>()
+  const pendingOf = (turnId: string): ToolCallPart[] => {
+    const list = pending.get(turnId) ?? []
+    pending.set(turnId, list)
+    return list
+  }
+  // 将一组工具生成一个一次成型的工具组块。
+  const pushToolGroup = (turnId: string, tools: ToolDisplay[]): void => {
+    if (tools.length === 0) return
+    const timing = groupTiming(tools)
+    blocks.push({
+      kind: "tool_group",
+      id: `tools-${tools.map((tool) => tool.id).join("-")}`,
+      turnId,
+      tools,
+      ...(timing ? { timing } : {}),
+    })
+  }
+  // 思考/对话段边界：把该轮“结果已到达但尚未归档”的工具归档为组块（先工具后文本）。
+  const archiveCompleted = (turnId: string): void => {
+    const list = pendingOf(turnId)
+    const done = list.filter((call) => results.has(call.callId))
+    if (done.length === 0) return
+    pushToolGroup(
+      turnId,
+      done.map((call) => toolDisplay(call, results.get(call.callId))),
+    )
+    pending.set(
+      turnId,
+      list.filter((call) => !results.has(call.callId)),
+    )
+  }
+  // 轮次结束兜底：归档该轮剩余工具，无结果的标记未响应。
+  const archiveRemaining = (turnId: string): void => {
+    const list = pendingOf(turnId)
+    if (list.length === 0) return
+    pushToolGroup(
+      turnId,
+      list.map((call) => {
+        const result = results.get(call.callId)
+        if (result) return toolDisplay(call, result)
+        return {
+          id: call.callId,
+          name: call.name,
+          ...(call.declaredIntent ? { intent: call.declaredIntent } : {}),
+          input: toolInputText(call.name, call.arguments),
+          output: "未响应（本轮已中止/失败）",
+          isError: true,
+          waiting: false,
+        }
+      }),
+    )
+    pending.delete(turnId)
   }
 
-  const blocks: DisplayBlock[] = []
   for (const [entryIndex, entry] of snapshot.transcript.entries()) {
     if (entry.type === "environment") {
       blocks.push({
@@ -338,7 +361,8 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
       }
     } else if (entry.type === "message") {
       if (entry.message.role === "assistant") {
-        const tools: ToolDisplay[] = []
+        // 思考/对话段边界：先归档此前结果已到达、尚未归档的工具（先工具后思考/文本）。
+        archiveCompleted(entry.turnId)
         for (const [partIndex, part] of entry.message.parts.entries()) {
           if (part.kind === "text")
             blocks.push({
@@ -356,19 +380,10 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
               content: part.text,
               ...(part.timing ? { timing: part.timing } : {}),
             })
-          else tools.push(toolDisplay(part, results.get(part.callId)))
-        }
-        if (tools.length > 0) {
-          const timing = groupTiming(tools)
-          blocks.push({
-            kind: "tool_group",
-            id: `tools-${tools.map((tool) => tool.id).join("-")}`,
-            turnId: entry.turnId,
-            tools,
-            ...(timing ? { timing } : {}),
-          })
+          else if (part.kind === "tool_call") pendingOf(entry.turnId).push(part)
         }
       } else if (!calls.has(entry.message.callId)) {
+        // 孤儿工具结果（转录中无对应调用记录）：独立归档。
         const tool: ToolDisplay = {
           id: entry.message.callId,
           name: entry.message.name,
@@ -385,17 +400,24 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
           tools: [tool],
           ...(tool.timing ? { timing: tool.timing } : {}),
         })
+      } else {
+        // 工具结果到达：登记结果，等下一个段边界/轮次兜底时随组块归档。
+        results.set(entry.message.callId, entry.message)
       }
-    } else if (entry.outcome !== "completed") {
-      blocks.push({
-        kind: "plain",
-        id: `outcome-${entry.turnId}`,
-        turnId: entry.turnId,
-        content: entry.outcome === "aborted" ? "[已中止]" : "[执行失败]",
-      })
+    } else if (entry.type === "turn_end") {
+      // 轮次结束：归档该轮剩余工具（含无结果的中断调用），再输出轮次结果提示。
+      archiveRemaining(entry.turnId)
+      if (entry.outcome !== "completed") {
+        blocks.push({
+          kind: "plain",
+          id: `outcome-${entry.turnId}`,
+          turnId: entry.turnId,
+          content: entry.outcome === "aborted" ? "[已中止]" : "[执行失败]",
+        })
+      }
     }
   }
-  return mergeConsecutiveToolGroups(blocks)
+  return blocks
 }
 
 function makeBox(context: RenderContext, id: string, color: string, marginBottom = 0): BoxRenderable {
@@ -530,56 +552,7 @@ function createHistoryBlock(
   return root
 }
 
-function liveText(snapshot: CoreSnapshot): string {
-  const metrics = snapshot.responseMetrics
-  const metricText = metrics
-    ? ` | 耗时 ${formatDurationText(metrics.elapsedSeconds * 1000)} · 生成 ${metrics.outputTokens} tokens`
-    : ""
-  const active = snapshot.activeTools.at(-1)
-  if (active) {
-    const output = active.outputPreview ? outputPreview(active.outputPreview) : "等待输出"
-    const intent = declaredIntentText(active.arguments)
-    return `${toolCallText(active.name, active.arguments)}${intent ? ` | 目的：${intent}` : ""} | ${active.isFinished ? "完成" : "运行中"}：${output}${metricText}`
-  }
-  if (snapshot.streamingText) return `[助手流式] ${outputPreview(snapshot.streamingText)}${metricText}`
-  if (snapshot.streamingThinking) return `[思考流式] ${outputPreview(snapshot.streamingThinking)}${metricText}`
-  return metrics ? `助手回复中${metricText}` : ""
-}
-
-function statusText(snapshot: CoreSnapshot): string {
-  if (snapshot.lastError) return `错误：${snapshot.lastError}`
-  return {
-    idle: "空闲",
-    running: "处理中",
-    compacting: "正在压缩上下文",
-    aborting: "正在中止",
-    authenticating: "等待输入认证信息",
-    refreshing: "正在刷新供应商模型",
-    error: "发生错误",
-  }[snapshot.status]
-}
-
 export function createChatView(renderer: CliRenderer): ChatView {
-  const header = new TextRenderable(renderer, {
-    id: "header",
-    height: 1,
-    fg: systemColors.header,
-    content: "AizenAssistant",
-  })
-  const live = new TextRenderable(renderer, {
-    id: "live",
-    width: "100%",
-    height: 1,
-    wrapMode: "none",
-    truncate: true,
-    fg: systemColors.live,
-    content: "",
-  })
-  const status = new TextRenderable(renderer, { id: "status", height: 1, fg: systemColors.statusIdle, content: "空闲" })
-  renderer.root.add(header)
-  renderer.root.add(live)
-  renderer.root.add(status)
-
   const assistantMarkdownStyles = createAssistantMarkdownStyles()
   let blocks: DisplayBlock[] = []
   let fold: FoldPreferences = {
@@ -588,12 +561,12 @@ export function createChatView(renderer: CliRenderer): ChatView {
     toolDetailsExpanded: false,
   }
   let committedFingerprints: string[] = []
-  let latestSnapshot: CoreSnapshot | undefined
-  let notice = ""
   let resizeTimer: ReturnType<typeof setTimeout> | undefined
   let operationQueue = Promise.resolve()
   let lifecycle: "active" | "closing" | "destroyed" = "active"
   let destroyPromise: Promise<void> | undefined
+  /** 上次构建 blocks 的 transcript 长度；流式期间 transcript 不变，用于跳过全量重算。 */
+  let lastTranscriptLength = -1
 
   const renderedFingerprints = () => blocks.map((block) => JSON.stringify({ block, fold }))
 
@@ -650,20 +623,6 @@ export function createChatView(renderer: CliRenderer): ChatView {
     return result
   }
 
-  const refreshFooter = () => {
-    if (lifecycle !== "active" || !latestSnapshot || header.isDestroyed || live.isDestroyed || status.isDestroyed)
-      return
-    header.content = "AizenAssistant"
-    live.content = liveText(latestSnapshot)
-    status.content = notice || statusText(latestSnapshot)
-    status.fg =
-      latestSnapshot.lastError || latestSnapshot.status === "error"
-        ? systemColors.statusError
-        : latestSnapshot.status === "idle"
-          ? systemColors.statusIdle
-          : systemColors.statusRunning
-  }
-
   const onResize = () => {
     if (lifecycle !== "active") return
     if (resizeTimer) clearTimeout(resizeTimer)
@@ -671,29 +630,21 @@ export function createChatView(renderer: CliRenderer): ChatView {
       resizeTimer = undefined
       void queueOperation(async () => {
         await syncHistory(true)
-        refreshFooter()
       }).catch((error) => console.error("聊天视图 resize 回放失败", error))
     }, 75)
   }
   renderer.on(CliRenderEvents.RESIZE, onResize)
 
   return {
-    header,
-    live,
-    status,
     destroy() {
       if (destroyPromise) return destroyPromise
       lifecycle = "closing"
-      latestSnapshot = undefined
       if (resizeTimer) {
         clearTimeout(resizeTimer)
         resizeTimer = undefined
       }
       renderer.off(CliRenderEvents.RESIZE, onResize)
       destroyPromise = operationQueue.then(() => {
-        if (!header.isDestroyed) header.destroy()
-        if (!live.isDestroyed) live.destroy()
-        if (!status.isDestroyed) status.destroy()
         assistantMarkdownStyles.markdown.destroy()
         assistantMarkdownStyles.code.destroy()
         lifecycle = "destroyed"
@@ -702,23 +653,30 @@ export function createChatView(renderer: CliRenderer): ChatView {
     },
     update(snapshot) {
       return queueOperation(async () => {
-        latestSnapshot = snapshot
-        notice = ""
-        fold = { ...snapshot.preferences.fold }
+        const nextFold = { ...snapshot.preferences.fold }
+        // 流式期间（transcript 与折叠偏好均未变化）历史块无需重建：
+        // 每次 delta 都全量 displayBlocks + JSON.stringify 指纹会随会话线性放大，
+        // 是回复中后段卡顿的主要来源，这里直接跳过。
+        const transcriptUnchanged =
+          blocks.length > 0 &&
+          snapshot.transcript.length === lastTranscriptLength &&
+          nextFold.thinkingExpanded === fold.thinkingExpanded &&
+          nextFold.toolGroupExpanded === fold.toolGroupExpanded &&
+          nextFold.toolDetailsExpanded === fold.toolDetailsExpanded
+        if (transcriptUnchanged) return
+        lastTranscriptLength = snapshot.transcript.length
+        fold = nextFold
         blocks = displayBlocks(snapshot)
-        refreshFooter()
         await syncHistory()
       })
     },
     getFoldPreferences() {
       return { ...fold }
     },
-    setFoldPreferences(next, message = "已应用折叠设置，并全量回放会话") {
+    setFoldPreferences(next, _message) {
       return queueOperation(async () => {
         fold = { ...next }
-        notice = message
         await syncHistory(true)
-        refreshFooter()
       })
     },
   }

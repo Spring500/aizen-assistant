@@ -9,13 +9,21 @@ import {
   TextareaRenderable,
   TextRenderable,
 } from "@opentui/core"
-import { overlayManager, type OverlayManager } from "./overlay-manager.ts"
+import { FOOTER_FIXED_ROWS, MIN_INPUT_ROWS, MIN_OUTPUT_ROWS } from "./footer-layout.ts"
+import { createOutputPanel, type OutputData } from "./output-panel.ts"
 import { shortcutText } from "./status-bar.ts"
 import { systemColors } from "./theme.ts"
 
 export type CommandOption = {
   name: `/${string}`
   description: string
+}
+
+export type SessionStatus = {
+  text: string
+  tone: "idle" | "running" | "error"
+  /** 本轮回复指标（耗时与生成 token 数），由第二条分割线在状态文本后拼接显示。 */
+  metrics?: { startedAt: number; elapsedSeconds: number; outputTokens: number }
 }
 
 export type EditorHandlers = {
@@ -36,12 +44,14 @@ export type ChatEditor = {
   setError(content: string): void
   setBusy(busy: boolean): void
   setInputVisible(visible: boolean): void
+  /** 更新第二条分割线内嵌的会话状态（空闲/处理中/错误）。 */
+  setSessionStatus(status: SessionStatus): void
+  /** 更新 footer 输出区（流式输出与活动工具行）。 */
+  setOutput(data: OutputData): void
   destroy(): void
 }
 
-const minInputHeight = 1
 const maxInputHeight = 8
-const chatViewHeight = 3
 
 function escapedNewline(input: TextareaRenderable): boolean {
   const value = input.plainText
@@ -103,21 +113,66 @@ function titledSeparator(width: number, session: { name: string; sessionId: stri
   return new StyledText(chunks)
 }
 
+/** 将毫秒时长格式化为紧凑的时、分、秒文本（与 chat-view 的 formatDurationText 同构）。 */
+function compactDuration(seconds: number): string {
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const secs = seconds % 60
+  return [hours ? `${hours}h` : "", minutes ? `${minutes}m` : "", `${secs}s`].filter(Boolean).join(" ")
+}
+
+/** 第二条分割线：横线在左填充、会话状态文本右对齐，右侧 2 列尾部横线，与第一条分割线内嵌对话标题同构对齐。 */
+function sessionStatusSeparator(width: number, status: SessionStatus): StyledText {
+  const safeWidth = Math.max(1, width)
+  const label = status.text ? ` ${status.text}` : ""
+  // 耗时/生成数作为状态的附属信息追加在其后，仅在指标存在时显示。
+  const metricsLabel = status.metrics
+    ? ` · 耗时 ${compactDuration(status.metrics.elapsedSeconds)} · 生成 ${status.metrics.outputTokens} tokens`
+    : ""
+  const color =
+    status.tone === "error"
+      ? systemColors.statusError
+      : status.tone === "running"
+        ? systemColors.statusRunning
+        : systemColors.statusIdle
+  // 右侧信息区：状态 + 指标。空间不足时优先保留状态文本，指标从右向左截断。
+  const contentWidth = Math.max(0, safeWidth - 2)
+  const statusWidth = Bun.stringWidth(label)
+  const metricsBudget = Math.max(0, contentWidth - statusWidth)
+  const metricsShown = metricsBudget > 0 ? truncateToCells(metricsLabel, metricsBudget) : ""
+  const shownWidth = statusWidth + Bun.stringWidth(metricsShown)
+  const leading = Math.max(0, contentWidth - shownWidth)
+  const chunks: TextChunk[] = [{ __isChunk: true, text: "─".repeat(leading), fg: parseColor(systemColors.shortcuts) }]
+  if (status.text)
+    chunks.push({
+      __isChunk: true,
+      text: label,
+      fg: parseColor(color),
+      attributes: createTextAttributes({ bold: true }),
+    })
+  if (metricsShown) chunks.push({ __isChunk: true, text: metricsShown, fg: parseColor(systemColors.secondary) })
+  chunks.push({ __isChunk: true, text: "──", fg: parseColor(systemColors.shortcuts) })
+  return new StyledText(chunks)
+}
+
 export function createChatEditor(
   renderer: CliRenderer,
   handlers: EditorHandlers,
-  manager: OverlayManager = overlayManager(renderer),
   commands: readonly CommandOption[] = [],
 ): ChatEditor {
   let busy = false
   let inputVisible = true
   let sessionTitle: { name: string; sessionId: string } | undefined
+  let sessionStatus: SessionStatus = { text: "", tone: "idle" }
   let destroyed = false
   let commandSelected = 0
   let commandOffset = 0
   let commandFilter = ""
   let commandDismissedFor = ""
   let commandMatches: CommandOption[] = []
+
+  const outputPanel = createOutputPanel(renderer)
+  renderer.root.add(outputPanel.root, 0)
 
   const commandList = new TextRenderable(renderer, {
     id: "editor-command-list",
@@ -155,13 +210,15 @@ export function createChatEditor(
     if (!prefix || commandDismissedFor === input.plainText) commandMatches = []
     else commandMatches = commands.filter((command) => command.name.startsWith(prefix))
     commandSelected = Math.min(commandSelected, Math.max(0, commandMatches.length - 1))
-    const visibleRows = Math.min(5, commandMatches.length, Math.max(0, maximumVisibleRows))
+    // 可见候选数按容器高度自适应（不再写死 5）：候选足够时填满输出区高度。
+    const visibleRows = Math.min(commandMatches.length, Math.max(0, maximumVisibleRows))
     if (visibleRows > 0) {
       const centeredOffset = commandSelected - Math.floor(visibleRows / 2)
       commandOffset = Math.max(0, Math.min(centeredOffset, commandMatches.length - visibleRows))
     } else commandOffset = 0
     commandList.visible = inputVisible && visibleRows > 0
-    commandList.height = commandList.visible ? visibleRows : 0
+    // 命令补全替换输出区时必须与输出区等高（占满输出区高度），否则 footer 底部出现空白。
+    commandList.height = commandList.visible ? Math.max(1, maximumVisibleRows) : 0
     commandList.content = commandMatches
       .slice(commandOffset, commandOffset + visibleRows)
       .map(
@@ -169,6 +226,8 @@ export function createChatEditor(
           `${commandOffset + index === commandSelected ? "▶" : " "} ${command.name.padEnd(10)} ${command.description}`,
       )
       .join("\n")
+    // 命令补全激活时替换输出区，二者互斥。
+    outputPanel.setVisible(!commandList.visible)
   }
   const completeCommand = () => {
     const command = commandMatches[commandSelected]
@@ -182,22 +241,27 @@ export function createChatEditor(
   const updateLayout = () => {
     if (destroyed || input.isDestroyed) return
     const measuredLines = inputVisualLines(input.plainText, renderer.terminalWidth)
+    // 矮终端降级：footer 高度不足以容纳“固定 5 + 输入 1 + 输出区保底 3”时，先隐藏快捷键提示行。
+    const shortcutsVisible = renderer.footerHeight >= FOOTER_FIXED_ROWS + MIN_INPUT_ROWS + MIN_OUTPUT_ROWS
+    shortcuts.visible = shortcutsVisible
+    const fixedRows = shortcutsVisible ? FOOTER_FIXED_ROWS : FOOTER_FIXED_ROWS - 1
+    // 输入区按内容行数取，但不多吃：上限 = footer 总高 - 固定行 - 输出区最小行。
+    const maxInputRows = Math.max(MIN_INPUT_ROWS, renderer.footerHeight - fixedRows - MIN_OUTPUT_ROWS)
     const nextHeight = Math.max(
-      minInputHeight,
-      Math.min(maxInputHeight, Math.max(measuredLines, input.virtualLineCount || input.lineCount || 1)),
+      MIN_INPUT_ROWS,
+      Math.min(maxInputHeight, maxInputRows, Math.max(measuredLines, input.virtualLineCount || input.lineCount || 1)),
     )
     input.height = nextHeight
-    const fixedFooterHeight = chatViewHeight + (inputVisible ? nextHeight + 2 : 0) + 3
-    updateCommands(inputVisible ? renderer.terminalHeight - fixedFooterHeight : 0)
+    // 剩余空间全部给输出区（含命令补全），输出区保底 3 行。
+    const outputHeight = Math.max(MIN_OUTPUT_ROWS, renderer.footerHeight - fixedRows - nextHeight)
+    outputPanel.setHeight(outputHeight)
+    updateCommands(inputVisible ? outputHeight : 0)
     topSeparator.content = titledSeparator(renderer.terminalWidth, sessionTitle)
-    bottomSeparator.content = "─".repeat(Math.max(1, renderer.terminalWidth))
-    manager.setBaseFooterHeight(
-      Math.min(renderer.terminalHeight, fixedFooterHeight + (commandList.visible ? commandList.height : 0)),
-    )
+    bottomSeparator.content = sessionStatusSeparator(renderer.terminalWidth, sessionStatus)
   }
   input = new TextareaRenderable(renderer, {
     id: "editor",
-    height: minInputHeight,
+    height: MIN_INPUT_ROWS,
     wrapMode: "word",
     placeholder: "输入消息；Enter 发送，Shift+Enter 或光标前 \\ 后 Enter 换行，Esc 中止",
     keyBindings: [
@@ -324,9 +388,15 @@ export function createChatEditor(
     },
     setBusy(value) {
       busy = value
+      if (destroyed || input.isDestroyed) return
+      // 运行中输入区保持可见可输入，仅将输入文字切换为暗淡主题色表达“不可发送”。
+      // 恢复时还原 Textarea 默认亮色（#ffffff）。
+      const dimColor = value ? systemColors.secondary : "#ffffff"
+      input.textColor = dimColor
+      input.focusedTextColor = dimColor
     },
     setInputVisible(value) {
-      if (destroyed || input.isDestroyed) return
+      if (destroyed || input.isDestroyed || inputVisible === value) return
       inputVisible = value
       input.visible = value
       topSeparator.visible = value
@@ -335,10 +405,19 @@ export function createChatEditor(
       else input.blur()
       updateLayout()
     },
+    setSessionStatus(statusValue) {
+      sessionStatus = statusValue
+      if (destroyed) return
+      bottomSeparator.content = sessionStatusSeparator(renderer.terminalWidth, sessionStatus)
+    },
+    setOutput(data) {
+      outputPanel.update(data)
+    },
     destroy() {
       destroyed = true
       renderer.keyInput.off("keypress", onKeyPress)
       renderer.off(CliRenderEvents.RESIZE, onResize)
+      outputPanel.destroy()
       commandList.destroy()
       topSeparator.destroy()
       input.destroy()

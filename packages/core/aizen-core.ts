@@ -128,6 +128,8 @@ export class AizenCore implements CorePort {
   #sessionNamingTask: Promise<void> | undefined
   #sessionNamingAbort: AbortController | undefined
   #disposed = false
+  /** 流式/工具事件快照通知的合并节流：同一窗口内的多次变更合并为一次 notify。 */
+  #snapshotNotifyScheduled = false
 
   constructor(options: AizenCoreOptions) {
     this.#cwd = options.cwd
@@ -1450,6 +1452,7 @@ export class AizenCore implements CorePort {
         })
       return
     }
+    if (event.type === "text_delta") this.#snapshot.streamingText += event.delta
     if (event.type === "thinking_delta") this.#snapshot.streamingThinking += event.delta
     if (event.type === "usage_updated") {
       if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.outputTokens = event.outputTokens
@@ -1485,10 +1488,18 @@ export class AizenCore implements CorePort {
       const sessionId = this.#snapshot.currentSessionId
       this.#enqueueRecord(sessionId, record)
       this.#snapshot.transcript.push({ type: "message", turnId: this.#currentTurnId, message: event.record })
-      if (event.record.role === "assistant") {
-        if (this.#hasContextUsage(event.record))
-          this.#snapshot.contextUsage = this.#contextUsageFromAssistant(event.record)
-        if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.outputTokens = event.record.usage.output
+      // 提取为局部常量以便对消息角色做判别式收窄。
+      const messageRecord = event.record
+      if (messageRecord.role === "assistant") {
+        if (this.#hasContextUsage(messageRecord))
+          this.#snapshot.contextUsage = this.#contextUsageFromAssistant(messageRecord)
+        if (this.#snapshot.responseMetrics) this.#snapshot.responseMetrics.outputTokens = messageRecord.usage.output
+        // 归档即清空：已完成的思考/文本段进入历史后不再于 footer 输出区占位。
+        this.#snapshot.streamingText = ""
+        this.#snapshot.streamingThinking = ""
+      } else if (messageRecord.role === "tool") {
+        // 工具结果归档：从 footer 输出区移除该工具行，历史工具组块成为唯一展示。
+        this.#snapshot.activeTools = this.#snapshot.activeTools.filter((tool) => tool.callId !== messageRecord.callId)
       }
     }
     if (event.type === "compaction" && this.#snapshot.currentSessionId) {
@@ -1503,7 +1514,9 @@ export class AizenCore implements CorePort {
       const sessionId = this.#snapshot.currentSessionId
       this.#enqueueRecord(sessionId, record)
     }
-    this.#notify()
+    // 流式/工具/消息事件的快照通知按窗口合并：同一窗口内到达的一批 delta
+    // 只克隆一次快照并通知一次，避免高频 delta 下每次事件都全量克隆+重算。
+    this.#scheduleSnapshotNotify()
   }
 
   async #appendRecord(sessionId: string, record: SessionRecord): Promise<void> {
@@ -1653,6 +1666,17 @@ export class AizenCore implements CorePort {
     if (!this.#responseTimer) return
     clearInterval(this.#responseTimer)
     this.#responseTimer = undefined
+  }
+
+  /** 合并窗口内的流式/工具快照通知；窗口长度取一帧（约 16ms），视觉上仍平滑。 */
+  #scheduleSnapshotNotify(): void {
+    if (this.#snapshotNotifyScheduled || this.#disposed) return
+    this.#snapshotNotifyScheduled = true
+    setTimeout(() => {
+      this.#snapshotNotifyScheduled = false
+      if (this.#disposed) return
+      this.#notify()
+    }, 16)
   }
 
   #notify(): void {

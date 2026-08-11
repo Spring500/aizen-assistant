@@ -25,6 +25,7 @@ import { cycleMenu } from "../../packages/tui-kit/cycle-menu.ts"
 import { selectEditableItem } from "../../packages/tui-kit/editable-selector.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { editInline } from "../../packages/tui-kit/inline-input.ts"
+import type { OutputData, OutputTool } from "../../packages/tui-kit/output-panel.ts"
 import {
   modelProviderChoices,
   providerDisplayNames,
@@ -40,7 +41,7 @@ import {
 } from "../../packages/tui-kit/renderer.ts"
 import { selectRichItem } from "../../packages/tui-kit/rich-selector.ts"
 import { selectItem } from "../../packages/tui-kit/selector.ts"
-import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
+import { sessionStateView, statusBarView } from "../../packages/tui-kit/status-bar.ts"
 import { systemColors } from "../../packages/tui-kit/theme.ts"
 import { editThinkingConfiguration } from "../../packages/tui-kit/thinking-editor.ts"
 
@@ -208,7 +209,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       onAbort: () => void core.dispatch({ type: "abort" }),
       onQuit: quit,
     },
-    overlays,
     tuiCommands,
   )
   editor.setInputVisible(false)
@@ -253,18 +253,55 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       providerDisplayNames(snapshot.authProviders, snapshot.modelConfig?.providers ?? [], snapshot.piProviders ?? []),
     )
 
-  const updateStatusBar = () => {
-    const snapshot = core.getSnapshot()
+  /** 从工具调用参数中提取声明目的文本。 */
+  const toolIntent = (argumentsValue: unknown): string | undefined => {
+    if (argumentsValue !== null && typeof argumentsValue === "object" && !Array.isArray(argumentsValue)) {
+      const intent = (argumentsValue as Record<string, unknown>).declaredIntent
+      if (typeof intent === "string" && intent.trim()) return intent.trim()
+    }
+    return undefined
+  }
+
+  /**
+   * 组装 footer 输出区数据：展示本轮全部活动工具（进行中与已完成，轮次结束时
+   * 由 core 清空 activeTools 并整体归档到历史）+ 流式输出与回复指标。
+   */
+  const outputDataFrom = (snapshot: ReturnType<typeof core.getSnapshot>): OutputData => {
+    const tools: OutputTool[] = snapshot.activeTools.map((tool) => {
+      const intent = toolIntent(tool.arguments)
+      return {
+        id: tool.callId,
+        name: tool.name,
+        ...(intent ? { intent } : {}),
+        ...(tool.outputPreview !== undefined ? { outputPreview: tool.outputPreview } : {}),
+        isFinished: tool.isFinished ?? false,
+        isError: tool.isError ?? false,
+      }
+    })
+    return {
+      streamingText: snapshot.streamingText,
+      streamingThinking: snapshot.streamingThinking,
+      tools,
+    }
+  }
+
+  /** 根据最新快照刷新 footer 各栏：终端标题、状态栏、会话状态、输出区与错误提示行。 */
+  const applySnapshotToFooter = (snapshot: ReturnType<typeof core.getSnapshot>) => {
     syncTerminalTitle(snapshot)
     const statusBar = statusBarView(snapshot, statusBarModelLabel(snapshot))
     editor.setStatus(statusBar.session)
     editor.setShortcuts(statusBar.shortcuts)
+    editor.setSessionStatus(sessionStateView(snapshot))
+    editor.setOutput(outputDataFrom(snapshot))
+    editor.setError(snapshot.lastError ? `错误：${snapshot.lastError}` : "")
     editor.setSessionTitle(
       snapshot.currentSessionId
         ? { name: snapshot.currentSessionName ?? "", sessionId: snapshot.currentSessionId }
         : undefined,
     )
   }
+
+  const updateStatusBar = () => applySnapshotToFooter(core.getSnapshot())
   updateStatusBar()
 
   const beginInteraction = () => {
@@ -274,28 +311,19 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const endInteraction = () => {
     interactionDepth -= 1
     const snapshot = core.getSnapshot()
-    editor.setInputVisible(
-      !exiting && interactionDepth === 0 && snapshot.status === "idle" && !!snapshot.currentSessionId,
-    )
+    // 交互菜单结束后恢复输入区；运行中同样保持可见（可输入但不可发送）。
+    editor.setInputVisible(!exiting && interactionDepth === 0 && !!snapshot.currentSessionId)
   }
 
   const unsubscribe = core.subscribe((event) => {
     if (event.type === "snapshot") {
       void view.update(event.snapshot)
-      syncTerminalTitle(event.snapshot)
-      const statusBar = statusBarView(event.snapshot, statusBarModelLabel(event.snapshot))
-      editor.setStatus(statusBar.session)
-      editor.setShortcuts(statusBar.shortcuts)
-      editor.setSessionTitle(
-        event.snapshot.currentSessionId
-          ? { name: event.snapshot.currentSessionName ?? "", sessionId: event.snapshot.currentSessionId }
-          : undefined,
-      )
+      applySnapshotToFooter(event.snapshot)
       editor.setBusy(event.snapshot.status !== "idle")
 
-      editor.setInputVisible(
-        !exiting && interactionDepth === 0 && event.snapshot.status === "idle" && !!event.snapshot.currentSessionId,
-      )
+      // 运行中保持输入区可见可输入（setBusy 负责暗淡与禁止发送）；
+      // 仅交互菜单（overlay）与退出时隐藏输入区。
+      editor.setInputVisible(!exiting && interactionDepth === 0 && !!event.snapshot.currentSessionId)
       permissionReview?.update(event.snapshot.pendingPermissionRequests ?? [])
       if ((event.snapshot.pendingPermissionRequests ?? []).length === 0) permissionReview = undefined
     } else if (event.type === "permission_request") {
