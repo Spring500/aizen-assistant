@@ -1,6 +1,6 @@
 # 参与开发
 
-感谢你对 AizenAssistant 的兴趣。本文说明如何本地开发、验证变更并提交 PR。日常使用方法见[文档站](docs/zh/index.md)。
+感谢你对 AizenAssistant 的兴趣。本文说明如何本地开发、验证变更并提交 PR。日常使用方法见[文档站](https://spring500.github.io/aizen-assistant/)。
 
 ## 反馈问题
 
@@ -14,7 +14,7 @@
 bun install --frozen-lockfile
 ```
 
-安装依赖时会自动配置仓库的 Git hooks。本地开发运行方式见[文档站：安装与运行](docs/zh/core/installation.md)。
+安装依赖时会自动配置仓库的 Git hooks。本地开发运行方式见[文档站：安装与运行](https://spring500.github.io/aizen-assistant/zh/core/installation.html)。
 
 ## 检查与测试
 

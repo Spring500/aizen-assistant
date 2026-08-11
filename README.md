@@ -6,11 +6,11 @@ AizenAssistant 是一个面向重度 Coding Agent 用户的本地 Coding Agent �
 
 ### 视图式上下文
 
-你可以将系统提示词、项目规则和 Skill 组织成不同视图，为新会话选择视图，也可以在对话过程中切换——而非单纯使用工作目录下的 `AGENTS.md` 和 Skill。视图是独立的"工作预设"，可配置是否加载当前工作路径的项目上下文与全局技能。"无视图"是原生模式，提供接近原生 Agent 的使用体验。详见[文档站：视图式上下文](docs/zh/core/views.md)。
+你可以将系统提示词、项目规则和 Skill 组织成不同视图，为新会话选择视图，也可以在对话过程中切换——而非单纯使用工作目录下的 `AGENTS.md` 和 Skill。视图是独立的"工作预设"，可配置是否加载当前工作路径的项目上下文与全局技能。"无视图"是原生模式，提供接近原生 Agent 的使用体验。详见[文档站：视图式上下文](https://spring500.github.io/aizen-assistant/zh/core/views.html)。
 
 ### 全局技能管理
 
-全局技能是跨视图常驻的机器级资源：通过 `/skills` 输入任意 git 仓库地址（GitHub、GitLab 或自建仓库），引入并发现其中符合 SKILL.md 规范的技能，安装后全局生效。视图可在 `config.json` 关闭全局技能以获得纯净上下文。详见[文档站：全局技能管理](docs/zh/core/skills.md)。
+全局技能是跨视图常驻的机器级资源：通过 `/skills` 输入任意 git 仓库地址（GitHub、GitLab 或自建仓库），引入并发现其中符合 SKILL.md 规范的技能，安装后全局生效。视图可在 `config.json` 关闭全局技能以获得纯净上下文。详见[文档站：全局技能管理](https://spring500.github.io/aizen-assistant/zh/core/skills.html)。
 
 ### 显式意图声明
 
@@ -34,5 +34,5 @@ Agent 在执行工具前需要用自然语言简要说明调用目的，让连�
 
 ## 文档
 
-- **文档站**（安装、运行、使用、数据存储、模块说明）：[docs/zh/](docs/zh/index.md)，仓库公开后将通过 GitHub Pages 对外发布；
+- **文档站**（安装、运行、使用、数据存储、模块说明）：<https://spring500.github.io/aizen-assistant/>；
 - **参与开发**：见 [CONTRIBUTING.md](CONTRIBUTING.md)。
