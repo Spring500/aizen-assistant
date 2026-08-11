@@ -10,7 +10,8 @@
  * - type: spec      -> "开发者文档"
  * - type: reference -> "参考"
  *
- * 组内按 sort 字段排序（缺省 0），同 sort 按链接稳定排序。
+ * 组内先按模块显式顺序（MODULE_ORDER）排模块，模块内按 sort 字段排序
+ * （缺省 0），同 sort 按链接稳定排序。
  * 未标注 frontmatter 的 md 文件会被跳过并在 stderr 输出警告。
  */
 import { readdirSync, readFileSync, writeFileSync } from "node:fs"
@@ -25,6 +26,7 @@ type DocType = "guide" | "spec" | "reference"
 interface DocMeta {
   title: string
   type: DocType
+  module: string
   sort: number
 }
 
@@ -35,6 +37,9 @@ const GROUP_LABEL: Record<DocType, string> = {
 }
 
 const TYPE_ORDER: DocType[] = ["guide", "reference", "spec"]
+
+// 模块在导航中的显式顺序（core 引导性内容在前，其余按业务模块）
+const MODULE_ORDER = ["core", "permission", "bootstrap-suite", "reference"]
 
 /** 递归收集目录下所有 .md 文件绝对路径 */
 function collectMarkdown(dir: string): string[] {
@@ -62,8 +67,9 @@ function parseMeta(file: string): DocMeta | null {
     throw new Error(`无效的 type 字段: ${file} -> ${String(type)}`)
   }
   const title = typeof raw.title === "string" && raw.title.length > 0 ? raw.title : basename(file)
+  const module = typeof raw.module === "string" && raw.module.length > 0 ? raw.module : ""
   const sort = typeof raw.sort === "number" ? raw.sort : 0
-  return { title, type, sort }
+  return { title, type, module, sort }
 }
 
 /** 从文件绝对路径推导站内链接 */
@@ -84,11 +90,19 @@ for (const file of collectMarkdown(DOCS_ROOT)) {
   docs.push({ meta, link: linkFrom(file) })
 }
 
-// 按 type 分组，组内按 sort、再按链接稳定排序
+// 按 type 分组；组内先按模块显式顺序排模块，模块内按 sort、再按链接稳定排序
 const groups = TYPE_ORDER.flatMap((type) => {
   const items = docs
     .filter((d) => d.meta.type === type)
-    .sort((a, b) => a.meta.sort - b.meta.sort || a.link.localeCompare(b.link))
+    .sort((a, b) => {
+      const modA = MODULE_ORDER.indexOf(a.meta.module)
+      const modB = MODULE_ORDER.indexOf(b.meta.module)
+      return (
+        (modA === -1 ? Number.MAX_SAFE_INTEGER : modA) - (modB === -1 ? Number.MAX_SAFE_INTEGER : modB) ||
+        a.meta.sort - b.meta.sort ||
+        a.link.localeCompare(b.link)
+      )
+    })
     .map((d) => ({ text: d.meta.title, link: d.link }))
   return items.length > 0 ? [{ text: GROUP_LABEL[type], items }] : []
 })

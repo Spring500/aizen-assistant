@@ -6,18 +6,11 @@ AizenAssistant 是一个面向重度 Coding Agent 用户的本地 Coding Agent �
 
 ### 视图式上下文
 
-你可以将系统提示词、项目规则和 Skill 组织成不同视图，为新会话选择视图，也可以在对话过程中切换——而非单纯使用工作目录下的 `AGENTS.md` 和 Skill。视图是独立的"工作预设"，目录中包含：
-
-- `SYSTEM.md`：系统提示词；
-- `AGENTS.md`：视图项目规则；
-- `skills/`：视图自带的 Skill（随视图目录迁移）；
-- `config.json`：行为配置（工作路径上下文加载范围、全局技能开关）。
-
-每个视图可通过 `config.json` 决定是否加载当前工作路径的 AGENTS.md 与 Skill，以及加载范围（不加载 / 仅工作目录 / 到 git 仓库根 / 按 pi 默认），并控制是否加载全局技能。"无视图"是原生模式：内建提示词 + 全局技能 + 项目上下文，提供接近原生 Agent 的使用体验。
+你可以将系统提示词、项目规则和 Skill 组织成不同视图，为新会话选择视图，也可以在对话过程中切换——而非单纯使用工作目录下的 `AGENTS.md` 和 Skill。视图是独立的"工作预设"，可配置是否加载当前工作路径的项目上下文与全局技能。"无视图"是原生模式，提供接近原生 Agent 的使用体验。详见[文档站：视图式上下文](docs/zh/core/views.md)。
 
 ### 全局技能管理
 
-全局技能是跨视图常驻的机器级资源：通过 `/skills` 输入任意 git 仓库地址（GitHub、GitLab 或自建仓库），引入并发现其中符合 SKILL.md 规范的技能，安装后全局生效。视图可在 `config.json` 关闭全局技能以获得纯净上下文。
+全局技能是跨视图常驻的机器级资源：通过 `/skills` 输入任意 git 仓库地址（GitHub、GitLab 或自建仓库），引入并发现其中符合 SKILL.md 规范的技能，安装后全局生效。视图可在 `config.json` 关闭全局技能以获得纯净上下文。详见[文档站：全局技能管理](docs/zh/core/skills.md)。
 
 ### 显式意图声明
 
@@ -39,43 +32,7 @@ Agent 在执行工具前需要用自然语言简要说明调用目的，让连�
 - 当前提供 TUI 界面，GUI 尚在规划中。
 - 暂时基于 [pi](https://github.com/earendil-works/pi) SDK 构建，后续考虑使用 `pi-ai` 并自行设计 Agent Loop。
 
-## 从源码运行
+## 文档
 
-项目使用 Bun workspace。安装锁定依赖并启动 TUI：
-
-```powershell
-bun install --frozen-lockfile
-bun run dev:tui
-```
-
-`bun run dev:tui` 直接运行 TypeScript 源码，不编译可执行文件，也不会自动重启。无论从 worktree 内哪个目录执行，工作目录均为 worktree 根目录。
-
-构建 Windows x64 单文件可执行程序：
-
-```powershell
-bun run build:tui
-```
-
-编译后的 `dist/aizen-tui.exe` 运行时不要求用户另行安装 Node.js 或 Bun。
-
-## 启动参数
-
-| 参数 | 行为 |
-|---|---|
-| `--data-dir <目录>` | 指定本地数据目录；相对路径以启动时的工作目录为基准，且不能指定为当前工作目录。 |
-| `--collect-permission-gaps` | 将权限规则缺口记录到 `<数据目录>/local-observations/permission-gaps.jsonl`。完全开放模式会额外运行验证器但始终放行且不触发 AI 或人工审核，其他模式复用正常验证结果。 |
-
-## 数据存储
-
-AizenAssistant 的数据保存在本地：
-
-- 通过 `bun run dev:tui` 启动时，默认数据目录为 `<worktree>/.aizen/dev-data`；相对路径以 worktree 根目录为基准；
-- 直接运行 `bun apps/tui/main.ts` 时必须指定 `--data-dir <目录>`；相对路径以执行命令时的当前目录为基准；
-- 运行 `aizen-tui.exe` 时，默认数据目录为 `<可执行文件所在目录>/data`；
-- 以上启动方式都可以通过 `--data-dir <目录>` 改用指定的数据目录，数据目录不能直接指定为当前工作目录。
-
-数据目录包含会话、视图、模型配置、应用偏好和认证信息。会话按工作目录分组保存在 `sessions/` 下，每个会话对应一个 JSONL 文件；文件名由本地创建时间和助记词 ID 组成，可以在应用外改名。会话文件是完整记录的事实来源，摘要索引只是可重建缓存。全局技能登记表保存在 `skills.json`，技能仓库缓存位于 `skill-sources/`。
-
-建议备份整个数据目录。由于其中包含认证信息，分享、同步或提交文件前请先检查敏感内容。
-
-开发、验证和 PR 流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- **文档站**（安装、运行、使用、数据存储、模块说明）：[docs/zh/](docs/zh/index.md)，仓库公开后将通过 GitHub Pages 对外发布；
+- **参与开发**：见 [CONTRIBUTING.md](CONTRIBUTING.md)。

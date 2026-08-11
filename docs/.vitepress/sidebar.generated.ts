@@ -7,12 +7,41 @@ export const sidebar: DefaultTheme.Sidebar = {
       text: "用户指南",
       items: [
         {
+          text: "快速开始",
+          link: "/zh/core/quickstart"
+        },
+        {
+          text: "安装与运行",
+          link: "/zh/core/installation"
+        },
+        {
+          text: "数据存储",
+          link: "/zh/core/data-storage"
+        },
+        {
+          text: "视图式上下文",
+          link: "/zh/core/views"
+        },
+        {
+          text: "全局技能管理",
+          link: "/zh/core/skills"
+        },
+        {
           text: "权限系统使用说明",
           link: "/zh/permission/usage"
         },
         {
           text: "自举套件使用说明",
           link: "/zh/bootstrap-suite/usage"
+        },
+      ],
+    },
+    {
+      text: "参考",
+      items: [
+        {
+          text: "启动参数",
+          link: "/zh/reference/cli-flags"
         },
       ],
     },
