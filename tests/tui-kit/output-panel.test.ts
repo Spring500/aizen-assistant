@@ -21,21 +21,15 @@ async function setupPanel(height = 12) {
   return { ...setup, panel }
 }
 
-test("输出区显示流式文本与回复指标", async () => {
+test("输出区显示流式文本", async () => {
   const setup = await setupPanel()
   try {
     setup.panel.setHeight(6)
-    setup.panel.update(
-      data({
-        streamingText: "partial answer",
-        metrics: { startedAt: Date.now(), elapsedSeconds: 7, outputTokens: 42 },
-      }),
-    )
+    setup.panel.update(data({ streamingText: "partial answer" }))
     await setup.renderOnce()
     const frame = setup.captureCharFrame()
     expect(frame).toContain("[助手流式]")
     expect(frame).toContain("partial answer")
-    expect(frame).toContain("耗时 7s · 生成 42 tokens")
   } finally {
     setup.renderer.destroy()
   }

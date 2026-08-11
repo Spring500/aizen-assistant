@@ -281,7 +281,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     return {
       streamingText: snapshot.streamingText,
       streamingThinking: snapshot.streamingThinking,
-      ...(snapshot.responseMetrics ? { metrics: snapshot.responseMetrics } : {}),
       tools,
     }
   }

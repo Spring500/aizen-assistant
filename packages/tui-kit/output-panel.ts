@@ -1,5 +1,4 @@
 import { BoxRenderable, type CliRenderer, TextRenderable } from "@opentui/core"
-import type { ResponseMetrics } from "../core/types.ts"
 import { MIN_OUTPUT_ROWS } from "./footer-layout.ts"
 import { systemColors } from "./theme.ts"
 
@@ -15,7 +14,6 @@ export type OutputTool = {
 export type OutputData = {
   streamingText: string
   streamingThinking: string
-  metrics?: ResponseMetrics
   tools: OutputTool[]
 }
 
@@ -54,15 +52,6 @@ function toolLine(tool: OutputTool): string {
   const status = tool.isError ? "失败" : tool.isFinished ? "完成" : "运行中"
   const output = tool.outputPreview ? lastLine(tool.outputPreview) : "等待输出"
   return `[${tool.name}] ${tool.intent?.trim() || "未提供目的"} | ${status}：${output}`
-}
-
-function metricText(metrics: ResponseMetrics | undefined): string {
-  if (!metrics) return ""
-  const hours = Math.floor(metrics.elapsedSeconds / 3600)
-  const minutes = Math.floor((metrics.elapsedSeconds % 3600) / 60)
-  const seconds = metrics.elapsedSeconds % 60
-  const duration = [hours ? `${hours}h` : "", minutes ? `${minutes}m` : "", `${seconds}s`].filter(Boolean).join(" ")
-  return ` | 耗时 ${duration} · 生成 ${metrics.outputTokens} tokens`
 }
 
 /** 创建聊天 footer 的输出区：工具行（每工具一行，超出截断）在上，流式输出（保底 3 行）在下。 */
@@ -115,7 +104,7 @@ export function createOutputPanel(renderer: CliRenderer): OutputPanel {
         : ""
     // 无流式内容时流式区不占行；有流式时尽量用满剩余空间（保底 MIN_OUTPUT_ROWS）。
     const streamRows = hasStream ? Math.max(1, height - toolRows.length) : 0
-    streamText.content = source ? `${lastLines(source, streamRows)}${metricText(data.metrics)}` : ""
+    streamText.content = source ? lastLines(source, streamRows) : ""
     streamText.height = streamRows
     // 实际占用高度 = 内容所需行数（工具行 + 流式行）；全空时收缩到最小 1 行
     // （OpenTUI 布局强制 Box 高度至少为 1），footer 底部相应留白。

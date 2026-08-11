@@ -22,6 +22,8 @@ export type CommandOption = {
 export type SessionStatus = {
   text: string
   tone: "idle" | "running" | "error"
+  /** 本轮回复指标（耗时与生成 token 数），由第二条分割线在状态文本后拼接显示。 */
+  metrics?: { startedAt: number; elapsedSeconds: number; outputTokens: number }
 }
 
 export type EditorHandlers = {
@@ -111,19 +113,35 @@ function titledSeparator(width: number, session: { name: string; sessionId: stri
   return new StyledText(chunks)
 }
 
+/** 将毫秒时长格式化为紧凑的时、分、秒文本（与 chat-view 的 formatDurationText 同构）。 */
+function compactDuration(seconds: number): string {
+  const hours = Math.floor(seconds / 3600)
+  const minutes = Math.floor((seconds % 3600) / 60)
+  const secs = seconds % 60
+  return [hours ? `${hours}h` : "", minutes ? `${minutes}m` : "", `${secs}s`].filter(Boolean).join(" ")
+}
+
 /** 第二条分割线：横线在左填充、会话状态文本右对齐，右侧 2 列尾部横线，与第一条分割线内嵌对话标题同构对齐。 */
 function sessionStatusSeparator(width: number, status: SessionStatus): StyledText {
   const safeWidth = Math.max(1, width)
   const label = status.text ? ` ${status.text}` : ""
-  const labelWidth = Bun.stringWidth(label)
-  // 内容右端距行尾 2 列（为尾部横线保留），与第一条分割线标题内容右端对齐。
-  const leading = Math.max(0, safeWidth - 2 - labelWidth)
+  // 耗时/生成数作为状态的附属信息追加在其后，仅在指标存在时显示。
+  const metricsLabel = status.metrics
+    ? ` · 耗时 ${compactDuration(status.metrics.elapsedSeconds)} · 生成 ${status.metrics.outputTokens} tokens`
+    : ""
   const color =
     status.tone === "error"
       ? systemColors.statusError
       : status.tone === "running"
         ? systemColors.statusRunning
         : systemColors.statusIdle
+  // 右侧信息区：状态 + 指标。空间不足时优先保留状态文本，指标从右向左截断。
+  const contentWidth = Math.max(0, safeWidth - 2)
+  const statusWidth = Bun.stringWidth(label)
+  const metricsBudget = Math.max(0, contentWidth - statusWidth)
+  const metricsShown = metricsBudget > 0 ? truncateToCells(metricsLabel, metricsBudget) : ""
+  const shownWidth = statusWidth + Bun.stringWidth(metricsShown)
+  const leading = Math.max(0, contentWidth - shownWidth)
   const chunks: TextChunk[] = [{ __isChunk: true, text: "─".repeat(leading), fg: parseColor(systemColors.shortcuts) }]
   if (status.text)
     chunks.push({
@@ -132,6 +150,8 @@ function sessionStatusSeparator(width: number, status: SessionStatus): StyledTex
       fg: parseColor(color),
       attributes: createTextAttributes({ bold: true }),
     })
+  if (metricsShown)
+    chunks.push({ __isChunk: true, text: metricsShown, fg: parseColor(systemColors.secondary) })
   chunks.push({ __isChunk: true, text: "──", fg: parseColor(systemColors.shortcuts) })
   return new StyledText(chunks)
 }
