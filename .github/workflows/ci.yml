@@ -18,6 +18,11 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
+      - name: 校验安装脚本语法
+        shell: bash
+        run: |
+          bash -n install.sh
+          powershell -NoProfile -Command "$errors = $null; [System.Management.Automation.Language.Parser]::ParseFile('install.ps1', [ref]$null, [ref]$errors) | Out-Null; if ($errors.Count -gt 0) { $errors | ForEach-Object { $_.Message }; exit 1 }"
       - name: 准备测试诊断工具
         shell: powershell
         run: ./scripts/ci/setup-test-diagnostics.ps1

@@ -1,0 +1,97 @@
+name: release
+
+# 发布流程：push v* tag 触发 → 校验 tag → 4 平台原生矩阵构建并冒烟 → 打包上传 → 创建 Draft Release。
+# 全部产物由 CI 生成，人工只需在 GitHub Releases 页确认后发布。
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  verify-tag:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.validate.outputs.version }}
+    steps:
+      - name: 校验 tag 格式并提取版本号
+        id: validate
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "错误：tag 格式必须为 vX.Y.Z（实际：$TAG）" >&2
+            exit 1
+          fi
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: verify-tag
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # 首版 4 平台全部原生构建（交叉编译受 @opentui 原生绑定限制不可行）
+          - os: windows-latest
+            platform: windows-x64
+            target: bun-windows-x64
+          - os: ubuntu-latest
+            platform: linux-x64
+            target: bun-linux-x64
+          - os: macos-latest
+            platform: darwin-arm64
+            target: bun-darwin-arm64
+          - os: macos-13
+            platform: darwin-x64
+            target: bun-darwin-x64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: 参数化构建
+        run: bun run build:tui --target ${{ matrix.target }}
+      - name: 产物冒烟验证（单文件、无外部运行时）
+        run: >-
+          bun run tests/distribution/verify-tui.ts
+          dist/${{ contains(matrix.platform, 'windows') && 'aizen-assistant.exe' || 'aizen-assistant' }}
+      - name: 打包
+        run: >-
+          bun run scripts/repo/package-release.ts
+          --version ${{ needs.verify-tag.outputs.version }}
+          --platform ${{ matrix.platform }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: asset-${{ matrix.platform }}
+          path: dist/aizen-assistant-${{ needs.verify-tag.outputs.version }}-${{ matrix.platform }}.zip
+
+  release:
+    needs: [verify-tag, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          path: assets
+      - name: 生成 SHA256SUMS
+        run: |
+          cd assets
+          find . -name "*.zip" -exec sha256sum {} + | sed 's|\./||' > SHA256SUMS
+      - name: 创建 Draft Release
+        run: >-
+          gh release create "v${{ needs.verify-tag.outputs.version }}"
+          --draft
+          --generate-notes
+          --title "AizenAssistant v${{ needs.verify-tag.outputs.version }}"
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: 上传 Release 资产
+        run: |
+          cd assets
+          find . -name "*.zip" -exec cp {} . \;
+          gh release upload "v${{ needs.verify-tag.outputs.version }}" ./*.zip SHA256SUMS --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
