@@ -84,8 +84,7 @@ for (const file of collectMarkdown(DOCS_ROOT)) {
   if (basename(file) === "index.md") continue
   const meta = parseMeta(file)
   if (!meta) {
-    console.warn(`[gen-sidebar] 跳过无 frontmatter 的文档: ${relative(DOCS_ROOT, file)}`)
-    continue
+    throw new Error(`缺少 frontmatter 标注: ${relative(DOCS_ROOT, file)}`)
   }
   docs.push({ meta, link: linkFrom(file) })
 }
