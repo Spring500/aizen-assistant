@@ -1,6 +1,6 @@
 import { expect } from "bun:test"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
-import { KeyEvent, parseKeypress } from "@opentui/core"
+import { KeyEvent, parseKeypress, rgbToHex } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { shortcutText } from "../../packages/tui-kit/status-bar.ts"
@@ -62,6 +62,40 @@ test("编辑器支持光标前反斜杠回车换行，并用 Enter 发送", asyn
 
     editor.input.submit()
     expect(submitted).toEqual(["first\nabc\ndef"])
+    editor.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("忙碌状态输入区保持可见且文字变暗淡，仍可输入但不可发送", async () => {
+  const setup = await createTestRenderer({
+    width: 60,
+    height: 8,
+    screenMode: "split-footer",
+    footerHeight: 8,
+  })
+  const submitted: string[] = []
+  try {
+    const editor = createChatEditor(setup.renderer, {
+      onSubmit: (value) => submitted.push(value),
+      onAbort: () => {},
+      onQuit: () => {},
+    })
+    // 输入区处于可见状态时置为忙碌：输入区不消失、可继续输入，但回车不发送，文字变暗淡。
+    editor.setInputVisible(true)
+    editor.setBusy(true)
+    expect(editor.input.visible).toBe(true)
+    expect(rgbToHex(editor.input.textColor as never)).toBe("#9ca3af")
+    editor.input.setText("运行中打字")
+    editor.input.submit()
+    expect(submitted).toEqual([])
+    expect(editor.input.plainText).toBe("运行中打字")
+    // 恢复空闲：颜色还原为默认亮色，提交恢复。
+    editor.setBusy(false)
+    expect(rgbToHex(editor.input.textColor as never)).toBe("#ffffff")
+    editor.input.submit()
+    expect(submitted).toEqual(["运行中打字"])
     editor.destroy()
   } finally {
     setup.renderer.destroy()

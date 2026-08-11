@@ -389,9 +389,15 @@ export function createChatEditor(
     },
     setBusy(value) {
       busy = value
+      if (destroyed || input.isDestroyed) return
+      // 运行中输入区保持可见可输入，仅将输入文字切换为暗淡主题色表达“不可发送”。
+      // 恢复时还原 Textarea 默认亮色（#ffffff）。
+      const dimColor = value ? systemColors.secondary : "#ffffff"
+      input.textColor = dimColor
+      input.focusedTextColor = dimColor
     },
     setInputVisible(value) {
-      if (destroyed || input.isDestroyed) return
+      if (destroyed || input.isDestroyed || inputVisible === value) return
       inputVisible = value
       input.visible = value
       topSeparator.visible = value

@@ -311,9 +311,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const endInteraction = () => {
     interactionDepth -= 1
     const snapshot = core.getSnapshot()
-    editor.setInputVisible(
-      !exiting && interactionDepth === 0 && snapshot.status === "idle" && !!snapshot.currentSessionId,
-    )
+    // 交互菜单结束后恢复输入区；运行中同样保持可见（可输入但不可发送）。
+    editor.setInputVisible(!exiting && interactionDepth === 0 && !!snapshot.currentSessionId)
   }
 
   const unsubscribe = core.subscribe((event) => {
@@ -322,8 +321,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       applySnapshotToFooter(event.snapshot)
       editor.setBusy(event.snapshot.status !== "idle")
 
+      // 运行中保持输入区可见可输入（setBusy 负责暗淡与禁止发送）；
+      // 仅交互菜单（overlay）与退出时隐藏输入区。
       editor.setInputVisible(
-        !exiting && interactionDepth === 0 && event.snapshot.status === "idle" && !!event.snapshot.currentSessionId,
+        !exiting && interactionDepth === 0 && !!event.snapshot.currentSessionId,
       )
       permissionReview?.update(event.snapshot.pendingPermissionRequests ?? [])
       if ((event.snapshot.pendingPermissionRequests ?? []).length === 0) permissionReview = undefined
