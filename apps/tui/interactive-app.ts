@@ -263,27 +263,21 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   }
 
   /**
-   * 组装 footer 输出区数据：展示尚未被历史归档的活动工具（历史归档判定：
-   * transcript 中已存在该 callId 的 tool 结果消息）+ 流式输出与回复指标。
+   * 组装 footer 输出区数据：展示本轮全部活动工具（进行中与已完成，轮次结束时
+   * 由 core 清空 activeTools 并整体归档到历史）+ 流式输出与回复指标。
    */
   const outputDataFrom = (snapshot: ReturnType<typeof core.getSnapshot>): OutputData => {
-    const archived = new Set<string>()
-    for (const entry of snapshot.transcript) {
-      if (entry.type === "message" && entry.message.role === "tool") archived.add(entry.message.callId)
-    }
-    const tools: OutputTool[] = snapshot.activeTools
-      .filter((tool) => !archived.has(tool.callId))
-      .map((tool) => {
-        const intent = toolIntent(tool.arguments)
-        return {
-          id: tool.callId,
-          name: tool.name,
-          ...(intent ? { intent } : {}),
-          ...(tool.outputPreview !== undefined ? { outputPreview: tool.outputPreview } : {}),
-          isFinished: tool.isFinished ?? false,
-          isError: tool.isError ?? false,
-        }
-      })
+    const tools: OutputTool[] = snapshot.activeTools.map((tool) => {
+      const intent = toolIntent(tool.arguments)
+      return {
+        id: tool.callId,
+        name: tool.name,
+        ...(intent ? { intent } : {}),
+        ...(tool.outputPreview !== undefined ? { outputPreview: tool.outputPreview } : {}),
+        isFinished: tool.isFinished ?? false,
+        isError: tool.isError ?? false,
+      }
+    })
     return {
       streamingText: snapshot.streamingText,
       streamingThinking: snapshot.streamingThinking,
@@ -291,6 +285,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       tools,
     }
   }
+
+  /** 将快照中的会话运行错误写入独立错误提示行。 */
+  const syncErrorLine = (snapshot: ReturnType<typeof core.getSnapshot>) =>
+    editor.setError(snapshot.lastError ? `错误：${snapshot.lastError}` : "")
 
   const updateStatusBar = () => {
     const snapshot = core.getSnapshot()
@@ -300,6 +298,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     editor.setShortcuts(statusBar.shortcuts)
     editor.setSessionStatus(sessionStateView(snapshot))
     editor.setOutput(outputDataFrom(snapshot))
+    syncErrorLine(snapshot)
     editor.setSessionTitle(
       snapshot.currentSessionId
         ? { name: snapshot.currentSessionName ?? "", sessionId: snapshot.currentSessionId }
@@ -329,6 +328,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       editor.setShortcuts(statusBar.shortcuts)
       editor.setSessionStatus(sessionStateView(event.snapshot))
       editor.setOutput(outputDataFrom(event.snapshot))
+      syncErrorLine(event.snapshot)
       editor.setSessionTitle(
         event.snapshot.currentSessionId
           ? { name: event.snapshot.currentSessionName ?? "", sessionId: event.snapshot.currentSessionId }

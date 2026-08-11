@@ -75,9 +75,8 @@ export type SessionState = {
   tone: "idle" | "running" | "error"
 }
 
-/** 会话运行状态文本（供第二条分割线内嵌显示），错误优先展示错误消息。 */
+/** 会话运行状态文本（供第二条分割线内嵌显示）；错误消息由独立错误提示行承担。 */
 export function sessionStateView(snapshot: CoreSnapshot): SessionState {
-  if (snapshot.lastError) return { text: `错误：${snapshot.lastError}`, tone: "error" }
   const text = {
     idle: "空闲",
     running: "处理中",
@@ -87,7 +86,10 @@ export function sessionStateView(snapshot: CoreSnapshot): SessionState {
     refreshing: "正在刷新供应商模型",
     error: "发生错误",
   }[snapshot.status]
-  return { text, tone: snapshot.status === "idle" ? "idle" : "running" }
+  return {
+    text,
+    tone: snapshot.status === "error" ? "error" : snapshot.status === "idle" ? "idle" : "running",
+  }
 }
 
 export function statusBarView(snapshot: CoreSnapshot, modelLabel?: string): StatusBarViewModel {

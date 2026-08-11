@@ -357,6 +357,7 @@ test("工具组和工具详情分别由布尔开关控制", async () => {
           isError: false,
         },
       },
+      { type: "turn_end", turnId: "tools", outcome: "completed" },
     ]
     await view.update(
       snapshot({
@@ -392,7 +393,7 @@ test("工具组和工具详情分别由布尔开关控制", async () => {
   }
 })
 
-test("同一轮内跨助手消息的连续工具调用各自归档为独立块", async () => {
+test("同一轮内跨助手消息的连续工具调用合并为一个工具组", async () => {
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
@@ -463,6 +464,7 @@ test("同一轮内跨助手消息的连续工具调用各自归档为独立块",
               isError: false,
             },
           },
+          { type: "turn_end", turnId: "tools", outcome: "completed" },
           {
             type: "input",
             turnId: "recent",
@@ -473,8 +475,9 @@ test("同一轮内跨助手消息的连续工具调用各自归档为独立块",
     )
     await setup.renderOnce()
     const output = setup.externalOutput.takeText().replace(/\s+/g, "")
-    // 工具完成即归档，每个工具独立成块，不再就地合并。
-    expect(output.match(/个工具调用/g)).toHaveLength(2)
+    // 轮次结束统一归档：同一轮的全部工具调用合并为一个组块。
+    expect(output).toContain("▼2个工具调用：bash/bash")
+    expect(output.match(/个工具调用/g)).toHaveLength(1)
     expect(output).toContain("[bash]运行测试")
     expect(output).toContain("[bash]检查类型")
     expect(output).toContain("first")
@@ -553,6 +556,7 @@ test("历史没有变化时不重复写入 scrollback", async () => {
             timing: { startedAt: 3000, finishedAt: 65000 },
           },
         },
+        { type: "turn_end", turnId: "recent", outcome: "completed" },
       ],
     })
     await view.update(current)
@@ -575,15 +579,16 @@ test("历史没有变化时不重复写入 scrollback", async () => {
   }
 })
 
-test("工具调用进行中不生成历史块，完成后才归档", async () => {
+test("工具调用进行中不生成历史块，轮次结束统一归档", async () => {
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
+    const foldPref = {
+      ...structuredClone(defaultAppPreferences),
+      fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
+    }
     const running = snapshot({
-      preferences: {
-        ...structuredClone(defaultAppPreferences),
-        fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
-      },
+      preferences: foldPref,
       transcript: [
         {
           type: "message",
@@ -606,18 +611,15 @@ test("工具调用进行中不生成历史块，完成后才归档", async () =>
         },
       ],
     })
-    // 工具尚无结果：历史不生成块（由 footer 输出区展示）。
+    // 轮次进行中：历史不生成工具块（由 footer 输出区展示）。
     await view.update(running)
     await setup.renderOnce()
     expect(setup.externalOutput.takeText()).not.toContain("bun test")
 
-    // 工具结果到达：追加一次成型的归档块。
+    // 轮次结束（completed）：本轮工具统一归档为一个组块。
     await view.update(
       snapshot({
-        preferences: {
-          ...structuredClone(defaultAppPreferences),
-          fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
-        },
+        preferences: foldPref,
         transcript: [
           ...(running.transcript as NonNullable<typeof running.transcript>),
           {
@@ -631,6 +633,7 @@ test("工具调用进行中不生成历史块，完成后才归档", async () =>
               isError: false,
             },
           },
+          { type: "turn_end", turnId: "t1", outcome: "completed" },
         ],
       }),
     )
@@ -643,10 +646,14 @@ test("工具调用进行中不生成历史块，完成后才归档", async () =>
   }
 })
 
-test("工具逐个完成后追加归档块，不触发全量重放", async () => {
+test("轮次结束时统一归档本轮工具，不触发全量重放", async () => {
   const setup = await setupRepl()
   try {
     const view = createChatView(setup.renderer)
+    const foldPref = {
+      ...structuredClone(defaultAppPreferences),
+      fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
+    }
     const transcript: CoreSnapshot["transcript"] = [
       {
         type: "message",
@@ -678,67 +685,54 @@ test("工具逐个完成后追加归档块，不触发全量重放", async () =>
           isError: false,
         },
       },
-    ]
-    await view.update(
-      snapshot({
-        preferences: {
-          ...structuredClone(defaultAppPreferences),
-          fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
-        },
-        transcript,
-      }),
-    )
-    await setup.renderOnce()
-    const firstText = setup.externalOutput.takeText().replace(/\s+/g, "")
-    expect(firstText).toContain("[bash]运行测试")
-    expect(firstText).toContain("buntest")
-
-    // 第二个工具也完成后，只追加其归档块，已归档的第一个工具不得被重放。
-    await view.update(
-      snapshot({
-        preferences: {
-          ...structuredClone(defaultAppPreferences),
-          fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: true },
-        },
-        transcript: [
-          ...transcript,
-          {
-            type: "message",
-            turnId: "t1",
-            message: {
-              role: "assistant",
-              parts: [
-                {
-                  kind: "tool_call",
-                  callId: "c2",
-                  name: "bash",
-                  arguments: { command: "bun run typecheck" },
-                  declaredIntent: "检查类型",
-                },
-              ],
-              source: { providerId: "test", modelId: "model", api: "a" },
-              stopReason: "tool_use",
-              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
-            },
-          },
-          {
-            type: "message",
-            turnId: "t1",
-            message: {
-              role: "tool",
+      {
+        type: "message",
+        turnId: "t1",
+        message: {
+          role: "assistant",
+          parts: [
+            {
+              kind: "tool_call",
               callId: "c2",
               name: "bash",
-              parts: [{ kind: "text", text: "second done" }],
-              isError: false,
+              arguments: { command: "bun run typecheck" },
+              declaredIntent: "检查类型",
             },
-          },
-        ],
+          ],
+          source: { providerId: "test", modelId: "model", api: "a" },
+          stopReason: "tool_use",
+          usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+      {
+        type: "message",
+        turnId: "t1",
+        message: {
+          role: "tool",
+          callId: "c2",
+          name: "bash",
+          parts: [{ kind: "text", text: "second done" }],
+          isError: false,
+        },
+      },
+    ]
+    // 轮次未结束：本轮工具不上屏（由 footer 输出区展示）。
+    await view.update(snapshot({ preferences: foldPref, transcript }))
+    await setup.renderOnce()
+    expect(setup.externalOutput.takeText()).toBe("")
+
+    // 轮次结束：统一归档一个组块（含全部工具），一次写入、不重放。
+    await view.update(
+      snapshot({
+        preferences: foldPref,
+        transcript: [...transcript, { type: "turn_end", turnId: "t1", outcome: "completed" }],
       }),
     )
     await setup.renderOnce()
     const appended = setup.externalOutput.takeText().replace(/\s+/g, "")
+    expect(appended).toContain("2个工具调用")
     expect(appended).toContain("bunruntypecheck")
-    expect(appended).not.toContain("buntest")
+    expect(appended).toContain("buntest")
   } finally {
     setup.renderer.destroy()
   }

@@ -263,10 +263,19 @@ function toolDisplay(call: ToolCallPart, result: ToolMessage | undefined): ToolD
   }
 }
 
+function groupTiming(tools: ToolDisplay[]): Timing | undefined {
+  const timings = tools.flatMap((tool) => (tool.timing ? [tool.timing] : []))
+  if (timings.length === 0) return undefined
+  return {
+    startedAt: Math.min(...timings.map((item) => item.startedAt)),
+    finishedAt: Math.max(...timings.map((item) => item.finishedAt)),
+  }
+}
+
 function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
   const results = new Map<string, ToolMessage>()
   const calls = new Set<string>()
-  // 记录每个轮次发出的工具调用，用于轮次结束时对未响应调用的兜底归档。
+  // 记录每个轮次发出的工具调用：轮次结束（turn_end）时统一归档为本轮工具组块。
   const turnCalls = new Map<string, ToolCallPart[]>()
   for (const entry of snapshot.transcript) {
     if (entry.type !== "message") continue
@@ -322,18 +331,7 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
               content: part.text,
               ...(part.timing ? { timing: part.timing } : {}),
             })
-          else if (part.kind === "tool_call" && results.has(part.callId)) {
-            // 仅当工具已有结果时才归档为历史块（一次成型，永不就地变化）；
-            // 进行中的工具调用由 footer 输出区展示。
-            const tool = toolDisplay(part, results.get(part.callId))
-            blocks.push({
-              kind: "tool_group",
-              id: `tools-${part.callId}`,
-              turnId: entry.turnId,
-              tools: [tool],
-              ...(tool.timing ? { timing: tool.timing } : {}),
-            })
-          }
+          // tool_call 不在历史生成块：进行中由 footer 输出区展示，轮次结束时统一归档。
         }
       } else if (!calls.has(entry.message.callId)) {
         const tool: ToolDisplay = {
@@ -353,11 +351,13 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
           ...(tool.timing ? { timing: tool.timing } : {}),
         })
       }
-    } else if (entry.type === "turn_end" && entry.outcome !== "completed") {
-      // 轮次非正常结束：该轮未响应的工具调用永久不会得到结果，兜底补记。
-      for (const call of turnCalls.get(entry.turnId) ?? []) {
-        if (results.has(call.callId)) continue
-        const tool: ToolDisplay = {
+    } else if (entry.type === "turn_end") {
+      // 轮次结束：本轮全部工具调用统一归档为一个组块（一次成型，永不就地变化）。
+      const turnTools = (turnCalls.get(entry.turnId) ?? []).map((call) => {
+        const result = results.get(call.callId)
+        if (result) return toolDisplay(call, result)
+        // 未响应（中止/失败）：轮次已结束，该调用永久不会得到结果。
+        return {
           id: call.callId,
           name: call.name,
           ...(call.declaredIntent ? { intent: call.declaredIntent } : {}),
@@ -366,19 +366,25 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
           isError: true,
           waiting: false,
         }
+      })
+      if (turnTools.length > 0) {
+        const timing = groupTiming(turnTools)
         blocks.push({
           kind: "tool_group",
-          id: `tools-${call.callId}`,
+          id: `tools-${entry.turnId}`,
           turnId: entry.turnId,
-          tools: [tool],
+          tools: turnTools,
+          ...(timing ? { timing } : {}),
         })
       }
-      blocks.push({
-        kind: "plain",
-        id: `outcome-${entry.turnId}`,
-        turnId: entry.turnId,
-        content: entry.outcome === "aborted" ? "[已中止]" : "[执行失败]",
-      })
+      if (entry.outcome !== "completed") {
+        blocks.push({
+          kind: "plain",
+          id: `outcome-${entry.turnId}`,
+          turnId: entry.turnId,
+          content: entry.outcome === "aborted" ? "[已中止]" : "[执行失败]",
+        })
+      }
     }
   }
   return blocks
