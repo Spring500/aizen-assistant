@@ -75,19 +75,21 @@ export type SessionState = {
   tone: "idle" | "running" | "error"
 }
 
+/** 各会话状态对应的展示文本（模块级常量，避免每次调用重建对象）。 */
+const sessionStateText: Record<CoreStatus, string> = {
+  idle: "空闲",
+  running: "处理中",
+  compacting: "正在压缩上下文",
+  aborting: "正在中止",
+  authenticating: "等待输入认证信息",
+  refreshing: "正在刷新供应商模型",
+  error: "发生错误",
+}
+
 /** 会话运行状态文本（供第二条分割线内嵌显示）；错误消息由独立错误提示行承担。 */
 export function sessionStateView(snapshot: CoreSnapshot): SessionState {
-  const text = {
-    idle: "空闲",
-    running: "处理中",
-    compacting: "正在压缩上下文",
-    aborting: "正在中止",
-    authenticating: "等待输入认证信息",
-    refreshing: "正在刷新供应商模型",
-    error: "发生错误",
-  }[snapshot.status]
   return {
-    text,
+    text: sessionStateText[snapshot.status],
     tone: snapshot.status === "error" ? "error" : snapshot.status === "idle" ? "idle" : "running",
   }
 }

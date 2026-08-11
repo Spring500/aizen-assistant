@@ -31,8 +31,13 @@ export type OutputPanel = {
   destroy(): void
 }
 
+/** 将 CRLF/CR 统一规范化为 LF。 */
+function normalizeNewlines(text: string): string {
+  return text.replace(/\r\n/g, "\n").replace(/\r/g, "\n")
+}
+
 function lastLine(text: string): string {
-  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").replace(/\n+$/, "")
+  const normalized = normalizeNewlines(text).replace(/\n+$/, "")
   if (!normalized) return ""
   const lines = normalized.split("\n")
   return lines.at(-1) ?? ""
@@ -40,7 +45,7 @@ function lastLine(text: string): string {
 
 function lastLines(text: string, maxLines: number): string {
   if (maxLines <= 0) return ""
-  const lines = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n")
+  const lines = normalizeNewlines(text).split("\n")
   if (lines.length <= maxLines) return lines.join("\n")
   return `… 前面 ${lines.length - maxLines} 行省略\n${lines.slice(-maxLines).join("\n")}`
 }
