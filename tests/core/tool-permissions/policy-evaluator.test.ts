@@ -16,6 +16,7 @@ describe("权限策略求值", () => {
         builtinPermissionPolicies["all-right"],
       ),
     ).toEqual({
+      kind: "claims",
       disposition: "deny",
       decisiveKey: "violation",
       claims: [{ tag: "violation", reason: "尝试修改权限系统配置" }],
@@ -24,6 +25,7 @@ describe("权限策略求值", () => {
 
   test("unknown 使用策略表中的独立配置", () => {
     expect(evaluatePermissionPolicy({ kind: "unknown" }, builtinPermissionPolicies.edit)).toEqual({
+      kind: "unknown",
       disposition: "needHumanReview",
       decisiveKey: "unknown",
       claims: [],
@@ -32,6 +34,7 @@ describe("权限策略求值", () => {
 
   test("空 claims 是正面担保并直接放行", () => {
     expect(evaluatePermissionPolicy({ kind: "claims", claims: [] }, builtinPermissionPolicies.plan)).toEqual({
+      kind: "claims",
       disposition: "allow",
       claims: [],
     })
@@ -50,6 +53,7 @@ describe("权限策略求值", () => {
         builtinPermissionPolicies.plan,
       ),
     ).toEqual({
+      kind: "claims",
       disposition: "deny",
       decisiveKey: "edit-workspace",
       claims: [

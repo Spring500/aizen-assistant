@@ -11,7 +11,7 @@ test("权限记录隐藏完整详情、危险证据和第三方敏感字段", ()
       decision: {
         assessment: {
           details: { patch: "完整 diff", edits: [{ oldText: "旧源码", newText: "新源码" }] },
-          findings: [{ evidence: "curl -H Authorization: secret" }],
+          tags: [{ name: "网络请求", evidence: "curl -H Authorization: secret" }],
         },
       },
     },
@@ -19,7 +19,9 @@ test("权限记录隐藏完整详情、危险证据和第三方敏感字段", ()
   )
   expect(sanitized).toEqual({
     request: { arguments: { releaseCode: "[敏感内容已隐藏]", path: "source.ts" } },
-    decision: { assessment: { details: "[敏感内容已隐藏]", findings: [{ evidence: "[敏感内容已隐藏]" }] } },
+    decision: {
+      assessment: { details: "[敏感内容已隐藏]", tags: [{ name: "网络请求", evidence: "[敏感内容已隐藏]" }] },
+    },
   })
 })
 

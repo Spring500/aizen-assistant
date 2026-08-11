@@ -2,18 +2,6 @@ import type { JsonValue } from "../session-format.ts"
 import type { PermissionPresetId, PermissionReviewMode } from "./policy-types.ts"
 import type { SensitiveFieldMatcher } from "./sanitizer.ts"
 
-export const permissionModes = ["unrestricted", "hybrid", "hybridConfirmDenials", "aiOnly"] as const
-export type PermissionMode = (typeof permissionModes)[number]
-
-export type PermissionRisk = "low" | "medium" | "high" | "critical"
-
-export type PermissionFinding = {
-  severity: "medium" | "high" | "critical"
-  category: string
-  summary: string
-  evidence: string
-}
-
 export type PermissionCoverageGap = {
   code: string
   kind: "unsupported-environment" | "unsupported-syntax" | "parse-failure" | "rule-miss" | "coarse-rule"
@@ -24,9 +12,11 @@ export type PermissionCoverageGap = {
 export type ToolAssessment = {
   summary: string
   targets: string[]
-  risk: PermissionRisk
   reason: string
-  findings: PermissionFinding[]
+  /** 命中标签的可读名与证据列表，替代展示用的 findings；供审查界面与 AI 审核输入。 */
+  tags?: Array<{ tag: string; name: string; evidence?: string }>
+  /** 分类器无法判定（unknown）时的标志，供审核界面给出专门提示。 */
+  unclassified?: boolean
   coverageGaps?: PermissionCoverageGap[]
   details?: JsonValue
   match?: JsonValue
@@ -48,7 +38,6 @@ export type ToolPermissionRequest = {
   arguments: JsonValue
   declaredIntent: string
   cwd: string
-  mode: PermissionMode
   permissionPreset?: PermissionPresetId
   permissionReviewMode?: PermissionReviewMode
   environment?: JsonValue
@@ -158,7 +147,6 @@ export type PermissionGapRecord = {
   sessionId: string
   turnId: string
   toolCallId: string
-  permissionMode: PermissionMode
   toolName: string
   declaredIntent: string
   cwd: string

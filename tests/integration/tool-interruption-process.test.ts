@@ -48,12 +48,6 @@ const cases: Case[] = [
     isError: true,
   },
   {
-    checkpoint: "validated",
-    expected: `Operation interrupted: Permission review did not complete, so the tool did not run. Submit a new tool call only if it is still needed.\n\nPermission review:\n1. Validator: allow\n   Reason: 测试允许执行`,
-    sideEffect: false,
-    isError: true,
-  },
-  {
     checkpoint: "authorized",
     expected:
       "Operation interrupted: The tool was authorized but did not start. Submit a new tool call if it is still needed.",
@@ -62,7 +56,7 @@ const cases: Case[] = [
   },
   {
     checkpoint: "authorizedDenied",
-    expected: `Operation denied: Test policy rejected the tool call.\n\nPermission review:\n1. Validator: deny\n   Reason: Operation denied: Test policy rejected the tool call.\n\nThe tool did not run.`,
+    expected: `Operation denied: rule "Unsafe operation" is not allowed.\n\nThe tool did not run.`,
     sideEffect: false,
     isError: true,
   },

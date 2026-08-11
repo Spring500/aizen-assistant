@@ -29,7 +29,6 @@ describe("应用偏好存储", () => {
       newSession: {
         model: { providerId: "p", modelId: "m", thinkingLevel: "high" },
         viewId: "view",
-        permissionMode: "hybrid" as const,
         permissionPreset: "plan" as const,
         permissionReviewMode: "autoDeny" as const,
       },
@@ -49,7 +48,6 @@ describe("应用偏好存储", () => {
         version: 1,
         newSession: {
           viewId: "review",
-          permissionMode: "invalid",
           model: { providerId: "p", modelId: "m" },
         },
         agents: {
@@ -67,7 +65,6 @@ describe("应用偏好存储", () => {
     expect(await store.read()).toEqual({
       newSession: {
         viewId: "review",
-        permissionMode: "hybrid",
         permissionPreset: "edit",
         permissionReviewMode: "manual",
         model: { providerId: "p", modelId: "m" },
@@ -84,7 +81,6 @@ describe("应用偏好存储", () => {
     })
     expect(store.takeWarnings()).toEqual([
       "preferences.json.version 是未知字段，已忽略",
-      "newSession.permissionMode 无效，已使用默认值",
       "newSession.permissionPreset 缺失，已使用默认值",
       "newSession.permissionReviewMode 缺失，已使用默认值",
       "agents.permissionReview.model.modelId 必须是字符串，已使用默认值",
