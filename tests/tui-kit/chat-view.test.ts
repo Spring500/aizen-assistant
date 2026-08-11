@@ -393,6 +393,63 @@ test("工具组和工具详情分别由布尔开关控制", async () => {
   }
 })
 
+test("组展开但详情折叠时失败工具行仍显示失败标记", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    await view.update(
+      snapshot({
+        preferences: {
+          ...structuredClone(defaultAppPreferences),
+          fold: { thinkingExpanded: false, toolGroupExpanded: true, toolDetailsExpanded: false },
+        },
+        transcript: [
+          {
+            type: "message",
+            turnId: "tools",
+            message: {
+              role: "assistant",
+              parts: [
+                {
+                  kind: "tool_call",
+                  callId: "c1",
+                  name: "bash",
+                  arguments: { command: "bun test" },
+                  declaredIntent: "运行测试",
+                },
+              ],
+              source: { providerId: "test", modelId: "model", api: "a" },
+              stopReason: "tool_use",
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+          {
+            type: "message",
+            turnId: "tools",
+            message: {
+              role: "tool",
+              callId: "c1",
+              name: "bash",
+              parts: [{ kind: "text", text: "bun: command not found" }],
+              isError: true,
+            },
+          },
+          { type: "turn_end", turnId: "tools", outcome: "completed" },
+        ],
+      }),
+    )
+    await setup.renderOnce()
+    const summary = setup.externalOutput.takeText().replace(/\s+/g, "")
+    // 组展开、详情折叠：失败标记可见，但详细输出仍隐藏。
+    expect(summary).toContain("▼1个工具调用：bash")
+    expect(summary).toContain("[bash]运行测试")
+    expect(summary).toContain("×")
+    expect(summary).not.toContain("bun:commandnotfound")
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
 test("同一轮内工具随思考/对话段边界分批归档为独立组块", async () => {
   const setup = await setupRepl()
   try {
