@@ -1,5 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
@@ -630,11 +630,11 @@ describe("核心编排", () => {
 
     expect((await core.dispatch({ type: "rename_session", sessionId, name: "  需求讨论  " })).ok).toBe(true)
     expect(core.getSnapshot().currentSessionName).toBe("需求讨论")
-    expect((await store.list())[0]?.name).toBe("需求讨论")
+    expect((await store.list()).entries[0]?.name).toBe("需求讨论")
 
     expect((await core.dispatch({ type: "rename_session", sessionId, name: "   " })).ok).toBe(true)
     expect(core.getSnapshot().currentSessionName).toBe("")
-    expect((await store.list())[0]?.name).toBe("")
+    expect((await store.list()).entries[0]?.name).toBe("")
     await core.dispose()
   })
 
@@ -757,7 +757,7 @@ describe("核心编排", () => {
       error: { code: "COMMAND_FAILED", message: "无法创建运行时", severity: "error" },
     })
     expect(core.getSnapshot().currentSessionId).toBeUndefined()
-    expect(await store.list()).toEqual([])
+    expect((await store.list()).entries).toEqual([])
     await core.dispose()
   })
 
@@ -806,6 +806,70 @@ describe("核心编排", () => {
     expect(second.getSnapshot().currentSessionId).toBeUndefined()
     await first.dispose()
     await second.dispose()
+  })
+
+  test("不兼容会话可只读强制打开并恢复为新会话", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const file = join(root, "incompatible.jsonl")
+    const lines = [
+      {
+        kind: "session",
+        version: 1,
+        sessionId: "incompatible",
+        cwd: "E:\\project",
+        createdAt: "2026-07-23T10:00:00.000Z",
+      },
+      {
+        kind: "model_changed",
+        recordId: "model",
+        at: "2026-07-23T10:00:01.000Z",
+        model,
+      },
+      {
+        kind: "view_changed",
+        recordId: "view",
+        at: "2026-07-23T10:00:01.000Z",
+        viewId: null,
+      },
+      { kind: "permission_mode_changed", permissionMode: "unrestricted" },
+      {
+        kind: "turn_started",
+        recordId: "started",
+        turnId: "turn",
+        at: "2026-07-23T10:00:02.000Z",
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "保留内容" }] }],
+      },
+      {
+        kind: "turn_finished",
+        recordId: "finished",
+        turnId: "turn",
+        at: "2026-07-23T10:00:03.000Z",
+        outcome: "completed",
+      },
+    ]
+    const original = `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`
+    await writeFile(file, original)
+    const store = new SessionStore(root)
+    const core = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
+
+    expect(await core.dispatch({ type: "list_sessions" })).toEqual({ ok: true })
+    const incompatible = core.getSnapshot().sessions[0]
+    expect(incompatible?.issues[0]?.label).toBe("不兼容")
+    expect(await core.dispatch({ type: "force_open_session", entryId: "incompatible.jsonl" })).toEqual({ ok: true })
+    expect(core.getSnapshot()).toMatchObject({ currentSessionId: "incompatible", currentSessionReadOnly: true })
+    expect(core.getSnapshot().transcript.some((entry) => entry.type === "input")).toBe(true)
+    expect(await core.dispatch({ type: "send_prompt", text: "不能写" })).toMatchObject({
+      ok: false,
+      error: { code: "SESSION_READ_ONLY" },
+    })
+
+    expect(await core.dispatch({ type: "recover_session", entryId: "incompatible.jsonl" })).toEqual({ ok: true })
+    expect(core.getSnapshot().currentSessionId).not.toBe("incompatible")
+    expect(core.getSnapshot().currentSessionReadOnly).toBe(false)
+    expect(await readFile(file, "utf8")).toBe(original)
+    await core.dispose()
   })
 
   test("目录变化时记录提示并正常打开和重命名", async () => {
@@ -1103,7 +1167,7 @@ describe("核心编排", () => {
     expect(core.getSnapshot().currentSessionName).toBe("需求讨论_副本")
     expect(JSON.stringify((await store.read(sourceId)).records)).toContain("第二轮")
     expect(JSON.stringify((await store.read(forkId)).records)).not.toContain("第二轮")
-    expect((await store.list()).map((session) => session.sessionId)).toContainAllValues([sourceId, forkId])
+    expect((await store.list()).entries.map((session) => session.sessionId)).toContainAllValues([sourceId, forkId])
     await core.dispose()
 
     const reopened = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })

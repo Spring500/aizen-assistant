@@ -115,6 +115,10 @@ class RecoverableViewPromptCore extends RecoverablePromptCore {
         path: "E:\\fixture\\replacement-view",
         directory: "E:\\fixture\\replacement-view",
         valid: true,
+        entryId: "replacement",
+        state: "healthy",
+        issues: [],
+        capabilities: { canOpen: true, canWrite: true, canForceOpen: false, canRecover: false },
       },
     ]
   }

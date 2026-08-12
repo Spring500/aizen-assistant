@@ -75,7 +75,7 @@ test("默认模板预配置可用模型、子 Agent 和视图", async () => {
   } finally {
     await runtime.dispose()
   }
-  expect(await new ViewStore(join(data, "views.json")).list()).toContainEqual(
+  expect((await new ViewStore(join(data, "views.json")).list()).entries).toContainEqual(
     expect.objectContaining({ id: "mock-default", valid: true }),
   )
 })

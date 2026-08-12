@@ -1,5 +1,6 @@
 import { expect } from "bun:test"
 import { modelWithPreferredThinkingLevel, sessionSettingsItems } from "../../apps/tui/session-settings.ts"
+import type { ViewOption } from "../../packages/core/view-store.ts"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
@@ -13,13 +14,17 @@ const model = {
   available: true,
 }
 
-const views = [
+const views: ViewOption[] = [
   {
     id: "otter-builds-bridge",
     name: "代码审查",
     path: "views/otter-builds-bridge",
     directory: "E:/data/views/otter-builds-bridge",
     valid: true,
+    entryId: "otter-builds-bridge",
+    state: "healthy",
+    issues: [],
+    capabilities: { canOpen: true, canWrite: true, canForceOpen: false, canRecover: false },
   },
 ]
 

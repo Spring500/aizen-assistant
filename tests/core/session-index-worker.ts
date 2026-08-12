@@ -9,12 +9,16 @@ const warnings = await store.updateProject(project, {
     birthtimeMs: 1,
     mtimeMs: 1,
     summary: {
+      entryId: `${session}.jsonl`,
       sessionId: session,
       name: project,
       cwd: project,
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
       preview: session,
+      state: "healthy",
+      issues: [],
+      capabilities: { canOpen: true, canWrite: true, canForceOpen: false, canRecover: false },
     },
   },
 })

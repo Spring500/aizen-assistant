@@ -5,14 +5,21 @@ import { systemColors } from "../../packages/tui-kit/theme.ts"
 /** 将会话摘要转换为选择器行，并展示当前实例与其他实例的占用状态。 */
 export function sessionDisplay(
   session: SessionSummary,
-  currentSessionId?: string,
+  currentSessionIdentity?: string,
 ): Omit<RichSelectorItem<string>, "value"> {
-  const isCurrent = session.lockState === "current" || session.sessionId === currentSessionId
-  const isOccupied = session.lockState === "occupied"
-  const marker = isCurrent ? " [当前]" : isOccupied ? " [已打开]" : ""
+  const isCurrent =
+    session.lockState === "current" ||
+    session.entryId === currentSessionIdentity ||
+    session.sessionId === currentSessionIdentity
+  const issueLabels = [...new Set(session.issues.map((issue) => issue.label))]
+  const marker = [isCurrent ? "当前" : undefined, ...issueLabels]
+    .filter(Boolean)
+    .map((label) => ` [${label}]`)
+    .join("")
+  const hasAction = session.capabilities.canOpen || session.capabilities.canForceOpen || session.capabilities.canRecover
   const color = isCurrent
     ? systemColors.sessionCurrent
-    : isOccupied
+    : session.lockState === "occupied"
       ? systemColors.sessionOccupied
       : systemColors.header
   return {
@@ -20,16 +27,16 @@ export function sessionDisplay(
       ...(session.name ? [{ text: session.name, color, bold: true }, { text: "  " }] : []),
       {
         text: session.sessionId,
-        color: isCurrent || isOccupied ? color : systemColors.shortcuts,
+        color: isCurrent || session.lockState === "occupied" ? color : systemColors.shortcuts,
         italic: true,
-        dim: !isCurrent && !isOccupied,
+        dim: !isCurrent && session.lockState !== "occupied",
       },
       ...(marker ? [{ text: marker, color, bold: true }] : []),
     ],
     details: [
       { text: `${session.updatedAt} · ${session.preview}`, color: systemColors.shortcuts, dim: true },
-      ...(isOccupied ? [{ text: " · 当前实例不可打开", color: systemColors.sessionOccupied }] : []),
+      ...session.issues.map((issue) => ({ text: ` · ${issue.message}`, color: systemColors.sessionOccupied })),
     ],
-    ...(isOccupied ? { disabled: true, disabledReason: "会话正在被其他 Agent 使用" } : {}),
+    ...(!hasAction ? { disabled: true, disabledReason: session.issues[0]?.message ?? "当前条目不可操作" } : {}),
   }
 }

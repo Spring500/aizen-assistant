@@ -35,12 +35,12 @@ describe("会话存储", () => {
     await first.create({ sessionId: "s1", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" })
     await first.open("s1")
 
-    expect((await first.list())[0]?.lockState).toBe("current")
-    expect((await second.list())[0]?.lockState).toBe("occupied")
+    expect((await first.list()).entries[0]?.lockState).toBe("current")
+    expect((await second.list()).entries[0]?.lockState).toBe("occupied")
     await expect(second.open("s1")).rejects.toBeInstanceOf(SessionLockedError)
     await first.close()
     await expect(second.open("s1")).resolves.toBeDefined()
-    expect((await second.list())[0]?.lockState).toBe("current")
+    expect((await second.list()).entries[0]?.lockState).toBe("current")
     await second.close()
   })
 
@@ -114,7 +114,7 @@ describe("会话存储", () => {
       second.createGenerated({ cwd: "E:\\project", createdAt: "2026-07-23T10:00:01.000Z" }, []),
     ])
     expect(left.sessionId).not.toBe(right.sessionId)
-    expect((await first.list()).map((session) => session.sessionId).sort()).toEqual(
+    expect((await first.list()).entries.map((session) => session.sessionId).sort()).toEqual(
       [left.sessionId, right.sessionId].sort(),
     )
   })
@@ -145,7 +145,7 @@ describe("会话存储", () => {
     await rename(join(root, sessionFileName(createdAt, "s1")), join(root, "用户任意命名.jsonl"))
 
     const reopened = new SessionStore(root)
-    expect((await reopened.list())[0]?.sessionId).toBe("s1")
+    expect((await reopened.list()).entries[0]?.sessionId).toBe("s1")
     await reopened.append("s1", {
       kind: "session_renamed",
       recordId: "r1",
@@ -155,7 +155,7 @@ describe("会话存储", () => {
     expect((await reopened.read("s1")).records).toHaveLength(1)
   })
 
-  test("重复会话 ID 会明确报错", async () => {
+  test("重复会话 ID 作为两个隔离条目返回", async () => {
     const { root, store } = await makeStore()
     const createdAt = "2026-07-23T10:00:00.000Z"
     await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt })
@@ -163,7 +163,10 @@ describe("会话存储", () => {
       join(root, "复制文件.jsonl"),
       `${JSON.stringify({ kind: "session", version: 1, sessionId: "s1", cwd: "E:\\project", createdAt })}\n`,
     )
-    await expect(store.list()).rejects.toThrow("重复的会话 ID")
+    const listed = (await store.list()).entries
+    expect(listed).toHaveLength(2)
+    expect(listed.every((entry) => entry.issues.some((issue) => issue.code === "session.id_conflict"))).toBe(true)
+    expect(listed.every((entry) => entry.capabilities.canOpen === false)).toBe(true)
   })
 
   test("列表读取名称和第一条用户输入并按更新时间倒序", async () => {
@@ -191,10 +194,59 @@ describe("会话存储", () => {
       await Bun.sleep(10)
     }
 
-    const listed = await store.list()
+    const listed = (await store.list()).entries
     expect(listed.map((item) => item.sessionId)).toEqual(["s2", "s1"])
     expect(listed[0]).toMatchObject({ name: "第二个会话", preview: "第二项" })
     expect(listed[1]?.name).toBe("")
+  })
+
+  test("不兼容条目不会阻断健康会话或新建会话", async () => {
+    const { root, store } = await makeStore()
+    await store.create({ sessionId: "healthy", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" })
+    const incompatible = join(root, "incompatible.jsonl")
+    await writeFile(
+      incompatible,
+      [
+        JSON.stringify({
+          kind: "session",
+          version: 1,
+          sessionId: "incompatible",
+          cwd: "E:\\project",
+          createdAt: "2026-07-23T10:00:00.000Z",
+        }),
+        JSON.stringify({ kind: "permission_mode_changed", permissionMode: "unrestricted" }),
+        "",
+      ].join("\n"),
+    )
+
+    const listed = (await store.list()).entries
+    const bad = listed.find((entry) => entry.sessionId === "incompatible")
+    expect(bad?.issues.map((issue) => issue.code)).toContain("session.record_validation_failed")
+    expect(bad?.capabilities).toMatchObject({ canOpen: false, canForceOpen: true, canRecover: true })
+    expect(await store.open("healthy")).toBeDefined()
+    await store.close("healthy")
+    await expect(
+      store.create({ sessionId: "new-session", cwd: "E:\\project", createdAt: "2026-07-23T10:01:00.000Z" }),
+    ).resolves.toBeDefined()
+  })
+
+  test("语法损坏与不完整尾行返回不同状态", async () => {
+    const { root, store } = await makeStore()
+    const header = JSON.stringify({
+      kind: "session",
+      version: 1,
+      sessionId: "damaged",
+      cwd: "E:\\project",
+      createdAt: "2026-07-23T10:00:00.000Z",
+    })
+    await writeFile(join(root, "damaged.jsonl"), `${header}\nnot-json\n`)
+    await writeFile(join(root, "incomplete.jsonl"), `${header.replace("damaged", "incomplete")}\n{`)
+
+    const listed = (await store.list()).entries
+    expect(listed.find((entry) => entry.sessionId === "damaged")?.issues[0]?.code).toBe("session.invalid_json")
+    const incomplete = listed.find((entry) => entry.sessionId === "incomplete")
+    expect(incomplete?.issues[0]?.code).toBe("session.incomplete_tail")
+    expect(incomplete?.capabilities).toMatchObject({ canOpen: true, canWrite: true })
   })
 
   test("单文件摘要缓存可丢弃并随会话增删改自动修复", async () => {
@@ -209,19 +261,19 @@ describe("会话存储", () => {
       viewId: null,
       items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "初始预览" }] }],
     })
-    expect((await store.list())[0]?.preview).toBe("初始预览")
+    expect((await store.list()).entries[0]?.preview).toBe("初始预览")
     expect(JSON.parse(await readFile(indexPath, "utf8"))).toMatchObject({ version: 1 })
 
     await writeFile(indexPath, "损坏缓存")
-    expect((await store.list())[0]?.preview).toBe("初始预览")
+    expect((await store.list()).entries[0]?.preview).toBe("初始预览")
     await writeFile(indexPath, JSON.stringify({ version: 1, projects: { broken: { s1: {} } } }))
-    expect((await store.list())[0]?.preview).toBe("初始预览")
+    expect((await store.list()).entries[0]?.preview).toBe("初始预览")
 
     await store.append("s1", { kind: "session_renamed", recordId: "r2", at: new Date().toISOString(), name: "新名称" })
-    expect((await store.list())[0]?.name).toBe("新名称")
+    expect((await store.list()).entries[0]?.name).toBe("新名称")
 
     await rm(join(root, sessionFileName("2026-07-23T10:00:00.000Z", "s1")))
-    expect(await store.list()).toEqual([])
+    expect((await store.list()).entries).toEqual([])
     const repaired = JSON.parse(await readFile(indexPath, "utf8"))
     expect(Object.values(repaired.projects)[0]).toEqual({})
   })
@@ -234,6 +286,15 @@ describe("会话存储", () => {
     await appendFile(file, '{"kind":"turn_started"')
     const tailDamaged = await store.read("s1")
     expect(tailDamaged.warnings).toHaveLength(1)
+
+    await store.append("s1", {
+      kind: "session_renamed",
+      recordId: "after-repair",
+      at: "2026-07-23T10:01:00.000Z",
+      name: "已修复",
+    })
+    expect((await store.read("s1")).records.map((record) => record.recordId)).toEqual(["after-repair"])
+    expect(await readFile(file, "utf8")).not.toContain('{"kind":"turn_started"')
 
     const originalHeader = (await readFile(file, "utf8")).split("\n")[0]
     await writeFile(file, `${originalHeader}\nnot-json\n{"kind":"turn_finished"}`)

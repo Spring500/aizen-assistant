@@ -40,16 +40,16 @@ describe("视图配置", () => {
       projectSources: "none",
       loadUserSkills: true,
     })
-    expect((await store.list())[0]).toMatchObject({ id: "dev", valid: true })
+    expect((await store.list()).entries[0]).toMatchObject({ id: "dev", valid: true })
     await store.remove("dev")
-    expect(await store.list()).toEqual([])
+    expect((await store.list()).entries).toEqual([])
   })
 
   test("更新视图元数据并区分移除注册与删除目录", async () => {
     const { root, store } = await temporaryStore()
     const created = await store.create({ id: "dev", name: "开发" })
     await store.update("dev", { name: "开发视图", path: "views/dev" })
-    expect((await store.list())[0]).toMatchObject({ id: "dev", name: "开发视图", path: "views/dev" })
+    expect((await store.list()).entries[0]).toMatchObject({ id: "dev", name: "开发视图", path: "views/dev" })
     expect(await store.ensureFile("dev", "SYSTEM.md")).toBe(join(created.directory, "SYSTEM.md"))
     expect(await readFile(join(created.directory, "SYSTEM.md"), "utf8")).toBe("")
     await store.remove("dev")
@@ -73,7 +73,7 @@ describe("视图配置", () => {
       join(root, "views.json"),
       JSON.stringify({ version: 1, views: [{ id: "gone", name: "失效", path: "missing" }] }),
     )
-    expect((await store.list())[0]).toMatchObject({ id: "gone", valid: false })
+    expect((await store.list()).entries[0]).toMatchObject({ id: "gone", valid: false })
     expect(store.resolve("gone")).rejects.toThrow("路径失效")
     await writeFile(join(root, "views.json"), "{")
     expect(store.list()).rejects.toThrow("配置错误")

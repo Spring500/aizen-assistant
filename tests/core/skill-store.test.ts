@@ -44,7 +44,7 @@ describe("skill 登记表", () => {
     const { store } = await temporaryStore()
     const discovered = await store.discoverSource("https://gitlab.com/team/skills.git", "main")
     expect(discovered).toEqual([{ name: "http", description: "HTTP 技能", relPath: "skills/http" }])
-    expect(await store.list()).toEqual([])
+    expect((await store.list()).entries).toEqual([])
   })
 
   test("安装、同名冲突、替换与卸载", async () => {
@@ -66,11 +66,11 @@ describe("skill 登记表", () => {
     expect("conflict" in conflict).toBe(true)
 
     await store.replaceSkill("http", { sourceUrl: "https://example.com/other.git", relPath: "http" })
-    const replaced = await store.list()
+    const replaced = (await store.list()).entries
     expect(replaced[0]).toMatchObject({ name: "http", sourceUrl: "https://example.com/other.git", relPath: "http" })
 
     await store.removeSkill("http")
-    expect(await store.list()).toEqual([])
+    expect((await store.list()).entries).toEqual([])
     const persisted = JSON.parse(await readFile(join(root, "skills.json"), "utf8"))
     expect(persisted.skills).toEqual([])
   })

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body>
+<script type="text/x-markdown">
+# 持久化资源错误隔离设计
+
+## 目标
+
+任一持久化条目损坏、不兼容、冲突或暂时不可读时，其他健康条目与所属子系统仍可使用。条目错误不得阻止 Agent 启动、新建会话或打开其他会话。
+
+!!! Note 边界
+    当前不兼容会话不会迁移或解释旧权限语义。`--collect-permission-gaps` 的删除由独立专项处理。
+
+## 分层
+
+:::mermaid
+flowchart LR
+  Disk[业务文件] --> Store[Core Store<br/>解析、校验、逐条隔离]
+  Store --> Catalog[CatalogResult<br/>状态、Issue、能力]
+  Catalog --> Core[Core<br/>执行业务能力]
+  Core --> TUI[TUI<br/>标识与操作入口]
+:::
+
+- Store 负责业务格式校验，并通过本业务的 Issue 定义表创建错误。
+- Core 只根据 `ResourceCapabilities` 执行操作，不解析 Issue code 字符串。
+- TUI 不直接读取业务文件，只展示 Core 返回的标签和能力。
+
+## 统一协议
+
+| 类型 | 作用 |
+|---|---|
+| `EntryState` | 表示条目的总体状态：`healthy`、`degraded`、`unavailable` |
+| `ResourceIssue` | 提供稳定 code、类别、中文标签与诊断消息 |
+| `ResourceCapabilities` | 明确是否可正常打开、写入、强制只读打开或恢复 |
+| `CatalogResult` | 同时返回全部条目和目录级问题；单条错误不能让列表 reject |
+
+Issue 定义必须使用 `defineIssues()`。定义表同时生成 TypeScript code 联合类型，并提供 `has()` 供 RPC、插件或磁盘反序列化数据做运行时检查。
+
+## 会话行为
+
+| 标识 | 典型原因 | 正常打开 | 只读强制打开 | 恢复为新会话 |
+|---|---|---:|---:|---:|
+| `[不兼容]` | 记录结构不属于当前格式 | 否 | 是 | 是 |
+| `[内容损坏]` | 中间行不是合法 JSON | 否 | 是 | 是 |
+| `[未完整写入]` | 进程中断留下不完整尾行 | 是 | 否 | 否 |
+| `[ID 冲突]` | 多个文件声明同一会话 ID | 否 | 是 | 是 |
+| `[读取失败]` | 文件系统拒绝读取 | 否 | 否 | 否 |
+| `[使用中]` | 其他 Agent 持有写租约 | 否 | 否 | 否 |
+
+强制打开只投影仍能按当前格式严格识别的记录，不获取写租约，也不修改原文件。恢复操作使用这些记录创建新的当前格式会话，原文件保持不变。
+
+不完整尾行在下一次追加前于写租约内截断；完整但不兼容的尾行不会被自动删除。
+
+## 防绕过门禁
+
+`storage-registry.ts` 登记所有持久化资源、实现文件和允许的生产构造位置。`filesystemAccessPolicy` 登记所有直接文件系统入口及用途。
+
+`bun run check:storage-isolation` 会拒绝：
+
+- 未登记的 `Store` 或 `Recorder`；
+- 在 `DataStores` 组合根之外直接构造已登记 Store；
+- 未登记的 `node:fs` 访问。
+
+新增持久化系统时必须先登记资源，通过统一组合根创建，并为目录型 Store 加入故障注入契约测试。
+
+## 验证
+
+```powershell
+bun run check:storage-isolation
+bun run typecheck
+bun test tests/core/storage-isolation-contract.test.ts
+bun run verify
+```
+
+故障注入契约当前覆盖会话文件、视图目录和 Skill 来源目录，统一断言坏条目可见且健康条目仍可打开。
+</script>
+<script src="http://aizen.sun.kuro.com/enhanced-doc.js"></script>
+</body>
+</html>

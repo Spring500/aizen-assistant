@@ -19,12 +19,16 @@ function entry(sessionId: string) {
     birthtimeMs: 2,
     mtimeMs: 3,
     summary: {
+      entryId: `${sessionId}.jsonl`,
       sessionId,
       name: "",
       cwd: "E:\\project",
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
       preview: sessionId,
+      state: "healthy" as const,
+      issues: [],
+      capabilities: { canOpen: true, canWrite: true, canForceOpen: false, canRecover: false },
     },
   }
 }

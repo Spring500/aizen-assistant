@@ -32,7 +32,7 @@ import {
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent"
 import { Type } from "typebox"
-import { ModelConfigStore, type ModelThinkingConfig } from "../core/model-config-store.ts"
+import type { ModelConfigStore, ModelThinkingConfig } from "../core/model-config-store.ts"
 import type {
   AuthProviderOption,
   ModelOption,
@@ -51,7 +51,7 @@ import type {
   ResolvedViewResources,
 } from "../core/pi-port.ts"
 import { PiModelRuntimeError } from "../core/pi-port.ts"
-import { PiProviderStore } from "../core/pi-provider-store.ts"
+import type { PiProviderStore } from "../core/pi-provider-store.ts"
 import type { JsonValue, ModelReference, SessionRecord } from "../core/session-format.ts"
 import { projectVisibleSessionRecords, workingDirectoryChangeText } from "../core/session-projection.ts"
 import type { ToolAuthorization, ToolPermissionRequest } from "../core/tool-permissions/types.ts"
@@ -59,7 +59,7 @@ import type { AizenToolRegistration } from "../core/tool-registry.ts"
 import { coreMessageToPi, piMessageToCore, turnInputToPi } from "./message-mapper.ts"
 import { permissionFailureMessage } from "./permission-failure.ts"
 import { PiPermissionReviewer } from "./permission-reviewer.ts"
-import { PiCredentialStore, PiModelsCacheStore } from "./pi-stores.ts"
+import { createPiDataStores } from "./data-stores.ts"
 import { PiProviderRuntime } from "./provider-runtime.ts"
 import { generateSessionTitle } from "./session-title-generator.ts"
 import { normalizeToolFailure } from "./tool-failure.ts"
@@ -425,7 +425,7 @@ function registeredTools(
 
 export class PiSessionRuntime implements PiPort {
   readonly #modelRuntime: ModelRuntime
-  readonly #customProvidersPath: string | null
+  readonly #modelConfigStore: ModelConfigStore | undefined
   readonly #piProviderRuntime: PiProviderRuntime | undefined
   readonly #piProviderStore: PiProviderStore | undefined
   readonly #listeners = new Set<(event: PiPortEvent) => void>()
@@ -458,36 +458,37 @@ export class PiSessionRuntime implements PiPort {
 
   private constructor(
     modelRuntime: ModelRuntime,
-    customProvidersPath: string | null,
+    modelConfigStore?: ModelConfigStore,
     piProviderRuntime?: PiProviderRuntime,
     piProviderStore?: PiProviderStore,
   ) {
     this.#modelRuntime = modelRuntime
-    this.#customProvidersPath = customProvidersPath
+    this.#modelConfigStore = modelConfigStore
     this.#piProviderRuntime = piProviderRuntime
     this.#piProviderStore = piProviderStore
   }
 
   static async create(options: PiSessionRuntimeOptions): Promise<PiSessionRuntime> {
     let runtime!: PiSessionRuntime
+    const stores = createPiDataStores(options)
     const modelRuntime = await ModelRuntime.create({
-      credentials: new PiCredentialStore(options.authPath),
+      credentials: stores.credentials,
       modelsPath: options.customProvidersPath,
-      ...(options.piModelsCachePath ? { modelsStore: new PiModelsCacheStore(options.piModelsCachePath) } : {}),
+      ...(stores.modelsCache ? { modelsStore: stores.modelsCache } : {}),
       allowModelNetwork: false,
     })
-    const providerStore = options.piProvidersPath ? new PiProviderStore(options.piProvidersPath) : undefined
+    const providerStore = stores.providers
     const providerRuntime = providerStore
       ? new PiProviderRuntime(
           builtinModels({
-            credentials: new PiCredentialStore(options.authPath),
-            ...(options.piModelsCachePath ? { modelsStore: new PiModelsCacheStore(options.piModelsCachePath) } : {}),
+            credentials: stores.credentials,
+            ...(stores.modelsCache ? { modelsStore: stores.modelsCache } : {}),
           }),
           providerStore,
           (event) => runtime.#emit(event),
         )
       : undefined
-    runtime = new PiSessionRuntime(modelRuntime, options.customProvidersPath, providerRuntime, providerStore)
+    runtime = new PiSessionRuntime(modelRuntime, stores.modelConfig, providerRuntime, providerStore)
     await runtime.#reloadModelConfigs()
     return runtime
   }
@@ -1231,9 +1232,9 @@ export class PiSessionRuntime implements PiPort {
     this.#thinkingConfigs.clear()
     this.#modelBaseUrls.clear()
     this.#modelConfigError = undefined
-    if (!this.#customProvidersPath) return
+    if (!this.#modelConfigStore) return
     try {
-      const snapshot = await new ModelConfigStore(this.#customProvidersPath).read()
+      const snapshot = await this.#modelConfigStore.read()
       for (const provider of snapshot.providers) {
         for (const model of provider.models) {
           const modelKey = `${provider.id}\0${model.id}`
