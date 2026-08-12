@@ -10,16 +10,34 @@
 set -euo pipefail
 
 REPOSITORY="Spring500/aizen-assistant"
-# 发布 API 与下载基地址；可用 AIZEN_RELEASE_API / AIZEN_RELEASE_DOWNLOAD 覆盖（本地 mock 测试或自建镜像）。
-RELEASE_API="${AIZEN_RELEASE_API:-https://api.github.com/repos/${REPOSITORY}}"
-RELEASE_DOWNLOAD="${AIZEN_RELEASE_DOWNLOAD:-https://github.com/${REPOSITORY}/releases/download}"
+# 发布 API 与下载基地址；可通过 --api-url / --download-url 覆盖（自建镜像或测试场景）。
+RELEASE_API="https://api.github.com/repos/${REPOSITORY}"
+RELEASE_DOWNLOAD="https://github.com/${REPOSITORY}/releases/download"
 # 首版已发布平台（与 release 矩阵保持一致；win/linux arm64 待验证后增补）。
 SUPPORTED_PLATFORMS="linux-x64 darwin-x64 darwin-arm64 windows-x64"
 HOME_DIR="${HOME:-}"
 CONFIG_DIR="$HOME_DIR/.aizen"
 INSTALL_DIR="$CONFIG_DIR/bin"
 
-REQUESTED_VERSION="${1:-}"
+REQUESTED_VERSION=""
+SKIP_PATH=0
+
+# 解析参数：--version / --install-dir / --api-url / --download-url / --skip-path；兼容位置参数形式传入版本号。
+parse_arguments() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --version) REQUESTED_VERSION="${2:-}"; shift 2 ;;
+      --install-dir) INSTALL_DIR="${2:-}"; CONFIG_DIR="$(dirname "$INSTALL_DIR")"; shift 2 ;;
+      --api-url) RELEASE_API="${2:-}"; shift 2 ;;
+      --download-url) RELEASE_DOWNLOAD="${2:-}"; shift 2 ;;
+      --skip-path) SKIP_PATH=1; shift ;;
+      -h | --help) echo "用法：install.sh [版本号] [--version <v>] [--install-dir <目录>] [--api-url <url>] [--download-url <url>] [--skip-path]"; exit 0 ;;
+      *) if [ -z "$REQUESTED_VERSION" ]; then REQUESTED_VERSION="$1"; shift; else echo "未知参数：$1" >&2; exit 1; fi ;;
+    esac
+  done
+}
+
+parse_arguments "$@"
 
 # 环境前置检查：需要 curl 与 unzip（macOS 自带，Linux 需安装）。
 for tool in curl unzip; do
@@ -173,7 +191,9 @@ main() {
   echo "安装 AizenAssistant v${version}（${platform}）"
   installed_version="$(download_and_install "$version" "$platform")"
   write_install_record "$installed_version" "$platform"
-  configure_path
+  if [ "$SKIP_PATH" -ne 1 ]; then
+    configure_path
+  fi
 
   cat <<EOF
 

@@ -1,4 +1,3 @@
-import { homedir } from "node:os"
 import { readFile, writeFile, mkdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 
@@ -12,9 +11,13 @@ export type InstallRecord = {
   platform: string
 }
 
-/** 受管安装的 install.json 固定路径（~/.aizen/install.json）。便携拷贝场景下该文件不存在。 */
+/**
+ * install.json 位置：可执行文件目录的父目录（受管安装为 ~/.aizen/bin → ~/.aizen/install.json）。
+ * 跟随安装目录而非固定用户主目录，使 --install-dir 自定义安装目录与便携拷贝场景都自然适配：
+ * 便携拷贝（exe 旁无 install.json）视为未受管。
+ */
 export function installRecordPath(): string {
-  return join(homedir(), ".aizen", "install.json")
+  return join(dirname(dirname(process.execPath)), "install.json")
 }
 
 /** 读取 install.json；文件不存在或内容无效时返回 undefined（视为未受管）。 */

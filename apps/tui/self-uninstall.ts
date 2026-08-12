@@ -7,13 +7,22 @@
 
 import { homedir } from "node:os"
 import { readFile, writeFile, rm, readdir } from "node:fs/promises"
-import { basename, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import { installRecordPath, readInstallRecord } from "../../packages/core/install-record.ts"
 import { quotedPowerShell, scheduleDeferredPowerShell } from "./deferred-powershell.ts"
 
-/** 用户级 PATH 中指向安装目录的条目（Windows 安装脚本写入的字面形式）。 */
+/**
+ * Windows 用户级 PATH 中指向安装目录的条目（install.ps1 写入的字面形式，两侧必须保持一致）。
+ * 卸载时同时移除该字面条目与 $HOME 展开的绝对形式（防御用户手动改动过 PATH）。
+ */
 const WINDOWS_PATH_ENTRY = "%USERPROFILE%\\.aizen\\bin"
+
+/**
+ * 安装脚本写入 shell 配置的精确 PATH 行（与 install.sh 的 append_path_line 保持一致）。
+ * 卸载仅删除这些精确行，避免误删用户自行配置的含 .aizen/bin 子串的其他条目。
+ */
+const INSTALLED_PATH_LINES = ['export PATH="$HOME/.aizen/bin:$PATH"', "fish_add_path $HOME/.aizen/bin"]
 
 /** 交互确认卸载；非交互终端必须显式 --yes。 */
 async function confirmUninstall(skipConfirmation: boolean): Promise<boolean> {
@@ -43,7 +52,7 @@ async function removeShellPathEntries(home: string): Promise<void> {
       continue
     }
     const lines = text.split(/\r?\n/)
-    const kept = lines.filter((line) => !line.includes(".aizen/bin"))
+    const kept = lines.filter((line) => !INSTALLED_PATH_LINES.some((installed) => line.includes(installed)))
     if (kept.length === lines.length) continue
     await writeFile(file, `${kept.join("\n")}\n`)
     console.log(`已从 ${file} 移除 PATH 条目`)
@@ -66,20 +75,22 @@ async function removeWindowsPathEntry(): Promise<void> {
   else console.log("已从用户 PATH 移除安装目录")
 }
 
-/** 删除数据与安装记录；Windows 上自身 exe 延迟删除。 */
-async function removeAizenDirectory(home: string, executablePath: string): Promise<void> {
-  const aizenDir = join(home, ".aizen")
-  const binDir = join(aizenDir, "bin")
-  await rm(join(aizenDir, "data"), { recursive: true, force: true })
+/** 删除数据与安装记录；目录由可执行文件位置推导（exe 位于 <安装根>/bin/），支持自定义安装目录。 */
+async function removeAizenDirectory(): Promise<void> {
+  const binDir = dirname(process.execPath)
+  const aizenDir = dirname(binDir)
+  await rm(join(binDir, "data"), { recursive: true, force: true })
   await rm(installRecordPath(), { force: true })
 
   if (process.platform === "win32") {
-    // 删除 bin 下非自身文件（自身 exe 被系统锁定）
+    // 删除 bin 下除安装的可执行文件之外的内容（安装的 exe 正被系统锁定，交给延迟脚本删除）。
+    // 用固定文件名而非 process.execPath 判断，避免源码运行（bun 启动）时语义失配。
+    const managedExecutableName = "aizen-assistant.exe"
     try {
       const entries = await readdir(binDir)
       for (const entry of entries) {
         const full = join(binDir, entry)
-        if (basename(full) !== basename(executablePath)) await rm(full, { recursive: true, force: true })
+        if (basename(full) !== managedExecutableName) await rm(full, { recursive: true, force: true })
       }
     } catch {
       // bin 目录不存在时跳过
@@ -112,7 +123,7 @@ export async function runUninstall(skipConfirmation: boolean): Promise<number> {
   console.log(`卸载来源：${record.channel} ${record.version}（${record.platform}）`)
   if (process.platform === "win32") await removeWindowsPathEntry()
   else await removeShellPathEntries(home)
-  await removeAizenDirectory(home, process.execPath)
+  await removeAizenDirectory()
   console.log("卸载完成：~/.aizen 已删除，PATH 已回滚")
   return 0
 }

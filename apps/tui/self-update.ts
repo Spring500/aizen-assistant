@@ -17,11 +17,8 @@ import {
 } from "../../packages/core/install-record.ts"
 import { quotedPowerShell, scheduleDeferredPowerShell } from "./deferred-powershell.ts"
 
-/**
- * GitHub API 基地址，用于查询最新 release。
- * 可用 AIZEN_RELEASE_API 环境变量覆盖（本地 mock 测试或自建镜像场景）；资产 URL 取自返回 JSON，无需单独覆盖。
- */
-const releaseApiBase = process.env.AIZEN_RELEASE_API ?? "https://api.github.com/repos/Spring500/aizen-assistant"
+/** 默认 GitHub API 基地址，用于查询最新 release；资产 URL 取自返回 JSON，无需额外配置。 */
+const DEFAULT_RELEASE_API = "https://api.github.com/repos/Spring500/aizen-assistant"
 
 /** 比较语义化版本 x.y.z：a 大于 b 返回正数，相等返回 0，否则负数。 */
 function compareVersions(a: string, b: string): number {
@@ -47,9 +44,9 @@ type LatestRelease = {
   assets: { name: string; url: string }[]
 }
 
-/** 查询仓库最新 release。 */
-async function fetchLatestRelease(): Promise<LatestRelease> {
-  const response = await fetch(`${releaseApiBase}/releases/latest`, {
+/** 查询仓库最新 release；releaseApi 为 API 基地址（测试或自建镜像场景传入）。 */
+async function fetchLatestRelease(releaseApi: string): Promise<LatestRelease> {
+  const response = await fetch(`${releaseApi}/releases/latest`, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": "aizen-assistant" },
   })
   if (!response.ok) throw new Error(`查询最新版本失败：HTTP ${response.status}`)
@@ -137,8 +134,8 @@ async function replaceExecutable(
   }
 }
 
-/** 执行更新；返回进程退出码。 */
-export async function runUpdate(): Promise<number> {
+/** 执行更新；releaseApi 可选（默认 GitHub，测试或自建镜像场景传入）；返回进程退出码。 */
+export async function runUpdate(releaseApi?: string): Promise<number> {
   if (process.env.AIZEN_MANAGED_BY === "npm") {
     console.log("npm 通道安装：运行 `npm update -g aizen-assistant` 即可更新，launcher 会自动更新二进制。")
     return 0
@@ -155,7 +152,7 @@ export async function runUpdate(): Promise<number> {
 
   let release: LatestRelease
   try {
-    release = await fetchLatestRelease()
+    release = await fetchLatestRelease(releaseApi ?? DEFAULT_RELEASE_API)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     return 1

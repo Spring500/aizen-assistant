@@ -16,7 +16,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
   }
 
   // 分发子命令：update / uninstall 不要求真实终端
-  if (parsed.command === "update") return await runUpdate()
+  if (parsed.command === "update") return await runUpdate(parsed.releaseApi)
   if (parsed.command === "uninstall") return await runUninstall(parsed.yes)
 
   if (!process.stdin.isTTY || !process.stdout.isTTY) {

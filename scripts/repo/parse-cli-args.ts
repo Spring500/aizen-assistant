@@ -12,14 +12,14 @@ export function parseCliArgs(args: string[], allowedFlags: string[]): Record<str
     if (allowedFlags.includes(argument)) {
       const value = args[++index]
       if (!value || value.startsWith("--")) throw new Error(`${argument} 必须提供值`)
-      values[argument.slice(2)] = value
+      values[argument.slice(2)] = value.trim()
       continue
     }
     if (argument.startsWith("--")) {
       const [key, value] = argument.slice(2).split("=")
       if (!key || !value) throw new Error(`${argument} 必须提供值`)
       if (!allowedFlags.includes(`--${key}`)) throw new Error(`未知参数：${argument}`)
-      values[key] = value
+      values[key] = value.trim()
       continue
     }
     throw new Error(`未知参数：${argument ?? ""}`)

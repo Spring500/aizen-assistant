@@ -11,16 +11,31 @@
 $ErrorActionPreference = "Stop"
 
 $Repository = "Spring500/aizen-assistant"
-# 发布 API 与下载基地址；可用 AIZEN_RELEASE_API / AIZEN_RELEASE_DOWNLOAD 覆盖（本地 mock 测试或自建镜像）。
-$ReleaseApi = if ($env:AIZEN_RELEASE_API) { $env:AIZEN_RELEASE_API } else { "https://api.github.com/repos/$Repository" }
-$ReleaseDownload = if ($env:AIZEN_RELEASE_DOWNLOAD) { $env:AIZEN_RELEASE_DOWNLOAD } else { "https://github.com/$Repository/releases/download" }
+# 发布 API 与下载基地址；可通过 --api-url / --download-url 覆盖（自建镜像或测试场景）。
+$ReleaseApi = "https://api.github.com/repos/$Repository"
+$ReleaseDownload = "https://github.com/$Repository/releases/download"
 # 首版已发布平台（与 release 矩阵保持一致；win/linux arm64 待验证后增补）。
 $SupportedPlatforms = @("windows-x64", "linux-x64", "darwin-x64", "darwin-arm64")
 $ConfigDir = Join-Path $env:USERPROFILE ".aizen"
 $InstallDir = Join-Path $ConfigDir "bin"
 $PathEntry = '%USERPROFILE%\.aizen\bin'
 
-$RequestedVersion = $args[0]
+$RequestedVersion = ""
+$SkipPath = $false
+$CustomInstallDir = $false
+
+# 解析参数：--version / --install-dir / --api-url / --download-url / --skip-path；兼容位置参数形式传入版本号。
+for ($i = 0; $i -lt $args.Count; $i++) {
+  switch ($args[$i]) {
+    "--version" { $RequestedVersion = $args[++$i]; break }
+    "--install-dir" { $InstallDir = $args[++$i]; $ConfigDir = Split-Path $InstallDir -Parent; $CustomInstallDir = $true; break }
+    "--api-url" { $ReleaseApi = $args[++$i]; break }
+    "--download-url" { $ReleaseDownload = $args[++$i]; break }
+    "--skip-path" { $SkipPath = $true; break }
+    "-h" { Write-Host "用法：install.ps1 [版本号] [--version <v>] [--install-dir <目录>] [--api-url <url>] [--download-url <url>] [--skip-path]"; exit 0 }
+    default { if ($RequestedVersion -eq "") { $RequestedVersion = $args[$i] } else { throw "未知参数：$($args[$i])" } }
+  }
+}
 
 # 检测真实处理器架构（兼容 32 位 PowerShell 在 64 位系统上运行的情况）。
 function Get-Platform {
@@ -107,7 +122,9 @@ function Add-UserPath {
     Write-Host "PATH 已配置"
     return
   }
-  $newPath = ($parts + $PathEntry) -join ";"
+  # 默认安装写 %USERPROFILE% 字面（用户目录迁移后 PATH 仍有效）；自定义安装目录写绝对路径。
+  $newEntry = if ($CustomInstallDir) { $InstallDir } else { $PathEntry }
+  $newPath = ($parts + $newEntry) -join ";"
   [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
   Write-Host "已写入用户 PATH"
 }
@@ -122,7 +139,7 @@ function Main {
   Write-Host "安装 AizenAssistant v$version（$platform）"
   $installedVersion = Install-Release -Version $version -Platform $platform
   Write-InstallRecord -Version $installedVersion -Platform $platform
-  Add-UserPath
+  if (-not $SkipPath) { Add-UserPath }
 
   Write-Host ""
   Write-Host "安装完成：AizenAssistant v$installedVersion（$platform）"

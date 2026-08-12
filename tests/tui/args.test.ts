@@ -24,6 +24,10 @@ describe("TUI 参数", () => {
 
   test("解析 update 与 uninstall 子命令", () => {
     expect(parseArguments(["update"])).toEqual({ command: "update" })
+    expect(parseArguments(["update", "--release-api", "http://localhost:18081"])).toEqual({
+      command: "update",
+      releaseApi: "http://localhost:18081",
+    })
     expect(parseArguments(["uninstall"])).toEqual({ command: "uninstall", yes: false })
     expect(parseArguments(["uninstall", "--yes"])).toEqual({ command: "uninstall", yes: true })
   })
@@ -33,7 +37,7 @@ describe("TUI 参数", () => {
     expect(() => parseArguments(["--data-dir"])).toThrow("必须提供目录")
     expect(() => parseArguments(["--data-dir", "one", "--data-dir", "two"])).toThrow("不能重复指定")
     expect(() => parseArguments(["--collect-permission-gaps", "--collect-permission-gaps"])).toThrow("不能重复指定")
-    expect(() => parseArguments(["update", "--force"])).toThrow("update 不接受额外参数")
+    expect(() => parseArguments(["update", "--force"])).toThrow("update 只接受 --release-api 参数")
     expect(() => parseArguments(["uninstall", "--bad"])).toThrow("uninstall 只接受 --yes 参数")
   })
 

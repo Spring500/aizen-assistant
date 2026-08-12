@@ -4,11 +4,10 @@
  * 用法：bun run scripts/repo/e2e-distribution-test.ts
  *
  * 流程：构建产物 → 打包 v0.1.0 / v0.2.0 → 本地 mock release 服务器 →
- * 隔离 USERPROFILE 后执行 install.ps1（查 latest=v0.1.0）→ 断言安装 →
- * 切到 latest=v0.2.0 后执行 update → 断言升级 → 执行 uninstall --yes → 断言卸载与 PATH 回滚。
+ * 以 --install-dir / --skip-path 安装到临时目录（查 latest=v0.1.0）→ 断言安装 →
+ * 切到 latest=v0.2.0 后执行 update --release-api → 断言升级 → 执行 uninstall --yes → 断言卸载。
  *
- * 注意：Windows 用户级 PATH（注册表）无法隔离，install 会真实写入
- * %USERPROFILE%\.aizen\bin、uninstall 会回滚；脚本结束时无论成败都会幂等清理该条目。
+ * 全部通过显式参数指定安装目录与发布地址，不写真实用户目录、不碰注册表、不依赖环境变量。
  */
 
 import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
@@ -77,10 +76,9 @@ async function startMockServer(assetsDir: string, version: string, port: number)
 }
 
 /** 运行安装的 exe 子命令；返回退出码。 */
-async function runInstalledExe(home: string, command: string[], env: Record<string, string>): Promise<number> {
+async function runInstalledExe(home: string, command: string[]): Promise<number> {
   const proc = Bun.spawn({
     cmd: [join(home, ".aizen", "bin", "aizen-assistant.exe"), ...command],
-    env: { ...process.env, USERPROFILE: home, ...env },
     stdout: "pipe",
     stderr: "pipe",
   })
@@ -94,19 +92,6 @@ async function runInstalledExe(home: string, command: string[], env: Record<stri
   }
   console.log(stdout.trim())
   return exitCode
-}
-
-/** 幂等移除用户 PATH 中的安装目录条目（测试失败时也能清理现场）。 */
-async function cleanupUserPath(): Promise<void> {
-  const script = [
-    "$entry2 = Join-Path $HOME '.aizen\\bin'",
-    "$current = [Environment]::GetEnvironmentVariable('Path','User')",
-    "if ($null -eq $current) { exit 0 }",
-    "$parts = $current -split ';' | Where-Object { $_.Trim() -ne '' -and $_.Trim() -ne '%USERPROFILE%\\.aizen\\bin' -and $_.Trim() -ne $entry2 }",
-    "$new = $parts -join ';'",
-    "[Environment]::SetEnvironmentVariable('Path',$new,'User')",
-  ].join("; ")
-  await Bun.spawn({ cmd: ["powershell", "-NoProfile", "-Command", script] }).exited
 }
 
 async function main(): Promise<void> {
@@ -136,17 +121,25 @@ async function main(): Promise<void> {
       await writeFile(join(assetsDir, "SHA256SUMS"), `${await sha256File(zipPath)}  ${zipName}\n`)
     }
 
-    // 2. 起 mock 服务器（v0.1.0）并执行安装
+    // 2. 起 mock 服务器（v0.1.0）并执行安装（--install-dir 指定临时安装目录，--skip-path 不写真实注册表）
     console.log("[2/6] 启动 mock release（v0.1.0）并执行 install.ps1")
     servers.push(await startMockServer(assetsV1, "0.1.0", MOCK_PORT_V1))
     const installProc = Bun.spawn({
-      cmd: ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "install.ps1"],
-      env: {
-        ...process.env,
-        USERPROFILE: tempHome,
-        AIZEN_RELEASE_API: `http://localhost:${MOCK_PORT_V1}`,
-        AIZEN_RELEASE_DOWNLOAD: `http://localhost:${MOCK_PORT_V1}/download`,
-      },
+      cmd: [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        "install.ps1",
+        "--install-dir",
+        join(tempHome, ".aizen", "bin"),
+        "--skip-path",
+        "--api-url",
+        `http://localhost:${MOCK_PORT_V1}`,
+        "--download-url",
+        `http://localhost:${MOCK_PORT_V1}/download`,
+      ],
       stdout: "pipe",
       stderr: "pipe",
     })
@@ -171,7 +164,7 @@ async function main(): Promise<void> {
     servers.pop()
     servers.push(await startMockServer(assetsV2, "0.2.0", MOCK_PORT_V2))
     const updateWorkDirsBefore = new Set((await readdir(tmpdir())).filter((name) => name.startsWith("aizen-update-")))
-    await runInstalledExe(tempHome, ["update"], { AIZEN_RELEASE_API: `http://localhost:${MOCK_PORT_V2}` })
+    await runInstalledExe(tempHome, ["update", "--release-api", `http://localhost:${MOCK_PORT_V2}`])
     await Bun.sleep(3_000) // Windows 延迟替换约 1 秒，留足余量
 
     // 5. 断言更新结果
@@ -186,7 +179,7 @@ async function main(): Promise<void> {
 
     // 6. 执行卸载并断言清理
     console.log("[6/6] 执行 uninstall --yes 并断言清理")
-    await runInstalledExe(tempHome, ["uninstall", "--yes"], {})
+    await runInstalledExe(tempHome, ["uninstall", "--yes"])
     await Bun.sleep(3_000) // Windows 延迟删除约 1 秒
     if (await pathExists(join(tempHome, ".aizen"))) {
       const leftover =
@@ -202,7 +195,6 @@ async function main(): Promise<void> {
     console.log("\n端到端测试全部通过")
   } finally {
     for (const server of servers) server.kill()
-    await cleanupUserPath()
     await rm(workRoot, { recursive: true, force: true })
   }
 }
