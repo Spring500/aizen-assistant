@@ -857,13 +857,10 @@ describe("核心编排", () => {
     expect(await core.dispatch({ type: "list_sessions" })).toEqual({ ok: true })
     const incompatible = core.getSnapshot().sessions[0]
     expect(incompatible?.issues[0]?.label).toBe("不兼容")
-    expect(await core.dispatch({ type: "force_open_session", entryId: "incompatible.jsonl" })).toEqual({ ok: true })
+    expect(await core.dispatch({ type: "force_open_session", sessionId: "incompatible" })).toEqual({ ok: true })
     expect(core.getSnapshot().currentSessionId).toBe("incompatible")
     expect(core.getSnapshot().transcript.some((entry) => entry.type === "input")).toBe(true)
     expect(await core.dispatch({ type: "set_permission_settings", preset: "plan", reviewMode: "manual" })).toEqual({
-      ok: true,
-    })
-    expect(await core.dispatch({ type: "rename_session", sessionId: "incompatible", name: "继续使用" })).toEqual({
       ok: true,
     })
     const firstTurn = core.getSnapshot().transcript.find((entry) => entry.type === "input")
@@ -872,7 +869,6 @@ describe("核心编排", () => {
     const updated = await readFile(file, "utf8")
     expect(updated).toContain(JSON.stringify({ kind: "permission_mode_changed", permissionMode: "unrestricted" }))
     expect(updated).toContain('"kind":"permission_settings_changed"')
-    expect(updated).toContain('"kind":"session_renamed"')
     expect(core.getSnapshot().currentPermissionPreset).toBe("plan")
     await core.dispose()
   })

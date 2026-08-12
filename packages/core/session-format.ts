@@ -175,7 +175,7 @@ export type SessionLine = SessionHeader | SessionRecord
 
 /** 当前程序不认识的会话记录类型；调用方可以将其与内容损坏区分处理。 */
 export class UnknownSessionRecordTypeError extends Error {
-  constructor(readonly recordKind: string) {
+  constructor(recordKind: string) {
     super(`未知的会话记录类型：${recordKind}`)
   }
 }

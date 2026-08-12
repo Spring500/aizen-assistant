@@ -28,14 +28,12 @@ function validEntry(value: unknown): value is SessionIndexEntry {
     typeof entry.birthtimeMs === "number" &&
     typeof entry.mtimeMs === "number" &&
     !!summary &&
-    typeof summary.entryId === "string" &&
     typeof summary.sessionId === "string" &&
     typeof summary.name === "string" &&
     typeof summary.cwd === "string" &&
     typeof summary.createdAt === "string" &&
     typeof summary.updatedAt === "string" &&
     typeof summary.preview === "string" &&
-    (summary.state === "healthy" || summary.state === "degraded" || summary.state === "unavailable") &&
     Array.isArray(summary.issues) &&
     summary.issues.every(
       (issue) =>
@@ -48,7 +46,6 @@ function validEntry(value: unknown): value is SessionIndexEntry {
     ) &&
     !!summary.capabilities &&
     typeof summary.capabilities.canOpen === "boolean" &&
-    typeof summary.capabilities.canWrite === "boolean" &&
     typeof summary.capabilities.canForceOpen === "boolean"
   )
 }

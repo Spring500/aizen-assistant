@@ -193,7 +193,7 @@ describe("会话存储", () => {
     expect((await reopened.read("s1")).records).toHaveLength(1)
   })
 
-  test("重复会话 ID 作为两个隔离条目返回", async () => {
+  test("重复会话 ID 只保留一个会话", async () => {
     const { root, store } = await makeStore()
     const createdAt = "2026-07-23T10:00:00.000Z"
     await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt })
@@ -202,10 +202,9 @@ describe("会话存储", () => {
       `${JSON.stringify({ kind: "session", version: 1, sessionId: "s1", cwd: "E:\\project", createdAt })}\n`,
     )
     const listed = await store.list()
-    expect(listed).toHaveLength(2)
-    expect(listed.every((entry) => entry.issues.some((issue) => issue.code === "session.id_conflict"))).toBe(true)
-    expect(listed.every((entry) => entry.capabilities.canOpen === false)).toBe(true)
-    expect(listed.every((entry) => entry.capabilities.canForceOpen === false)).toBe(true)
+    expect(listed).toHaveLength(1)
+    expect(listed[0]?.sessionId).toBe("s1")
+    expect(listed[0]?.capabilities.canOpen).toBe(true)
   })
 
   test("列表读取名称和第一条用户输入并按更新时间倒序", async () => {
@@ -262,12 +261,12 @@ describe("会话存储", () => {
     const first = new SessionStore(root)
     const second = new SessionStore(root)
 
-    await first.forceOpen("incompatible.jsonl")
+    await first.forceOpen("incompatible")
     await first.activate("incompatible")
     const listed = (await second.list())[0]
     expect(listed?.lockState).toBe("occupied")
     expect(listed?.issues.map((issue) => issue.code)).toContain("session.in_use")
-    expect(listed?.capabilities).toEqual({ canOpen: false, canWrite: false, canForceOpen: false })
+    expect(listed?.capabilities).toEqual({ canOpen: false, canForceOpen: false })
     await first.close()
   })
 
@@ -277,28 +276,28 @@ describe("会话存储", () => {
     const racing = new LeaseRacingStore(root)
     const competing = new SessionStore(root)
     racing.afterNextList = async () => {
-      await competing.forceOpen("incompatible.jsonl")
+      await competing.forceOpen("incompatible")
       await competing.activate("incompatible")
     }
 
-    await expect(racing.forceOpen("incompatible.jsonl")).rejects.toBeInstanceOf(SessionLockedError)
+    await expect(racing.forceOpen("incompatible")).rejects.toBeInstanceOf(SessionLockedError)
     await competing.close()
   })
 
-  test("强制打开后原条目保持不兼容但当前实例可以写入", async () => {
+  test("强制打开后原条目保持不兼容且不再提供打开操作", async () => {
     const { root, store } = await makeStore()
     await writeFile(join(root, "incompatible.jsonl"), incompatibleSession())
 
-    await store.forceOpen("incompatible.jsonl")
+    await store.forceOpen("incompatible")
     await store.activate("incompatible")
     const current = (await store.list())[0]
     expect(current?.lockState).toBe("current")
     expect(current?.issues.map((issue) => issue.code)).toContain("session.incompatible_record")
-    expect(current?.capabilities).toEqual({ canOpen: false, canWrite: true, canForceOpen: false })
+    expect(current?.capabilities).toEqual({ canOpen: false, canForceOpen: false })
     await store.close()
   })
 
-  test("内容损坏、字段损坏和 ID 冲突均不能强制打开", async () => {
+  test("内容损坏和字段损坏均不能强制打开", async () => {
     const { root, store } = await makeStore()
     const createdAt = "2026-07-23T10:00:00.000Z"
     const header = (sessionId: string) =>
@@ -308,19 +307,16 @@ describe("会话存储", () => {
       join(root, "invalid-record.jsonl"),
       `${header("invalid-record")}\n${JSON.stringify({ kind: "model_changed", recordId: "model" })}\n`,
     )
-    await writeFile(join(root, "duplicate-a.jsonl"), `${header("duplicate")}\n`)
-    await writeFile(join(root, "duplicate-b.jsonl"), `${header("duplicate")}\n`)
 
     const listed = await store.list()
     for (const entry of listed) expect(entry.capabilities.canForceOpen).toBe(false)
-    expect(listed.find((entry) => entry.entryId === "invalid-json.jsonl")?.issues[0]?.code).toBe("session.invalid_json")
-    expect(listed.find((entry) => entry.entryId === "invalid-record.jsonl")?.issues[0]?.code).toBe(
+    expect(listed.find((entry) => entry.sessionId === "invalid-json")?.issues[0]?.code).toBe("session.invalid_json")
+    expect(listed.find((entry) => entry.sessionId === "invalid-record")?.issues[0]?.code).toBe(
       "session.record_validation_failed",
     )
-    expect(listed.filter((entry) => entry.sessionId === "duplicate")).toHaveLength(2)
   })
 
-  test("语法损坏与不完整尾行返回不同状态", async () => {
+  test("语法损坏与不完整尾行返回不同问题和操作能力", async () => {
     const { root, store } = await makeStore()
     const header = JSON.stringify({
       kind: "session",
@@ -336,7 +332,7 @@ describe("会话存储", () => {
     expect(listed.find((entry) => entry.sessionId === "damaged")?.issues[0]?.code).toBe("session.invalid_json")
     const incomplete = listed.find((entry) => entry.sessionId === "incomplete")
     expect(incomplete?.issues[0]?.code).toBe("session.incomplete_tail")
-    expect(incomplete?.capabilities).toMatchObject({ canOpen: true, canWrite: true })
+    expect(incomplete?.capabilities.canOpen).toBe(true)
   })
 
   test("单文件摘要缓存可丢弃并随会话增删改自动修复", async () => {

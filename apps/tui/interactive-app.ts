@@ -1893,15 +1893,33 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const sessionSegments = (session: ReturnType<typeof core.getSnapshot>["sessions"][number]) =>
     sessionDisplay(session, core.getSnapshot().currentSessionId)
 
-  async function manageSession(entryId: string): Promise<void> {
-    const session = core.getSnapshot().sessions.find((item) => item.entryId === entryId)
+  async function manageSession(sessionId: string): Promise<void> {
+    const session = core.getSnapshot().sessions.find((item) => item.sessionId === sessionId)
     if (!session) return
     const action = await selectEditableItem(
       overlays,
       "session-action",
       () => [
         ...(session.capabilities.canOpen
-          ? [{ name: "打开会话", description: "切换到该会话", value: "open" as const }]
+          ? [
+              { name: "打开会话", description: "切换到该会话", value: "open" as const },
+              {
+                name: `会话名称  ${session.name || "当前未命名"}`,
+                description: "在当前选项内重命名；可留空",
+                value: "renamed" as const,
+                edit: {
+                  label: "会话名称  ",
+                  value: session.name,
+                  save: async (name: string) => {
+                    const result = await dispatchWithError(
+                      { type: "rename_session", sessionId, name },
+                      "重命名会话失败",
+                    )
+                    if (result.ok) session.name = name
+                  },
+                },
+              },
+            ]
           : []),
         ...(session.capabilities.canForceOpen
           ? [
@@ -1912,33 +1930,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               },
             ]
           : []),
-        ...(session.capabilities.canWrite
-          ? [
-              {
-                name: `会话名称  ${session.name || "当前未命名"}`,
-                description: "在当前选项内重命名；可留空",
-                value: "renamed" as const,
-                edit: {
-                  label: "会话名称  ",
-                  value: session.name,
-                  save: async (name: string) => {
-                    const result = await dispatchWithError(
-                      { type: "rename_session", sessionId: session.sessionId, name },
-                      "重命名会话失败",
-                    )
-                    if (result.ok) session.name = name
-                  },
-                },
-              },
-            ]
-          : []),
       ],
       { title: `管理会话 · ${session.name || session.sessionId}`, signal: interactionController.signal },
     )
-    if (action === "open")
-      await dispatchWithError({ type: "open_session", sessionId: session.sessionId }, "打开会话失败")
+    if (action === "open") await dispatchWithError({ type: "open_session", sessionId }, "打开会话失败")
     else if (action === "force-open")
-      await dispatchWithError({ type: "force_open_session", entryId }, "强制打开会话失败")
+      await dispatchWithError({ type: "force_open_session", sessionId }, "强制打开会话失败")
   }
 
   async function manageSessions(): Promise<void> {
@@ -1948,7 +1945,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       const selected = await selectRichItem(
         overlays,
         "sessions-manager",
-        sessions.map((session) => ({ ...sessionSegments(session), value: session.entryId })),
+        sessions.map((session) => ({ ...sessionSegments(session), value: session.sessionId })),
         { title: "管理会话（选择后进入操作菜单）", signal: interactionController.signal },
       )
       if (!selected) return
@@ -1977,14 +1974,14 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             details: [{ text: "打开或重命名已有会话", dim: true }],
             value: "__manage__",
           },
-          ...sessions.map((session) => ({ ...sessionSegments(session), value: session.entryId })),
+          ...sessions.map((session) => ({ ...sessionSegments(session), value: session.sessionId })),
         ],
         { title: "选择会话", signal: interactionController.signal },
       )
       if (selected === "__new__") await createSession()
       else if (selected === "__manage__") await manageSessions()
       else if (selected) {
-        const session = sessions.find((item) => item.entryId === selected)
+        const session = sessions.find((item) => item.sessionId === selected)
         if (session?.capabilities.canOpen)
           await dispatchWithError({ type: "open_session", sessionId: session.sessionId }, "打开会话失败")
         else await manageSession(selected)

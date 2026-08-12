@@ -144,29 +144,25 @@ class IncompatibleSessionCore implements CorePort {
     status: "idle",
     sessions: [
       {
-        entryId: "incompatible.jsonl",
         sessionId: "incompatible",
         name: "旧会话",
         cwd: "E:\\fixture",
         createdAt: "2026-07-23T10:00:00.000Z",
         updatedAt: "2026-07-23T10:00:00.000Z",
         preview: "保留内容",
-        state: "unavailable",
         issues: [{ code: "session.incompatible_record", label: "不兼容", message: "存在不兼容记录" }],
-        capabilities: { canOpen: false, canWrite: false, canForceOpen: true },
+        capabilities: { canOpen: false, canForceOpen: true },
         lockState: "available",
       },
       {
-        entryId: "damaged.jsonl",
         sessionId: "damaged",
         name: "损坏会话",
         cwd: "E:\\fixture",
         createdAt: "2026-07-23T10:00:00.000Z",
         updatedAt: "2026-07-23T10:00:00.000Z",
         preview: "无法读取会话摘要",
-        state: "unavailable",
         issues: [{ code: "session.invalid_json", label: "内容损坏", message: "存在无效 JSON" }],
-        capabilities: { canOpen: false, canWrite: false, canForceOpen: false },
+        capabilities: { canOpen: false, canForceOpen: false },
         lockState: "available",
       },
     ],
@@ -450,8 +446,8 @@ async function forceOpenIncompatibleSession(): Promise<void> {
       "强制打开不兼容会话",
     )
     const forceOpen = core.commands.find((command) => command.type === "force_open_session")
-    if (forceOpen?.type !== "force_open_session" || forceOpen.entryId !== "incompatible.jsonl")
-      throw new Error("强制打开没有使用目录条目标识")
+    if (forceOpen?.type !== "force_open_session" || forceOpen.sessionId !== "incompatible")
+      throw new Error("强制打开没有使用会话 ID")
   } finally {
     setup.renderer.keyInput.emit("keypress", key("\x03"))
     await running

@@ -350,7 +350,7 @@ export class AizenCore implements CorePort {
           await this.#openSession(command.sessionId)
           break
         case "force_open_session":
-          await this.#openSession(command.entryId, true)
+          await this.#openSession(command.sessionId, true)
           break
         case "rename_session":
           await this.#renameSession(command.sessionId, command.name)
@@ -644,11 +644,10 @@ export class AizenCore implements CorePort {
    * 打开会话首先是纯本地历史操作。即使当前模型或视图已经失效，
    * 对话记录也必须可见；无法重建 pi 内存会话时只禁止发送新消息。
    */
-  async #openSession(sessionIdentity: string, force = false): Promise<void> {
+  async #openSession(sessionId: string, force = false): Promise<void> {
     this.#sessionNamingAbort?.abort()
-    const forced = force ? await this.#store.forceOpen(sessionIdentity) : undefined
-    const loaded = forced ?? (await this.#store.open(sessionIdentity))
-    const sessionId = loaded.header.sessionId
+    const forced = force ? await this.#store.forceOpen(sessionId) : undefined
+    const loaded = forced ?? (await this.#store.open(sessionId))
     try {
       const previousCwd = this.#effectiveWorkingDirectory(loaded.header.cwd, loaded.records)
       if (normalizeProjectPath(previousCwd) !== normalizeProjectPath(this.#cwd)) {
@@ -865,8 +864,7 @@ export class AizenCore implements CorePort {
 
   async #renameSession(sessionId: string, name: string): Promise<void> {
     const normalizedName = name.trim()
-    const target = (await this.#store.list()).find((session) => session.sessionId === sessionId)
-    if (!target?.capabilities.canWrite) throw new Error(`会话当前不可写：${sessionId}`)
+    await this.#store.read(sessionId)
     const record: SessionRecord = {
       kind: "session_renamed",
       recordId: crypto.randomUUID(),

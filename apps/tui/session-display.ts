@@ -5,21 +5,19 @@ import { systemColors } from "../../packages/tui-kit/theme.ts"
 /** 将会话摘要转换为选择器行，并展示当前实例与其他实例的占用状态。 */
 export function sessionDisplay(
   session: SessionSummary,
-  currentSessionIdentity?: string,
+  currentSessionId?: string,
 ): Omit<RichSelectorItem<string>, "value"> {
-  const isCurrent =
-    session.lockState === "current" ||
-    session.entryId === currentSessionIdentity ||
-    session.sessionId === currentSessionIdentity
+  const isCurrent = session.lockState === "current" || session.sessionId === currentSessionId
+  const isOccupied = session.lockState === "occupied"
   const issueLabels = [...new Set(session.issues.map((issue) => issue.label))]
   const marker = [isCurrent ? "当前" : undefined, ...issueLabels]
     .filter(Boolean)
     .map((label) => ` [${label}]`)
     .join("")
-  const hasAction = session.capabilities.canOpen || session.capabilities.canWrite || session.capabilities.canForceOpen
+  const hasAction = session.capabilities.canOpen || session.capabilities.canForceOpen
   const color = isCurrent
     ? systemColors.sessionCurrent
-    : session.lockState === "occupied"
+    : isOccupied
       ? systemColors.sessionOccupied
       : systemColors.header
   return {
@@ -27,9 +25,9 @@ export function sessionDisplay(
       ...(session.name ? [{ text: session.name, color, bold: true }, { text: "  " }] : []),
       {
         text: session.sessionId,
-        color: isCurrent || session.lockState === "occupied" ? color : systemColors.shortcuts,
+        color: isCurrent || isOccupied ? color : systemColors.shortcuts,
         italic: true,
-        dim: !isCurrent && session.lockState !== "occupied",
+        dim: !isCurrent && !isOccupied,
       },
       ...(marker ? [{ text: marker, color, bold: true }] : []),
     ],
