@@ -13,6 +13,8 @@ REPOSITORY="Spring500/aizen-assistant"
 # 发布 API 与下载基地址；可用 AIZEN_RELEASE_API / AIZEN_RELEASE_DOWNLOAD 覆盖（本地 mock 测试或自建镜像）。
 RELEASE_API="${AIZEN_RELEASE_API:-https://api.github.com/repos/${REPOSITORY}}"
 RELEASE_DOWNLOAD="${AIZEN_RELEASE_DOWNLOAD:-https://github.com/${REPOSITORY}/releases/download}"
+# 首版已发布平台（与 release 矩阵保持一致；win/linux arm64 待验证后增补）。
+SUPPORTED_PLATFORMS="linux-x64 darwin-x64 darwin-arm64 windows-x64"
 HOME_DIR="${HOME:-}"
 CONFIG_DIR="$HOME_DIR/.aizen"
 INSTALL_DIR="$CONFIG_DIR/bin"
@@ -56,7 +58,7 @@ fetch_latest_version() {
   curl -fsSL "${RELEASE_API}/releases/latest" |
     grep -o '"tag_name"[[:space:]]*:[[:space:]]*"v[^"]*"' |
     head -1 |
-    sed 's/.*"v\([^"]*\)"/\1/'
+    sed 's/.*"v\([^"]*\)"/\1/' || true
 }
 
 # 计算文件的 SHA256（兼容 macOS 的 shasum 与 Linux 的 sha256sum）。
@@ -153,6 +155,10 @@ main() {
     exit 1
   fi
   platform="$(detect_platform)"
+  if ! echo "$SUPPORTED_PLATFORMS" | grep -qw "$platform"; then
+    echo "错误：当前平台（${platform}）暂未提供官方安装包（支持：${SUPPORTED_PLATFORMS}）" >&2
+    exit 1
+  fi
 
   if [ -n "$REQUESTED_VERSION" ]; then
     version="${REQUESTED_VERSION#v}"

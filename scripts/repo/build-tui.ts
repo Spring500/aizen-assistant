@@ -15,30 +15,10 @@
 
 import { $ } from "bun"
 import { join } from "node:path"
+import { parseCliArgs } from "./parse-cli-args.ts"
 
 /** Windows 平台 target 集合，产物需带 .exe 后缀。 */
 const WINDOWS_TARGETS = new Set(["bun-windows-x64", "bun-windows-arm64"])
-
-/** 解析 --target 参数；不提供时回退到 bun-windows-x64。 */
-function parseTarget(args: string[]): string {
-  let target = "bun-windows-x64"
-  for (let index = 0; index < args.length; index++) {
-    const argument = args[index]
-    if (argument === undefined) continue
-    if (argument === "--target") {
-      const value = args[++index]
-      if (!value || value.startsWith("--")) throw new Error("--target 必须提供目标，如 bun-linux-x64")
-      target = value
-      continue
-    }
-    if (argument.startsWith("--target=")) {
-      target = argument.slice("--target=".length)
-      continue
-    }
-    throw new Error(`未知参数：${argument ?? ""}`)
-  }
-  return target
-}
 
 /** 根据 target 推断产物文件名（Windows 带 .exe 后缀）。 */
 function executableName(target: string): string {
@@ -46,7 +26,8 @@ function executableName(target: string): string {
 }
 
 async function main(): Promise<void> {
-  const target = parseTarget(process.argv.slice(2))
+  const values = parseCliArgs(process.argv.slice(2), ["--target"])
+  const target = values.target ?? "bun-windows-x64"
   const name = executableName(target)
   await $`bun build --compile --target=${target} --outfile=${join("dist", name)} apps/tui/main.ts`
   console.log(`TUI 构建完成：dist/${name}（target=${target}）`)

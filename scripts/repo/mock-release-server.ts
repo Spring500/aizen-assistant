@@ -13,35 +13,15 @@
 
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
-
-/** 解析 --assets-dir / --version / --port 参数。 */
-function parseArguments(args: string[]): { assetsDir: string; version: string; port: number } {
-  const values: Record<string, string> = {}
-  for (let index = 0; index < args.length; index++) {
-    const argument = args[index]
-    if (argument === undefined) continue
-    if (argument === "--assets-dir" || argument === "--version" || argument === "--port") {
-      const value = args[++index]
-      if (!value || value.startsWith("--")) throw new Error(`${argument} 必须提供值`)
-      values[argument.slice(2)] = value
-      continue
-    }
-    if (argument.startsWith("--")) {
-      const [key, value] = argument.slice(2).split("=")
-      if (!key || !value) throw new Error(`${argument} 必须提供值`)
-      values[key] = value
-      continue
-    }
-    throw new Error(`未知参数：${argument ?? ""}`)
-  }
-  if (!values["assets-dir"] || !values.version) throw new Error("必须提供 --assets-dir 与 --version")
-  const port = Number.parseInt(values.port ?? "18081", 10)
-  if (!Number.isInteger(port)) throw new Error("--port 必须是整数")
-  return { assetsDir: values["assets-dir"], version: values.version, port }
-}
+import { parseCliArgs } from "./parse-cli-args.ts"
 
 async function main(): Promise<void> {
-  const { assetsDir, version, port } = parseArguments(process.argv.slice(2))
+  const values = parseCliArgs(process.argv.slice(2), ["--assets-dir", "--version", "--port"])
+  const assetsDir = values["assets-dir"]
+  const version = values.version
+  const port = Number.parseInt(values.port ?? "18081", 10)
+  if (!assetsDir || !version) throw new Error("必须提供 --assets-dir 与 --version")
+  if (!Number.isInteger(port)) throw new Error("--port 必须是整数")
   // 与真实 GitHub Releases 下载路径保持一致：/download/v<version>/<文件>
   const downloadPrefix = `/download/v${version}/`
 

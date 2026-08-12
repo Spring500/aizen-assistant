@@ -1,15 +1,21 @@
 /**
  * update 子命令：检查并安装最新版本。
  *
- * 仅 github 通道执行自更新（查询 GitHub API → 下载 → SHA256 校验 → 原子替换自身）。
+ * 仅 github 通道执行自更新（查询 GitHub API → 下载 → SHA256 校验 → 替换自身）。
  * npm 通道（预留）与便携模式不做自更新，分别提示对应操作。
  */
 
-import { basename, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 import { tmpdir } from "node:os"
-import { mkdir, mkdtemp, rename, rm, writeFile } from "node:fs/promises"
+import { chmod, copyFile, mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises"
 import { $ } from "bun"
-import { readInstallRecord, writeInstallRecord } from "../../packages/core/install-record.ts"
+import {
+  type InstallRecord,
+  installRecordPath,
+  readInstallRecord,
+  writeInstallRecord,
+} from "../../packages/core/install-record.ts"
+import { quotedPowerShell, scheduleDeferredPowerShell } from "./deferred-powershell.ts"
 
 /**
  * GitHub API 基地址，用于查询最新 release。
@@ -70,7 +76,7 @@ async function download(url: string, dest: string): Promise<void> {
 async function extractZip(zipPath: string, destDir: string): Promise<void> {
   await mkdir(destDir, { recursive: true })
   if (process.platform === "win32") {
-    const script = `Expand-Archive -LiteralPath '${zipPath}' -DestinationPath '${destDir}' -Force`
+    const script = `Expand-Archive -LiteralPath ${quotedPowerShell(zipPath)} -DestinationPath ${quotedPowerShell(destDir)} -Force`
     const proc = Bun.spawn({ cmd: ["powershell", "-NoProfile", "-Command", script] })
     const exitCode = await proc.exited
     if (exitCode !== 0) throw new Error("解压失败（Expand-Archive）")
@@ -80,38 +86,54 @@ async function extractZip(zipPath: string, destDir: string): Promise<void> {
 }
 
 /**
- * 用新可执行文件替换当前进程的可执行文件；Windows 下运行中 exe 被锁，延迟替换。
+ * 用新可执行文件替换当前进程的可执行文件。
+ * - Windows：运行中 exe 被锁，延迟替换；替换成功后由延迟脚本写 install.json（避免版本记录与实际 exe 不一致）。
+ * - POSIX：rename 原子替换；跨文件系统（EXDEV）时先复制到目标同目录再 rename。
  * cleanupDir：Windows 延迟替换时由延迟脚本负责删除的临时目录（调用方不得提前删除其中的新文件）。
+ * successRecord：Windows 下替换成功后写入的安装记录（channel/version/platform）。
  */
-async function replaceExecutable(newExecutable: string, currentExecutable: string, cleanupDir?: string): Promise<void> {
+async function replaceExecutable(
+  newExecutable: string,
+  currentExecutable: string,
+  cleanupDir?: string,
+  successRecord?: InstallRecord,
+): Promise<void> {
   if (process.platform === "win32") {
-    // 写临时 ps1，由 Start-Process 启动独立 PowerShell 在进程退出后执行（Bun.spawn 子进程会随父退出被终止）。
-    const script = join(tmpdir(), `aizen-update-${Date.now()}.ps1`)
-    const quoted = (value: string) => `'${value.replaceAll("'", "''")}'`
-    await writeFile(
-      script,
-      [
-        "Start-Sleep -Seconds 1",
-        `Remove-Item -Force ${quoted(currentExecutable)}`,
-        `Move-Item -Force ${quoted(newExecutable)} ${quoted(currentExecutable)}`,
-        ...(cleanupDir ? [`Remove-Item -Recurse -Force ${quoted(cleanupDir)}`] : []),
-        `Remove-Item -Force ${quoted(script)}`,
-        "",
-      ].join("\n"),
-    )
-    const launch = `Start-Process -WindowStyle Hidden powershell -ArgumentList ${[
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      script,
+    const lines = [
+      "Start-Sleep -Seconds 1",
+      `Remove-Item -Force ${quotedPowerShell(currentExecutable)}`,
+      `Move-Item -Force ${quotedPowerShell(newExecutable)} ${quotedPowerShell(currentExecutable)}`,
+      `if (-not (Test-Path ${quotedPowerShell(currentExecutable)})) { exit 1 }`,
+      ...(successRecord
+        ? [
+            `[System.IO.File]::WriteAllText(${quotedPowerShell(installRecordPath())}, ${quotedPowerShell(
+              JSON.stringify(successRecord),
+            )}, (New-Object System.Text.UTF8Encoding($false)))`,
+          ]
+        : []),
+      ...(cleanupDir ? [`Remove-Item -Recurse -Force ${quotedPowerShell(cleanupDir)}`] : []),
     ]
-      .map((value) => `'${value.replaceAll("'", "''")}'`)
-      .join(",")}`
-    await Bun.spawn({ cmd: ["powershell", "-NoProfile", "-Command", launch], stdout: "ignore", stderr: "ignore" })
-      .exited
+    await scheduleDeferredPowerShell(lines)
   } else {
-    await rename(newExecutable, currentExecutable)
+    try {
+      await rename(newExecutable, currentExecutable)
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "EXDEV") {
+        // 跨文件系统：临时目录与安装目录不在同一挂载点（如 Linux /tmp 为 tmpfs），rename 抛 EXDEV。
+        // 先复制到目标同目录（同卷）再 rename，保持同卷原子替换并保留可执行权限。
+        const staged = join(dirname(currentExecutable), `.aizen-update-${process.pid}.tmp`)
+        try {
+          const mode = (await stat(newExecutable)).mode
+          await copyFile(newExecutable, staged)
+          await chmod(staged, mode)
+          await rename(staged, currentExecutable)
+        } finally {
+          await rm(staged, { force: true })
+        }
+      } else {
+        throw error
+      }
+    }
   }
 }
 
@@ -157,28 +179,37 @@ export async function runUpdate(): Promise<number> {
     const zipPath = join(workDir, assetName)
     await download(asset.url, zipPath)
 
-    // 校验 SHA256（与 Release 资产的 SHA256SUMS 比对）
+    // 校验 SHA256：SHA256SUMS 资产或对应行缺失时一律视为校验失败，不允许静默降级
     const sumsAsset = release.assets.find((item) => item.name === "SHA256SUMS")
-    if (sumsAsset) {
-      const sumsText = await (await fetch(sumsAsset.url)).text()
-      const line = sumsText.split(/\r?\n/).find((item) => item.trimEnd().endsWith(assetName))
-      if (line) {
-        const expected = line.trim().split(/\s+/)[0]
-        const actual = await sha256Of(zipPath)
-        if (expected !== actual) {
-          console.error("SHA256 校验失败，已中止更新")
-          return 1
-        }
-      }
+    if (!sumsAsset) {
+      console.error("发布缺少 SHA256SUMS 资产，无法校验，已中止更新")
+      return 1
+    }
+    const sumsText = await (await fetch(sumsAsset.url)).text()
+    const line = sumsText.split(/\r?\n/).find((item) => item.trimEnd().endsWith(assetName))
+    if (!line) {
+      console.error(`SHA256SUMS 中找不到 ${assetName} 的校验和，已中止更新`)
+      return 1
+    }
+    const expected = line.trim().split(/\s+/)[0]
+    const actual = await sha256Of(zipPath)
+    if (expected !== actual) {
+      console.error("SHA256 校验失败，已中止更新")
+      return 1
     }
 
     await extractZip(zipPath, join(workDir, "extracted"))
     const newExecutable = join(workDir, "extracted", basename(process.execPath))
     if (!(await Bun.file(newExecutable).exists())) throw new Error("压缩包内未找到可执行文件")
 
-    await replaceExecutable(newExecutable, process.execPath, workDir)
+    const successRecord: InstallRecord = { channel: "github", version: release.version, platform: record.platform }
+    await replaceExecutable(newExecutable, process.execPath, workDir, successRecord)
     delayReplaceScheduled = true
-    await writeInstallRecord({ channel: "github", version: release.version, platform: record.platform })
+    // Windows 下 install.json 由延迟脚本在替换成功后写入（避免版本记录与实际 exe 不一致）；
+    // POSIX 下 rename 已同步完成，这里直接写入。
+    if (process.platform !== "win32") {
+      await writeInstallRecord(successRecord)
+    }
     console.log(`更新完成：${record.version} → ${release.version}`)
     return 0
   } catch (error) {

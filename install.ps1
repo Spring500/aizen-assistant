@@ -14,6 +14,8 @@ $Repository = "Spring500/aizen-assistant"
 # 发布 API 与下载基地址；可用 AIZEN_RELEASE_API / AIZEN_RELEASE_DOWNLOAD 覆盖（本地 mock 测试或自建镜像）。
 $ReleaseApi = if ($env:AIZEN_RELEASE_API) { $env:AIZEN_RELEASE_API } else { "https://api.github.com/repos/$Repository" }
 $ReleaseDownload = if ($env:AIZEN_RELEASE_DOWNLOAD) { $env:AIZEN_RELEASE_DOWNLOAD } else { "https://github.com/$Repository/releases/download" }
+# 首版已发布平台（与 release 矩阵保持一致；win/linux arm64 待验证后增补）。
+$SupportedPlatforms = @("windows-x64", "linux-x64", "darwin-x64", "darwin-arm64")
 $ConfigDir = Join-Path $env:USERPROFILE ".aizen"
 $InstallDir = Join-Path $ConfigDir "bin"
 $PathEntry = '%USERPROFILE%\.aizen\bin'
@@ -63,7 +65,9 @@ function Install-Release {
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     Copy-Item -Path $exeSource -Destination (Join-Path $InstallDir "aizen-assistant.exe") -Force
 
-    $installedVersion = (Get-Content (Join-Path $tmpDir "extracted\version") -Raw).Trim()
+    $installedVersion = ""
+    $versionFile = Join-Path $tmpDir "extracted\version"
+    if (Test-Path $versionFile) { $installedVersion = (Get-Content $versionFile -Raw).Trim() }
     if (-not $installedVersion) { $installedVersion = $Version }
     return $installedVersion
   } finally {
@@ -97,6 +101,9 @@ function Add-UserPath {
 
 function Main {
   $platform = Get-Platform
+  if ($SupportedPlatforms -notcontains $platform) {
+    throw "当前平台（$platform）暂未提供官方安装包（支持：$($SupportedPlatforms -join '、')）"
+  }
   $version = if ($RequestedVersion) { $RequestedVersion.TrimStart("v") } else { Get-LatestVersion }
 
   Write-Host "安装 AizenAssistant v$version（$platform）"

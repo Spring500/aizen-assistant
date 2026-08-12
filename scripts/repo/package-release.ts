@@ -12,30 +12,7 @@
 import { $ } from "bun"
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
-
-/** 解析 --version / --platform 参数。 */
-function parseArguments(args: string[]): { version: string; platform: string } {
-  const values: Record<string, string> = {}
-  for (let index = 0; index < args.length; index++) {
-    const argument = args[index]
-    if (argument === undefined) continue
-    if (argument === "--version" || argument === "--platform") {
-      const value = args[++index]
-      if (!value || value.startsWith("--")) throw new Error(`${argument} 必须提供值`)
-      values[argument.slice(2)] = value
-      continue
-    }
-    if (argument.startsWith("--version=") || argument.startsWith("--platform=")) {
-      const [key, value] = argument.slice(2).split("=")
-      if (!key || !value) throw new Error(`${argument} 必须提供值`)
-      values[key] = value
-      continue
-    }
-    throw new Error(`未知参数：${argument ?? ""}`)
-  }
-  if (!values.version || !values.platform) throw new Error("必须提供 --version 与 --platform")
-  return { version: values.version, platform: values.platform }
-}
+import { parseCliArgs } from "./parse-cli-args.ts"
 
 /** 根据平台标识推断压缩包内可执行文件名（Windows 带 .exe 后缀）。 */
 function executableName(platform: string): string {
@@ -55,7 +32,10 @@ async function createZip(stagingDir: string, zipPath: string): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  const { version, platform } = parseArguments(process.argv.slice(2))
+  const values = parseCliArgs(process.argv.slice(2), ["--version", "--platform"])
+  const version = values.version
+  const platform = values["platform"]
+  if (!version || !platform) throw new Error("必须提供 --version 与 --platform")
   const name = executableName(platform)
   const stagingDir = join("dist", "staging")
   const zipPath = join("dist", `aizen-assistant-${version}-${platform}.zip`)
