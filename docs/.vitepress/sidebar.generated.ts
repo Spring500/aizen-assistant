@@ -27,8 +27,8 @@ export const sidebar: DefaultTheme.Sidebar = {
           link: "/zh/core/skills"
         },
         {
-          text: "便利性设计",
-          link: "/zh/core/conveniences"
+          text: "会话管理",
+          link: "/zh/core/session"
         },
         {
           text: "后续计划",
