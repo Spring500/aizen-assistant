@@ -26,6 +26,7 @@ title: AizenAssistant 文档
 
 **开发者文档**——面向实现与维护者：
 
+- [持久化资源错误隔离](./core/storage-isolation.md)：目录型 Store 的隔离协议、会话错误行为与防绕过检查
 - [权限系统实现规格](./permission/spec.md)：内部机制、接口契约与边界条件
 - [权限系统内置分类器说明](./permission/classifier.md)：当前内置规则覆盖范围
 - [自举套件实现规格](./bootstrap-suite/spec.md)：总体结构与扩展方式
