@@ -630,11 +630,11 @@ describe("核心编排", () => {
 
     expect((await core.dispatch({ type: "rename_session", sessionId, name: "  需求讨论  " })).ok).toBe(true)
     expect(core.getSnapshot().currentSessionName).toBe("需求讨论")
-    expect((await store.list()).entries[0]?.name).toBe("需求讨论")
+    expect((await store.list())[0]?.name).toBe("需求讨论")
 
     expect((await core.dispatch({ type: "rename_session", sessionId, name: "   " })).ok).toBe(true)
     expect(core.getSnapshot().currentSessionName).toBe("")
-    expect((await store.list()).entries[0]?.name).toBe("")
+    expect((await store.list())[0]?.name).toBe("")
     await core.dispose()
   })
 
@@ -757,7 +757,7 @@ describe("核心编排", () => {
       error: { code: "COMMAND_FAILED", message: "无法创建运行时", severity: "error" },
     })
     expect(core.getSnapshot().currentSessionId).toBeUndefined()
-    expect((await store.list()).entries).toEqual([])
+    expect(await store.list()).toEqual([])
     await core.dispose()
   })
 
@@ -808,7 +808,7 @@ describe("核心编排", () => {
     await second.dispose()
   })
 
-  test("不兼容会话可只读强制打开并恢复为新会话", async () => {
+  test("不兼容会话可强制打开原文件并重新选择权限设置", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
     const file = join(root, "incompatible.jsonl")
@@ -858,17 +858,22 @@ describe("核心编排", () => {
     const incompatible = core.getSnapshot().sessions[0]
     expect(incompatible?.issues[0]?.label).toBe("不兼容")
     expect(await core.dispatch({ type: "force_open_session", entryId: "incompatible.jsonl" })).toEqual({ ok: true })
-    expect(core.getSnapshot()).toMatchObject({ currentSessionId: "incompatible", currentSessionReadOnly: true })
+    expect(core.getSnapshot().currentSessionId).toBe("incompatible")
     expect(core.getSnapshot().transcript.some((entry) => entry.type === "input")).toBe(true)
-    expect(await core.dispatch({ type: "send_prompt", text: "不能写" })).toMatchObject({
-      ok: false,
-      error: { code: "SESSION_READ_ONLY" },
+    expect(await core.dispatch({ type: "set_permission_settings", preset: "plan", reviewMode: "manual" })).toEqual({
+      ok: true,
     })
-
-    expect(await core.dispatch({ type: "recover_session", entryId: "incompatible.jsonl" })).toEqual({ ok: true })
-    expect(core.getSnapshot().currentSessionId).not.toBe("incompatible")
-    expect(core.getSnapshot().currentSessionReadOnly).toBe(false)
-    expect(await readFile(file, "utf8")).toBe(original)
+    expect(await core.dispatch({ type: "rename_session", sessionId: "incompatible", name: "继续使用" })).toEqual({
+      ok: true,
+    })
+    const firstTurn = core.getSnapshot().transcript.find((entry) => entry.type === "input")
+    if (firstTurn?.type !== "input") throw new Error("缺少已恢复的轮次")
+    expect((await core.dispatch({ type: "rewind", turnId: firstTurn.turnId })).ok).toBe(false)
+    const updated = await readFile(file, "utf8")
+    expect(updated).toContain(JSON.stringify({ kind: "permission_mode_changed", permissionMode: "unrestricted" }))
+    expect(updated).toContain('"kind":"permission_settings_changed"')
+    expect(updated).toContain('"kind":"session_renamed"')
+    expect(core.getSnapshot().currentPermissionPreset).toBe("plan")
     await core.dispose()
   })
 
@@ -1167,7 +1172,7 @@ describe("核心编排", () => {
     expect(core.getSnapshot().currentSessionName).toBe("需求讨论_副本")
     expect(JSON.stringify((await store.read(sourceId)).records)).toContain("第二轮")
     expect(JSON.stringify((await store.read(forkId)).records)).not.toContain("第二轮")
-    expect((await store.list()).entries.map((session) => session.sessionId)).toContainAllValues([sourceId, forkId])
+    expect((await store.list()).map((session) => session.sessionId)).toContainAllValues([sourceId, forkId])
     await core.dispose()
 
     const reopened = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })

@@ -62,8 +62,8 @@ test("完整业务链路：空配置仍列出无视图并创建会话", async ()
   const root = await copyAppFixture("empty")
   roots.push(root)
   const views = new ViewStore(join(root, "views.json"))
-  expect((await views.list()).entries).toEqual([])
-  const choices = viewSelectionItems((await views.list()).entries)
+  expect(await views.list()).toEqual([])
+  const choices = viewSelectionItems(await views.list())
   expect(choices).toEqual([
     { name: "无视图", description: "原生模式：内建提示词 + 全局技能 + 项目上下文", value: null },
   ])
@@ -80,12 +80,8 @@ test("完整业务链路：固定有效和失效视图 fixture 保留真实目�
   const validRoot = await copyAppFixture("valid-view")
   const invalidRoot = await copyAppFixture("invalid-view")
   roots.push(validRoot, invalidRoot)
-  expect((await new ViewStore(join(validRoot, "views.json")).list()).entries).toMatchObject([
-    { id: "review", valid: true },
-  ])
-  expect((await new ViewStore(join(invalidRoot, "views.json")).list()).entries).toMatchObject([
-    { id: "missing", valid: false },
-  ])
+  expect(await new ViewStore(join(validRoot, "views.json")).list()).toMatchObject([{ id: "review", valid: true }])
+  expect(await new ViewStore(join(invalidRoot, "views.json")).list()).toMatchObject([{ id: "missing", valid: false }])
 })
 
 test("统一操作边界展示 dispatch 失败、直接 throw 和队列异常", async () => {

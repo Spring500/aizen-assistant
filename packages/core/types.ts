@@ -44,7 +44,7 @@ export type ContextUsage = {
 
 /** 会话已经可以查看和编辑，但当前 pi runtime 尚不能安全发送下一轮请求。 */
 export type RuntimeIssue = {
-  kind: "model" | "view" | "runtime" | "session"
+  kind: "model" | "view" | "runtime"
   message: string
 }
 
@@ -53,8 +53,6 @@ export type CoreSnapshot = {
   status: CoreStatus
   sessions: SessionSummary[]
   currentSessionId?: string
-  currentSessionEntryId?: string
-  currentSessionReadOnly?: boolean
   currentSessionName?: string
   currentModel?: ModelRuntimeInfo
   currentViewId?: ViewId
@@ -93,7 +91,6 @@ export type CoreCommand =
     }
   | { type: "open_session"; sessionId: string }
   | { type: "force_open_session"; entryId: string }
-  | { type: "recover_session"; entryId: string }
   | { type: "rename_session"; sessionId: string; name: string }
   | { type: "rewind"; turnId: string }
   | { type: "fork_session"; turnId: string }

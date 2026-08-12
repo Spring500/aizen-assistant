@@ -16,7 +16,7 @@ export function sessionDisplay(
     .filter(Boolean)
     .map((label) => ` [${label}]`)
     .join("")
-  const hasAction = session.capabilities.canOpen || session.capabilities.canForceOpen || session.capabilities.canRecover
+  const hasAction = session.capabilities.canOpen || session.capabilities.canWrite || session.capabilities.canForceOpen
   const color = isCurrent
     ? systemColors.sessionCurrent
     : session.lockState === "occupied"

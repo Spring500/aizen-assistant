@@ -3,7 +3,6 @@ import { dirname, isAbsolute, join, resolve } from "node:path"
 
 import { atomicWriteFile, withFileLock } from "./file-transaction.ts"
 import { WordTripletIdGenerator, type MnemonicIdGenerator } from "./mnemonic-id.ts"
-import { type CatalogEntry, type CatalogResult, defineIssues, healthyCapabilities } from "./resource-catalog.ts"
 import { DEFAULT_VIEW_CONFIG, writeViewConfig } from "./view-config.ts"
 
 export type ViewDefinition = {
@@ -12,16 +11,11 @@ export type ViewDefinition = {
   path: string
 }
 
-export type ViewOption = ViewDefinition &
-  CatalogEntry & {
-    directory: string
-    valid: boolean
-    error?: string
-  }
-
-const viewIssues = defineIssues({
-  "view.path_unavailable": { category: "io", label: "路径失效" },
-})
+export type ViewOption = ViewDefinition & {
+  directory: string
+  valid: boolean
+  error?: string
+}
 
 export type ResolvedView = ViewDefinition & {
   directory: string
@@ -96,38 +90,24 @@ export class ViewStore {
     return isAbsolute(view.path) ? resolve(view.path) : resolve(this.#baseDirectory, view.path)
   }
 
-  async list(): Promise<CatalogResult<ViewOption>> {
+  async list(): Promise<ViewOption[]> {
     const { views } = await this.#read()
-    const entries = await Promise.all(
+    return Promise.all(
       views.map(async (view) => {
         const directory = this.#directory(view)
         try {
           if (!(await stat(directory)).isDirectory()) throw new Error("路径不是目录")
-          return {
-            ...view,
-            entryId: view.id,
-            directory,
-            valid: true,
-            state: "healthy" as const,
-            issues: [],
-            capabilities: { ...healthyCapabilities },
-          }
+          return { ...view, directory, valid: true }
         } catch (error) {
-          const message = error instanceof Error ? error.message : String(error)
           return {
             ...view,
-            entryId: view.id,
             directory,
             valid: false,
-            error: message,
-            state: "unavailable" as const,
-            issues: [viewIssues.create("view.path_unavailable", message)],
-            capabilities: { canOpen: false, canWrite: true, canForceOpen: false, canRecover: false },
+            error: error instanceof Error ? error.message : String(error),
           }
         }
       }),
     )
-    return { entries, issues: [] }
   }
 
   async resolve(id: string): Promise<ResolvedView> {

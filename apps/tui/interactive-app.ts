@@ -1,6 +1,6 @@
 import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
-import { createCoreDataStores } from "../../packages/core/data-stores.ts"
+import { AppPreferencesStore } from "../../packages/core/app-preferences-store.ts"
 import type {
   ConfigurableApi,
   EditableModelConfig,
@@ -9,11 +9,15 @@ import type {
   ModelCostConfig,
   ProviderConfigEntry,
 } from "../../packages/core/model-config-store.ts"
-import type { DiscoveredSkill, InstalledSkill } from "../../packages/core/skill-store.ts"
+import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
+import { projectDirectoryName } from "../../packages/core/paths.ts"
+import { SessionStore } from "../../packages/core/session-store.ts"
+import { type DiscoveredSkill, type InstalledSkill, SkillStore } from "../../packages/core/skill-store.ts"
 import { JsonlPermissionGapRecorder } from "../../packages/core/tool-permissions/gap-recorder.ts"
 import { JsonlPermissionAuditRecorder } from "../../packages/core/tool-permissions/permission-audit.ts"
 import type { CorePort } from "../../packages/core/types.ts"
 import { type ProjectSources, readViewConfig, writeViewConfig } from "../../packages/core/view-config.ts"
+import { ViewStore } from "../../packages/core/view-store.ts"
 import type { ModelOption } from "../../packages/core/pi-port.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
@@ -95,18 +99,22 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         piProvidersPath: join(options.dataDirectory, "pi-providers.json"),
         piModelsCachePath: join(options.dataDirectory, "cache", "pi-models-cache.json"),
       })
-  const stores = createCoreDataStores(options.dataDirectory, options.cwd)
-  const store = stores.sessions
-  const skills = stores.skills
+  const store = new SessionStore(join(options.dataDirectory, "sessions", projectDirectoryName(options.cwd)), {
+    indexPath: join(options.dataDirectory, "cache", "session-index.json"),
+  })
+  const skills = new SkillStore({
+    file: join(options.dataDirectory, "skills.json"),
+    cacheDirectory: join(options.dataDirectory, "skill-sources"),
+  })
   const core =
     options.testing?.core ??
     new AizenCore({
       cwd: options.cwd,
       store,
       pi: pi as PiSessionRuntime,
-      modelConfigStore: stores.models,
-      preferencesStore: stores.preferences,
-      views: stores.views,
+      modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "custom-providers.json")),
+      preferencesStore: new AppPreferencesStore(join(options.dataDirectory, "preferences.json")),
+      views: new ViewStore(join(options.dataDirectory, "views.json")),
       skills,
       ...(options.collectPermissionGaps
         ? {
@@ -128,7 +136,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
   const syncTerminalTitle = (snapshot: ReturnType<typeof core.getSnapshot>) => {
     const identity = snapshot.currentSessionId
-      ? `${snapshot.currentSessionName || snapshot.currentSessionId}${snapshot.currentSessionReadOnly ? " [只读]" : ""}`
+      ? snapshot.currentSessionName || snapshot.currentSessionId
       : "AizenAssistant"
     const next = identity === "AizenAssistant" ? identity : `${identity} · AizenAssistant`
     if (next === terminalTitle) return
@@ -290,10 +298,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     editor.setError(snapshot.lastError ? `错误：${snapshot.lastError}` : "")
     editor.setSessionTitle(
       snapshot.currentSessionId
-        ? {
-            name: `${snapshot.currentSessionName ?? ""}${snapshot.currentSessionReadOnly ? " [只读]" : ""}`,
-            sessionId: snapshot.currentSessionId,
-          }
+        ? { name: snapshot.currentSessionName ?? "", sessionId: snapshot.currentSessionId }
         : undefined,
     )
   }
@@ -309,9 +314,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     interactionDepth -= 1
     const snapshot = core.getSnapshot()
     // 交互菜单结束后恢复输入区；运行中同样保持可见（可输入但不可发送）。
-    editor.setInputVisible(
-      !exiting && interactionDepth === 0 && !!snapshot.currentSessionId && !snapshot.currentSessionReadOnly,
-    )
+    editor.setInputVisible(!exiting && interactionDepth === 0 && !!snapshot.currentSessionId)
   }
 
   const unsubscribe = core.subscribe((event) => {
@@ -322,12 +325,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
       // 运行中保持输入区可见可输入（setBusy 负责暗淡与禁止发送）；
       // 仅交互菜单（overlay）与退出时隐藏输入区。
-      editor.setInputVisible(
-        !exiting &&
-          interactionDepth === 0 &&
-          !!event.snapshot.currentSessionId &&
-          !event.snapshot.currentSessionReadOnly,
-      )
+      editor.setInputVisible(!exiting && interactionDepth === 0 && !!event.snapshot.currentSessionId)
       permissionReview?.update(event.snapshot.pendingPermissionRequests ?? [])
       if ((event.snapshot.pendingPermissionRequests ?? []).length === 0) permissionReview = undefined
     } else if (event.type === "permission_request") {
@@ -650,7 +648,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     beginInteraction()
     try {
       while (!exiting) {
-        const installed = (await skills.list()).entries
+        const installed = await skills.list()
         const action = await selectItem<string>(
           overlays,
           "skills-manager",
@@ -1893,7 +1891,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   }
 
   const sessionSegments = (session: ReturnType<typeof core.getSnapshot>["sessions"][number]) =>
-    sessionDisplay(session, core.getSnapshot().currentSessionEntryId ?? core.getSnapshot().currentSessionId)
+    sessionDisplay(session, core.getSnapshot().currentSessionId)
 
   async function manageSession(entryId: string): Promise<void> {
     const session = core.getSnapshot().sessions.find((item) => item.entryId === entryId)
@@ -1908,18 +1906,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         ...(session.capabilities.canForceOpen
           ? [
               {
-                name: "只读强制打开",
-                description: "跳过无法识别的记录查看可恢复内容；原文件不会改变",
+                name: "强制打开",
+                description: "忽略不兼容记录并打开原会话；不迁移或删除原记录",
                 value: "force-open" as const,
-              },
-            ]
-          : []),
-        ...(session.capabilities.canRecover
-          ? [
-              {
-                name: "恢复为新会话",
-                description: "用可恢复内容创建当前格式的新会话；原文件保持不变",
-                value: "recover" as const,
               },
             ]
           : []),
@@ -1949,8 +1938,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     if (action === "open")
       await dispatchWithError({ type: "open_session", sessionId: session.sessionId }, "打开会话失败")
     else if (action === "force-open")
-      await dispatchWithError({ type: "force_open_session", entryId }, "只读打开会话失败")
-    else if (action === "recover") await dispatchWithError({ type: "recover_session", entryId }, "恢复会话失败")
+      await dispatchWithError({ type: "force_open_session", entryId }, "强制打开会话失败")
   }
 
   async function manageSessions(): Promise<void> {

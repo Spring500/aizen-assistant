@@ -236,20 +236,6 @@ export class AizenCore implements CorePort {
       ) {
         throw new Error("当前操作尚未完成")
       }
-      if (
-        this.#snapshot.currentSessionReadOnly &&
-        [
-          "rename_session",
-          "rewind",
-          "fork_session",
-          "send_prompt",
-          "compact",
-          "set_model",
-          "set_view",
-          "set_permission_settings",
-        ].includes(command.type)
-      )
-        throw new CoreCommandError("SESSION_READ_ONLY", "当前会话以只读方式打开；请恢复为新会话后继续")
       switch (command.type) {
         case "load_preferences":
           this.#snapshot.preferences = await this.#readPreferences()
@@ -266,12 +252,12 @@ export class AizenCore implements CorePort {
           break
         }
         case "list_sessions":
-          this.#snapshot.sessions = (await this.#store.list()).entries
+          this.#snapshot.sessions = await this.#store.list()
           this.#reportStoreWarnings()
           break
         case "list_views":
           if (!this.#views) throw new Error("未配置视图存储")
-          this.#snapshot.views = (await this.#views.list()).entries
+          this.#snapshot.views = await this.#views.list()
           break
         case "list_models":
           this.#snapshot.models = await this.#pi.listModels()
@@ -364,10 +350,7 @@ export class AizenCore implements CorePort {
           await this.#openSession(command.sessionId)
           break
         case "force_open_session":
-          await this.#forceOpenSession(command.entryId)
-          break
-        case "recover_session":
-          await this.#recoverSession(command.entryId)
+          await this.#openSession(command.entryId, true)
           break
         case "rename_session":
           await this.#renameSession(command.sessionId, command.name)
@@ -432,7 +415,7 @@ export class AizenCore implements CorePort {
         case "create_view":
           if (!this.#views) throw new Error("未配置视图存储")
           await this.#views.create({ name: command.name, ...(command.id === undefined ? {} : { id: command.id }) })
-          this.#snapshot.views = (await this.#views.list()).entries
+          this.#snapshot.views = await this.#views.list()
           break
         case "update_view":
           if (!this.#views) throw new Error("未配置视图存储")
@@ -440,7 +423,7 @@ export class AizenCore implements CorePort {
             ...(command.name === undefined ? {} : { name: command.name }),
             ...(command.path === undefined ? {} : { path: command.path }),
           })
-          this.#snapshot.views = (await this.#views.list()).entries
+          this.#snapshot.views = await this.#views.list()
           break
         case "ensure_view_file":
           if (!this.#views) throw new Error("未配置视图存储")
@@ -451,7 +434,7 @@ export class AizenCore implements CorePort {
           if (this.#snapshot.currentViewId === command.viewId) throw new Error("不能移除当前会话正在使用的视图")
           if (command.deleteDirectory) await this.#views.deleteDirectory(command.viewId)
           else await this.#views.remove(command.viewId)
-          this.#snapshot.views = (await this.#views.list()).entries
+          this.#snapshot.views = await this.#views.list()
           break
         case "set_model":
           await this.#setModel(command.model)
@@ -633,7 +616,6 @@ export class AizenCore implements CorePort {
     this.#records = records
     this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
-    this.#snapshot.currentSessionReadOnly = false
     this.#snapshot.currentSessionName = ""
     this.#sessionNamingAttempted = false
     delete this.#snapshot.runtimeIssue
@@ -653,10 +635,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
     this.#snapshot.contextUsage = this.#contextUsageFromRecords()
-    this.#snapshot.sessions = (await this.#store.list()).entries
-    const currentEntryId = this.#snapshot.sessions.find((session) => session.sessionId === sessionId)?.entryId
-    if (currentEntryId) this.#snapshot.currentSessionEntryId = currentEntryId
-    else delete this.#snapshot.currentSessionEntryId
+    this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
     await this.#tryRememberSessionDefaults(actualModel, viewId)
   }
@@ -665,9 +644,11 @@ export class AizenCore implements CorePort {
    * 打开会话首先是纯本地历史操作。即使当前模型或视图已经失效，
    * 对话记录也必须可见；无法重建 pi 内存会话时只禁止发送新消息。
    */
-  async #openSession(sessionId: string): Promise<void> {
+  async #openSession(sessionIdentity: string, force = false): Promise<void> {
     this.#sessionNamingAbort?.abort()
-    const loaded = await this.#store.open(sessionId)
+    const forced = force ? await this.#store.forceOpen(sessionIdentity) : undefined
+    const loaded = forced ?? (await this.#store.open(sessionIdentity))
+    const sessionId = loaded.header.sessionId
     try {
       const previousCwd = this.#effectiveWorkingDirectory(loaded.header.cwd, loaded.records)
       if (normalizeProjectPath(previousCwd) !== normalizeProjectPath(this.#cwd)) {
@@ -694,7 +675,6 @@ export class AizenCore implements CorePort {
       this.#sessionInitialCwd = this.#originalWorkingDirectory(loaded.header.cwd, loaded.records)
       this.#writeError = undefined
       this.#snapshot.currentSessionId = sessionId
-      this.#snapshot.currentSessionReadOnly = false
       this.#sessionNamingAttempted = false
       const renamedRecord = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
       this.#snapshot.currentSessionName = renamedRecord?.kind === "session_renamed" ? renamedRecord.name : ""
@@ -724,66 +704,13 @@ export class AizenCore implements CorePort {
         this.#reportError("检测到上次异常退出时存在未完成的工具调用；已记录中断状态，未自动重试")
       await this.#tryRememberSessionDefaults(this.#snapshot.currentModel, viewRecord.viewId)
       await this.#store.activate(sessionId)
-      this.#snapshot.sessions = (await this.#store.list()).entries
-      const currentEntryId = this.#snapshot.sessions.find((session) => session.sessionId === sessionId)?.entryId
-      if (currentEntryId) this.#snapshot.currentSessionEntryId = currentEntryId
-      else delete this.#snapshot.currentSessionEntryId
+      this.#snapshot.sessions = await this.#store.list()
       this.#reportStoreWarnings()
+      if (forced && forced.issues.length > 0) this.#reportError(forced.issues.map((issue) => issue.message).join("；"))
     } catch (error) {
       await this.#store.close(sessionId).catch(() => {})
       throw error
     }
-  }
-
-  /**
-   * 强制打开只投影当前能够严格识别的记录，不获取租约、不修复文件，也不恢复运行时。
-   * 原文件始终保持不变。
-   */
-  async #forceOpenSession(entryId: string): Promise<void> {
-    this.#sessionNamingAbort?.abort()
-    const loaded = await this.#store.forceRead(entryId)
-    await this.#store.close()
-    this.#records = loaded.records
-    this.#sessionInitialCwd = loaded.header.cwd
-    this.#writeError = undefined
-    this.#snapshot.currentSessionId = loaded.header.sessionId
-    this.#snapshot.currentSessionEntryId = entryId
-    this.#snapshot.currentSessionReadOnly = true
-    const renamed = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
-    this.#snapshot.currentSessionName = renamed?.kind === "session_renamed" ? renamed.name : ""
-    const modelRecord = [...loaded.records].reverse().find((record) => record.kind === "model_changed")
-    const viewRecord = [...loaded.records].reverse().find((record) => record.kind === "view_changed")
-    if (modelRecord?.kind === "model_changed") this.#snapshot.currentModel = modelRecord.model
-    else delete this.#snapshot.currentModel
-    if (viewRecord?.kind === "view_changed") this.#snapshot.currentViewId = viewRecord.viewId
-    else delete this.#snapshot.currentViewId
-    const permissionSettings = [...loaded.records]
-      .reverse()
-      .find((record) => record.kind === "permission_settings_changed")
-    if (permissionSettings?.kind === "permission_settings_changed") {
-      this.#snapshot.currentPermissionPreset = permissionSettings.preset
-      this.#snapshot.currentPermissionReviewMode = permissionSettings.reviewMode
-    } else {
-      delete this.#snapshot.currentPermissionPreset
-      delete this.#snapshot.currentPermissionReviewMode
-    }
-    this.#snapshot.pendingPermissionRequests = []
-    this.#snapshot.transcript = recordsToTranscript(projectVisibleSessionRecords(loaded.records))
-    this.#snapshot.streamingText = ""
-    this.#snapshot.streamingThinking = ""
-    delete this.#snapshot.responseMetrics
-    this.#snapshot.contextUsage = this.#contextUsageFromRecords()
-    this.#snapshot.runtimeIssue = { kind: "session", message: "当前会话以只读方式打开；请恢复为新会话后继续" }
-    this.#snapshot.sessions = (await this.#store.list()).entries
-    if (loaded.issues.length > 0) this.#reportError(loaded.issues.map((issue) => issue.message).join("；"))
-  }
-
-  /** 从强制读取出的当前格式记录创建全新的可写会话，原文件保持不变。 */
-  async #recoverSession(entryId: string): Promise<void> {
-    const loaded = await this.#store.forceRead(entryId)
-    const at = new Date().toISOString()
-    const header = await this.#store.createGeneratedAndOpen({ cwd: loaded.header.cwd, createdAt: at }, loaded.records)
-    await this.#openSession(header.sessionId)
   }
 
   #recoverInterruptedTools(records: SessionRecord[]): SessionRecord[] {
@@ -807,7 +734,6 @@ export class AizenCore implements CorePort {
     this.#records = records
     this.#writeError = undefined
     this.#snapshot.currentSessionId = sessionId
-    this.#snapshot.currentSessionReadOnly = false
     this.#snapshot.currentSessionName = name
     if (resetNamingOpportunity) {
       this.#sessionNamingAbort?.abort()
@@ -915,7 +841,7 @@ export class AizenCore implements CorePort {
     const records = this.#recordsBeforeTurn(turnId, name)
     await this.#store.rewrite(sessionId, this.#records, records)
     await this.#activateRecords(sessionId, records, name, false)
-    this.#snapshot.sessions = (await this.#store.list()).entries
+    this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
   }
 
@@ -933,16 +859,14 @@ export class AizenCore implements CorePort {
     await this.#store.activate(sessionId)
     this.#sessionInitialCwd = this.#originalWorkingDirectory(header.cwd, records)
     await this.#activateRecords(sessionId, records, name, true)
-    this.#snapshot.sessions = (await this.#store.list()).entries
-    const currentEntryId = this.#snapshot.sessions.find((session) => session.sessionId === sessionId)?.entryId
-    if (currentEntryId) this.#snapshot.currentSessionEntryId = currentEntryId
-    else delete this.#snapshot.currentSessionEntryId
+    this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
   }
 
   async #renameSession(sessionId: string, name: string): Promise<void> {
     const normalizedName = name.trim()
-    await this.#store.read(sessionId)
+    const target = (await this.#store.list()).find((session) => session.sessionId === sessionId)
+    if (!target?.capabilities.canWrite) throw new Error(`会话当前不可写：${sessionId}`)
     const record: SessionRecord = {
       kind: "session_renamed",
       recordId: crypto.randomUUID(),
@@ -951,7 +875,7 @@ export class AizenCore implements CorePort {
     }
     await this.#appendRecord(sessionId, record)
     if (this.#snapshot.currentSessionId === sessionId) this.#snapshot.currentSessionName = normalizedName
-    this.#snapshot.sessions = (await this.#store.list()).entries
+    this.#snapshot.sessions = await this.#store.list()
     this.#reportStoreWarnings()
   }
 
@@ -1564,7 +1488,7 @@ export class AizenCore implements CorePort {
         }
         await this.#appendRecord(sessionId, record)
         this.#snapshot.currentSessionName = name
-        this.#snapshot.sessions = (await this.#store.list()).entries
+        this.#snapshot.sessions = await this.#store.list()
         this.#reportStoreWarnings()
         this.#notify()
       })

@@ -7,7 +7,6 @@ import { loadSkillsFromDir } from "@earendil-works/pi-coding-agent"
 
 import { atomicWriteFile, withFileLock } from "./file-transaction.ts"
 import { fetchRepo, type FetchRepo } from "./git-fetch.ts"
-import { type CatalogEntry, type CatalogResult, defineIssues, healthyCapabilities } from "./resource-catalog.ts"
 
 /** 已安装的第三方 skill：name 为身份主键，sourceUrl/ref/relPath 仅描述下载与更新来源。 */
 export type InstalledSkill = {
@@ -17,12 +16,6 @@ export type InstalledSkill = {
   relPath: string
   description?: string
 }
-
-export type InstalledSkillEntry = InstalledSkill & CatalogEntry
-
-const skillIssues = defineIssues({
-  "skill.source_unavailable": { category: "io", label: "来源缺失" },
-})
 
 export type DiscoveredSkill = {
   name: string
@@ -115,27 +108,8 @@ export class SkillStore {
     }
   }
 
-  async list(): Promise<CatalogResult<InstalledSkillEntry>> {
-    const entries = (await this.#read()).skills.map((skill): InstalledSkillEntry => {
-      const available = existsSync(this.#skillDirectory(skill))
-      if (available)
-        return {
-          ...skill,
-          entryId: skill.name,
-          state: "healthy",
-          issues: [],
-          capabilities: { ...healthyCapabilities },
-        }
-      const issue = skillIssues.create("skill.source_unavailable", `Skill 来源目录不存在：${skill.name}`)
-      return {
-        ...skill,
-        entryId: skill.name,
-        state: "unavailable",
-        issues: [issue],
-        capabilities: { canOpen: false, canWrite: true, canForceOpen: false, canRecover: true },
-      }
-    })
-    return { entries, issues: [] }
+  async list(): Promise<InstalledSkill[]> {
+    return (await this.#read()).skills
   }
 
   hasName(name: string): Promise<boolean> {

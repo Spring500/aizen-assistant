@@ -28,7 +28,7 @@ function entry(sessionId: string) {
       preview: sessionId,
       state: "healthy" as const,
       issues: [],
-      capabilities: { canOpen: true, canWrite: true, canForceOpen: false, canRecover: false },
+      capabilities: { canOpen: true, canWrite: true, canForceOpen: false },
     },
   }
 }

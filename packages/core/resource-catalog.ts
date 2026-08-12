@@ -1,36 +1,10 @@
-/** 持久化资源条目的总体状态；具体行为必须读取 capabilities，不能由状态或错误码推断。 */
-export type EntryState = "healthy" | "degraded" | "unavailable"
-
-export type ResourceIssueCategory = "syntax" | "integrity" | "incomplete" | "conflict" | "io" | "availability"
-
 export type ResourceIssueDefinition = {
-  category: ResourceIssueCategory
   label: string
 }
 
 export type ResourceIssue = ResourceIssueDefinition & {
   code: string
   message: string
-}
-
-/** 交互层只能依据这些能力决定可用操作。 */
-export type ResourceCapabilities = {
-  canOpen: boolean
-  canWrite: boolean
-  canForceOpen: boolean
-  canRecover: boolean
-}
-
-export type CatalogEntry = {
-  entryId: string
-  state: EntryState
-  issues: ResourceIssue[]
-  capabilities: ResourceCapabilities
-}
-
-export type CatalogResult<T extends CatalogEntry> = {
-  entries: T[]
-  issues: ResourceIssue[]
 }
 
 type IssueDefinitions = Record<string, ResourceIssueDefinition>
@@ -52,11 +26,4 @@ export function defineIssues<const Definitions extends IssueDefinitions>(definit
       return { code, ...definition, message }
     },
   }
-}
-
-export const healthyCapabilities: ResourceCapabilities = {
-  canOpen: true,
-  canWrite: true,
-  canForceOpen: false,
-  canRecover: false,
 }

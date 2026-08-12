@@ -1,6 +1,7 @@
 import { readFile, readdir, rm } from "node:fs/promises"
 import { dirname } from "node:path"
 import { atomicWriteFile, withFileLock } from "./file-transaction.ts"
+import { sessionIssues } from "./session-issues.ts"
 import type { SessionSummary } from "./session-store.ts"
 
 export type SessionIndexEntry = {
@@ -40,15 +41,15 @@ function validEntry(value: unknown): value is SessionIndexEntry {
       (issue) =>
         !!issue &&
         typeof issue.code === "string" &&
-        typeof issue.category === "string" &&
+        sessionIssues.has(issue.code) &&
         typeof issue.label === "string" &&
+        issue.label === sessionIssues.definitions[issue.code].label &&
         typeof issue.message === "string",
     ) &&
     !!summary.capabilities &&
     typeof summary.capabilities.canOpen === "boolean" &&
     typeof summary.capabilities.canWrite === "boolean" &&
-    typeof summary.capabilities.canForceOpen === "boolean" &&
-    typeof summary.capabilities.canRecover === "boolean"
+    typeof summary.capabilities.canForceOpen === "boolean"
   )
 }
 

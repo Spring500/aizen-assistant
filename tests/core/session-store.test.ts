@@ -11,6 +11,44 @@ const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const temporaryDirectories: string[] = []
 
+function incompatibleSession(sessionId = "incompatible"): string {
+  return [
+    JSON.stringify({
+      kind: "session",
+      version: 1,
+      sessionId,
+      cwd: "E:\\project",
+      createdAt: "2026-07-23T10:00:00.000Z",
+    }),
+    JSON.stringify({
+      kind: "model_changed",
+      recordId: "model",
+      at: "2026-07-23T10:00:00.000Z",
+      model: { providerId: "test", modelId: "test" },
+    }),
+    JSON.stringify({
+      kind: "view_changed",
+      recordId: "view",
+      at: "2026-07-23T10:00:00.000Z",
+      viewId: null,
+    }),
+    JSON.stringify({ kind: "permission_mode_changed", permissionMode: "unrestricted" }),
+    "",
+  ].join("\n")
+}
+
+class LeaseRacingStore extends SessionStore {
+  afterNextList: (() => Promise<void>) | undefined
+
+  override async list() {
+    const summaries = await super.list()
+    const afterList = this.afterNextList
+    this.afterNextList = undefined
+    if (afterList) await afterList()
+    return summaries
+  }
+}
+
 async function makeStore(indexed = false): Promise<{ root: string; store: SessionStore; indexPath?: string }> {
   const root = await mkdtemp(join(tmpdir(), "aizen-session-"))
   temporaryDirectories.push(root)
@@ -35,12 +73,12 @@ describe("会话存储", () => {
     await first.create({ sessionId: "s1", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" })
     await first.open("s1")
 
-    expect((await first.list()).entries[0]?.lockState).toBe("current")
-    expect((await second.list()).entries[0]?.lockState).toBe("occupied")
+    expect((await first.list())[0]?.lockState).toBe("current")
+    expect((await second.list())[0]?.lockState).toBe("occupied")
     await expect(second.open("s1")).rejects.toBeInstanceOf(SessionLockedError)
     await first.close()
     await expect(second.open("s1")).resolves.toBeDefined()
-    expect((await second.list()).entries[0]?.lockState).toBe("current")
+    expect((await second.list())[0]?.lockState).toBe("current")
     await second.close()
   })
 
@@ -114,7 +152,7 @@ describe("会话存储", () => {
       second.createGenerated({ cwd: "E:\\project", createdAt: "2026-07-23T10:00:01.000Z" }, []),
     ])
     expect(left.sessionId).not.toBe(right.sessionId)
-    expect((await first.list()).entries.map((session) => session.sessionId).sort()).toEqual(
+    expect((await first.list()).map((session) => session.sessionId).sort()).toEqual(
       [left.sessionId, right.sessionId].sort(),
     )
   })
@@ -145,7 +183,7 @@ describe("会话存储", () => {
     await rename(join(root, sessionFileName(createdAt, "s1")), join(root, "用户任意命名.jsonl"))
 
     const reopened = new SessionStore(root)
-    expect((await reopened.list()).entries[0]?.sessionId).toBe("s1")
+    expect((await reopened.list())[0]?.sessionId).toBe("s1")
     await reopened.append("s1", {
       kind: "session_renamed",
       recordId: "r1",
@@ -163,10 +201,11 @@ describe("会话存储", () => {
       join(root, "复制文件.jsonl"),
       `${JSON.stringify({ kind: "session", version: 1, sessionId: "s1", cwd: "E:\\project", createdAt })}\n`,
     )
-    const listed = (await store.list()).entries
+    const listed = await store.list()
     expect(listed).toHaveLength(2)
     expect(listed.every((entry) => entry.issues.some((issue) => issue.code === "session.id_conflict"))).toBe(true)
     expect(listed.every((entry) => entry.capabilities.canOpen === false)).toBe(true)
+    expect(listed.every((entry) => entry.capabilities.canForceOpen === false)).toBe(true)
   })
 
   test("列表读取名称和第一条用户输入并按更新时间倒序", async () => {
@@ -194,7 +233,7 @@ describe("会话存储", () => {
       await Bun.sleep(10)
     }
 
-    const listed = (await store.list()).entries
+    const listed = await store.list()
     expect(listed.map((item) => item.sessionId)).toEqual(["s2", "s1"])
     expect(listed[0]).toMatchObject({ name: "第二个会话", preview: "第二项" })
     expect(listed[1]?.name).toBe("")
@@ -204,30 +243,81 @@ describe("会话存储", () => {
     const { root, store } = await makeStore()
     await store.create({ sessionId: "healthy", cwd: "E:\\project", createdAt: "2026-07-23T10:00:00.000Z" })
     const incompatible = join(root, "incompatible.jsonl")
-    await writeFile(
-      incompatible,
-      [
-        JSON.stringify({
-          kind: "session",
-          version: 1,
-          sessionId: "incompatible",
-          cwd: "E:\\project",
-          createdAt: "2026-07-23T10:00:00.000Z",
-        }),
-        JSON.stringify({ kind: "permission_mode_changed", permissionMode: "unrestricted" }),
-        "",
-      ].join("\n"),
-    )
+    await writeFile(incompatible, incompatibleSession())
 
-    const listed = (await store.list()).entries
+    const listed = await store.list()
     const bad = listed.find((entry) => entry.sessionId === "incompatible")
-    expect(bad?.issues.map((issue) => issue.code)).toContain("session.record_validation_failed")
-    expect(bad?.capabilities).toMatchObject({ canOpen: false, canForceOpen: true, canRecover: true })
+    expect(bad?.issues.map((issue) => issue.code)).toContain("session.incompatible_record")
+    expect(bad?.capabilities).toMatchObject({ canOpen: false, canForceOpen: true })
     expect(await store.open("healthy")).toBeDefined()
     await store.close("healthy")
     await expect(
       store.create({ sessionId: "new-session", cwd: "E:\\project", createdAt: "2026-07-23T10:01:00.000Z" }),
     ).resolves.toBeDefined()
+  })
+
+  test("不兼容会话被占用时只显示使用中且不能强制打开", async () => {
+    const { root } = await makeStore()
+    await writeFile(join(root, "incompatible.jsonl"), incompatibleSession())
+    const first = new SessionStore(root)
+    const second = new SessionStore(root)
+
+    await first.forceOpen("incompatible.jsonl")
+    await first.activate("incompatible")
+    const listed = (await second.list())[0]
+    expect(listed?.lockState).toBe("occupied")
+    expect(listed?.issues.map((issue) => issue.code)).toContain("session.in_use")
+    expect(listed?.capabilities).toEqual({ canOpen: false, canWrite: false, canForceOpen: false })
+    await first.close()
+  })
+
+  test("强制打开在列表后租约被抢占时返回占用错误", async () => {
+    const { root } = await makeStore()
+    await writeFile(join(root, "incompatible.jsonl"), incompatibleSession())
+    const racing = new LeaseRacingStore(root)
+    const competing = new SessionStore(root)
+    racing.afterNextList = async () => {
+      await competing.forceOpen("incompatible.jsonl")
+      await competing.activate("incompatible")
+    }
+
+    await expect(racing.forceOpen("incompatible.jsonl")).rejects.toBeInstanceOf(SessionLockedError)
+    await competing.close()
+  })
+
+  test("强制打开后原条目保持不兼容但当前实例可以写入", async () => {
+    const { root, store } = await makeStore()
+    await writeFile(join(root, "incompatible.jsonl"), incompatibleSession())
+
+    await store.forceOpen("incompatible.jsonl")
+    await store.activate("incompatible")
+    const current = (await store.list())[0]
+    expect(current?.lockState).toBe("current")
+    expect(current?.issues.map((issue) => issue.code)).toContain("session.incompatible_record")
+    expect(current?.capabilities).toEqual({ canOpen: false, canWrite: true, canForceOpen: false })
+    await store.close()
+  })
+
+  test("内容损坏、字段损坏和 ID 冲突均不能强制打开", async () => {
+    const { root, store } = await makeStore()
+    const createdAt = "2026-07-23T10:00:00.000Z"
+    const header = (sessionId: string) =>
+      JSON.stringify({ kind: "session", version: 1, sessionId, cwd: "E:\\project", createdAt })
+    await writeFile(join(root, "invalid-json.jsonl"), `${header("invalid-json")}\nnot-json\n`)
+    await writeFile(
+      join(root, "invalid-record.jsonl"),
+      `${header("invalid-record")}\n${JSON.stringify({ kind: "model_changed", recordId: "model" })}\n`,
+    )
+    await writeFile(join(root, "duplicate-a.jsonl"), `${header("duplicate")}\n`)
+    await writeFile(join(root, "duplicate-b.jsonl"), `${header("duplicate")}\n`)
+
+    const listed = await store.list()
+    for (const entry of listed) expect(entry.capabilities.canForceOpen).toBe(false)
+    expect(listed.find((entry) => entry.entryId === "invalid-json.jsonl")?.issues[0]?.code).toBe("session.invalid_json")
+    expect(listed.find((entry) => entry.entryId === "invalid-record.jsonl")?.issues[0]?.code).toBe(
+      "session.record_validation_failed",
+    )
+    expect(listed.filter((entry) => entry.sessionId === "duplicate")).toHaveLength(2)
   })
 
   test("语法损坏与不完整尾行返回不同状态", async () => {
@@ -242,7 +332,7 @@ describe("会话存储", () => {
     await writeFile(join(root, "damaged.jsonl"), `${header}\nnot-json\n`)
     await writeFile(join(root, "incomplete.jsonl"), `${header.replace("damaged", "incomplete")}\n{`)
 
-    const listed = (await store.list()).entries
+    const listed = await store.list()
     expect(listed.find((entry) => entry.sessionId === "damaged")?.issues[0]?.code).toBe("session.invalid_json")
     const incomplete = listed.find((entry) => entry.sessionId === "incomplete")
     expect(incomplete?.issues[0]?.code).toBe("session.incomplete_tail")
@@ -261,19 +351,19 @@ describe("会话存储", () => {
       viewId: null,
       items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "初始预览" }] }],
     })
-    expect((await store.list()).entries[0]?.preview).toBe("初始预览")
+    expect((await store.list())[0]?.preview).toBe("初始预览")
     expect(JSON.parse(await readFile(indexPath, "utf8"))).toMatchObject({ version: 1 })
 
     await writeFile(indexPath, "损坏缓存")
-    expect((await store.list()).entries[0]?.preview).toBe("初始预览")
+    expect((await store.list())[0]?.preview).toBe("初始预览")
     await writeFile(indexPath, JSON.stringify({ version: 1, projects: { broken: { s1: {} } } }))
-    expect((await store.list()).entries[0]?.preview).toBe("初始预览")
+    expect((await store.list())[0]?.preview).toBe("初始预览")
 
     await store.append("s1", { kind: "session_renamed", recordId: "r2", at: new Date().toISOString(), name: "新名称" })
-    expect((await store.list()).entries[0]?.name).toBe("新名称")
+    expect((await store.list())[0]?.name).toBe("新名称")
 
     await rm(join(root, sessionFileName("2026-07-23T10:00:00.000Z", "s1")))
-    expect((await store.list()).entries).toEqual([])
+    expect(await store.list()).toEqual([])
     const repaired = JSON.parse(await readFile(indexPath, "utf8"))
     expect(Object.values(repaired.projects)[0]).toEqual({})
   })
@@ -299,5 +389,28 @@ describe("会话存储", () => {
     const originalHeader = (await readFile(file, "utf8")).split("\n")[0]
     await writeFile(file, `${originalHeader}\nnot-json\n{"kind":"turn_finished"}`)
     await expect(store.read("s1")).rejects.toThrow("第 2 行")
+  })
+
+  test("追加时保留合法但没有末尾换行的最后一条记录", async () => {
+    const { root, store } = await makeStore()
+    const createdAt = "2026-07-23T10:00:00.000Z"
+    await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt })
+    const file = join(root, sessionFileName(createdAt, "s1"))
+    const first = {
+      kind: "session_renamed" as const,
+      recordId: "first",
+      at: "2026-07-23T10:00:01.000Z",
+      name: "第一条",
+    }
+    await appendFile(file, JSON.stringify(first))
+
+    await store.append("s1", {
+      kind: "session_renamed",
+      recordId: "second",
+      at: "2026-07-23T10:00:02.000Z",
+      name: "第二条",
+    })
+    expect((await store.read("s1")).records.map((record) => record.recordId)).toEqual(["first", "second"])
+    expect(await readFile(file, "utf8")).toContain(`${JSON.stringify(first)}\n`)
   })
 })

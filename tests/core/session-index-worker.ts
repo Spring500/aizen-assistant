@@ -18,7 +18,7 @@ const warnings = await store.updateProject(project, {
       preview: session,
       state: "healthy",
       issues: [],
-      capabilities: { canOpen: true, canWrite: true, canForceOpen: false, canRecover: false },
+      capabilities: { canOpen: true, canWrite: true, canForceOpen: false },
     },
   },
 })

@@ -42,19 +42,7 @@ class ViewsCore implements CorePort {
     streamingThinking: "",
   }
   constructor(directory: string) {
-    this.snapshot.views = [
-      {
-        id: "standard",
-        name: "标准视图",
-        path: directory,
-        directory,
-        valid: true,
-        entryId: "standard",
-        state: "healthy",
-        issues: [],
-        capabilities: { canOpen: true, canWrite: true, canForceOpen: false, canRecover: false },
-      },
-    ]
+    this.snapshot.views = [{ id: "standard", name: "标准视图", path: directory, directory, valid: true }]
   }
   async dispatch(_command: CoreCommand) {
     return { ok: true as const }

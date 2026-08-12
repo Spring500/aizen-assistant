@@ -9,7 +9,6 @@ test("Issue 定义表同时提供创建与运行时 code 校验", () => {
   expect(sessionIssues.has("session.not_registered")).toBe(false)
   expect(sessionIssues.create("session.invalid_json", "内容无法解析")).toEqual({
     code: "session.invalid_json",
-    category: "syntax",
     label: "内容损坏",
     message: "内容无法解析",
   })

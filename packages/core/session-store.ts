@@ -3,7 +3,6 @@ import { mkdir, open, readdir, readFile, stat } from "node:fs/promises"
 import { basename, join } from "node:path"
 import { acquireFileLock, atomicWriteFile, isFileLocked, withFileLock } from "./file-transaction.ts"
 import { type MnemonicIdGenerator, WordTripletIdGenerator } from "./mnemonic-id.ts"
-import { type CatalogEntry, type CatalogResult, healthyCapabilities, type ResourceIssue } from "./resource-catalog.ts"
 import { sessionFileName } from "./session-file-name.ts"
 import {
   parseSessionValue,
@@ -11,9 +10,10 @@ import {
   type SessionLine,
   type SessionRecord,
   type TurnStartedRecord,
+  UnknownSessionRecordTypeError,
 } from "./session-format.ts"
 import { type SessionIndexEntry, SessionIndexStore } from "./session-index-store.ts"
-import { sessionIssues } from "./session-issues.ts"
+import { type SessionIssue, sessionIssues } from "./session-issues.ts"
 
 export type SessionLockState = "available" | "occupied" | "current"
 
@@ -28,13 +28,25 @@ export class SessionLockedError extends Error {
 /** 待追加的记录本身不合法（区别于底层存储故障）。调用方可选择单条降级，不应锁死整个会话。 */
 export class InvalidSessionRecordError extends Error {}
 
-export type SessionSummary = CatalogEntry & {
+export type SessionEntryState = "healthy" | "degraded" | "unavailable"
+
+export type SessionCapabilities = {
+  canOpen: boolean
+  canWrite: boolean
+  canForceOpen: boolean
+}
+
+export type SessionSummary = {
+  entryId: string
   sessionId: string
   name: string
   cwd: string
   createdAt: string
   updatedAt: string
   preview: string
+  state: SessionEntryState
+  issues: SessionIssue[]
+  capabilities: SessionCapabilities
   lockState?: SessionLockState
 }
 
@@ -44,8 +56,8 @@ export type LoadedSession = {
   warnings: string[]
 }
 
-export type SalvagedSession = LoadedSession & {
-  issues: ResourceIssue[]
+export type ForcedSession = LoadedSession & {
+  issues: SessionIssue[]
 }
 
 type InspectedSession = {
@@ -263,15 +275,36 @@ export class SessionStore {
     return this.#readPath(await this.#sessionPath(sessionId))
   }
 
-  /** 按目录条目读取可恢复的当前格式记录；不获取写租约，也不允许调用方原地追加。 */
-  async forceRead(entryId: string): Promise<SalvagedSession> {
-    const catalogEntry = (await this.list()).entries.find((entry) => entry.entryId === entryId)
+  /** 按目录条目强制打开原会话；取得写租约后再次检查，避免使用过期的列表结论。 */
+  async forceOpen(entryId: string): Promise<ForcedSession> {
+    const catalogEntry = (await this.list()).find((entry) => entry.entryId === entryId)
     if (!catalogEntry?.capabilities.canForceOpen) throw new Error(`会话条目不可强制打开：${entryId}`)
     const path = await this.#entryPath(entryId)
-    const fileStatus = await stat(path)
-    const inspected = await this.#inspectPath(path, entryId, fileStatus)
-    if (!inspected.loaded) throw new Error(`会话条目不可强制打开：${entryId}`)
-    return { ...inspected.loaded, issues: catalogEntry.issues }
+    const beforeLock = await this.#inspectPath(path, entryId, await stat(path))
+    const sessionId = beforeLock.loaded?.header.sessionId
+    if (!sessionId || !beforeLock.summary.capabilities.canForceOpen) throw new Error(`会话条目不可强制打开：${entryId}`)
+    let release: () => Promise<void>
+    try {
+      release = await acquireFileLock(this.#lockPath(sessionId), { retries: 0 })
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ELOCKED") throw new SessionLockedError(sessionId)
+      throw error
+    }
+    try {
+      const inspected = await this.#inspectPath(path, entryId, await stat(path))
+      if (
+        !inspected.loaded ||
+        inspected.loaded.header.sessionId !== sessionId ||
+        !inspected.summary.capabilities.canForceOpen
+      )
+        throw new Error(`会话条目不可强制打开：${entryId}`)
+      this.#leases.set(sessionId, release)
+      this.#paths.set(sessionId, path)
+      return { ...inspected.loaded, issues: inspected.summary.issues }
+    } catch (error) {
+      await release().catch(() => {})
+      throw error
+    }
   }
 
   async #readPath(path: string): Promise<LoadedSession> {
@@ -293,11 +326,9 @@ export class SessionStore {
     const lastNewline = contents.lastIndexOf(0x0a)
     const tail = contents.subarray(lastNewline + 1).toString("utf8")
     try {
-      parseSessionValue(JSON.parse(tail))
+      JSON.parse(tail)
       return "\n"
     } catch (error) {
-      if (!(error instanceof SyntaxError))
-        throw new Error(`会话文件最后一行不兼容，拒绝追加：${error instanceof Error ? error.message : String(error)}`)
       const file = await open(path, "r+")
       try {
         await file.truncate(lastNewline + 1)
@@ -341,7 +372,7 @@ export class SessionStore {
           ...base,
           state: "unavailable",
           issues: [issue],
-          capabilities: { canOpen: false, canWrite: false, canForceOpen: false, canRecover: false },
+          capabilities: { canOpen: false, canWrite: false, canForceOpen: false },
         },
       }
     }
@@ -349,7 +380,7 @@ export class SessionStore {
     const rawLines = contents.split("\n")
     const terminated = rawLines.at(-1) === ""
     if (terminated) rawLines.pop()
-    const issues: ResourceIssue[] = []
+    const issues: SessionIssue[] = []
     const warnings: string[] = []
     let header: SessionHeader | undefined
     const records: SessionRecord[] = []
@@ -370,9 +401,13 @@ export class SessionStore {
       try {
         parsed = parseSessionValue(value)
       } catch (error) {
+        const code =
+          error instanceof UnknownSessionRecordTypeError
+            ? "session.incompatible_record"
+            : "session.record_validation_failed"
         issues.push(
           sessionIssues.create(
-            "session.record_validation_failed",
+            code,
             `会话文件第 ${index + 1} 行无效：${error instanceof Error ? error.message : String(error)}`,
           ),
         )
@@ -389,17 +424,26 @@ export class SessionStore {
       }
       records.push(parsed)
     }
-    if (!header && !issues.some((issue) => issue.category === "incomplete"))
+    if (!header && !issues.some((issue) => issue.code === "session.incomplete_tail"))
       issues.push(sessionIssues.create("session.record_validation_failed", "会话文件缺少有效文件头"))
 
-    const onlyIncomplete = issues.length > 0 && issues.every((issue) => issue.category === "incomplete")
+    const onlyIncomplete = issues.length > 0 && issues.every((issue) => issue.code === "session.incomplete_tail")
+    const containsIncompatible = issues.some((issue) => issue.code === "session.incompatible_record")
+    const onlyIgnorable = issues.every(
+      (issue) => issue.code === "session.incompatible_record" || issue.code === "session.incomplete_tail",
+    )
+    const hasRuntimeSettings =
+      records.some((record) => record.kind === "model_changed") &&
+      records.some((record) => record.kind === "view_changed")
     const capabilities = header
       ? issues.length === 0
-        ? { ...healthyCapabilities }
+        ? { canOpen: true, canWrite: true, canForceOpen: false }
         : onlyIncomplete
-          ? { canOpen: true, canWrite: true, canForceOpen: false, canRecover: false }
-          : { canOpen: false, canWrite: false, canForceOpen: true, canRecover: true }
-      : { canOpen: false, canWrite: false, canForceOpen: false, canRecover: false }
+          ? { canOpen: true, canWrite: true, canForceOpen: false }
+          : containsIncompatible && onlyIgnorable && hasRuntimeSettings
+            ? { canOpen: false, canWrite: false, canForceOpen: true }
+            : { canOpen: false, canWrite: false, canForceOpen: false }
+      : { canOpen: false, canWrite: false, canForceOpen: false }
     const firstTurn = records.find((record): record is TurnStartedRecord => record.kind === "turn_started")
     const renamed = [...records].reverse().find((record) => record.kind === "session_renamed")
     const summary: SessionSummary = {
@@ -423,7 +467,7 @@ export class SessionStore {
     }
   }
 
-  async list(): Promise<CatalogResult<SessionSummary>> {
+  async list(): Promise<SessionSummary[]> {
     await mkdir(this.root, { recursive: true })
     const previous = (await this.#index?.readProject(this.#projectKey)) ?? {}
     const current: Record<string, SessionIndexEntry> = {}
@@ -452,7 +496,7 @@ export class SessionStore {
           preview: "无法读取会话摘要",
           state: "unavailable",
           issues: [issue],
-          capabilities: { canOpen: false, canWrite: false, canForceOpen: false, canRecover: false },
+          capabilities: { canOpen: false, canWrite: false, canForceOpen: false },
         })
         continue
       }
@@ -479,12 +523,19 @@ export class SessionStore {
 
     const bySessionId = new Map<string, SessionSummary[]>()
     for (const summary of summaries) {
-      const group = bySessionId.get(summary.sessionId) ?? []
+      const normalizedSessionId = summary.sessionId.toLowerCase()
+      const group = bySessionId.get(normalizedSessionId) ?? []
       group.push(summary)
-      bySessionId.set(summary.sessionId, group)
+      bySessionId.set(normalizedSessionId, group)
     }
-    for (const [sessionId, group] of bySessionId) {
+    const lockableSessionIds = new Set(
+      summaries
+        .filter((summary) => summary.capabilities.canOpen || summary.capabilities.canForceOpen)
+        .map((summary) => summary.sessionId),
+    )
+    for (const group of bySessionId.values()) {
       if (group.length < 2) continue
+      const sessionId = group[0]?.sessionId ?? ""
       for (const summary of group) {
         summary.issues = [
           ...summary.issues,
@@ -494,8 +545,7 @@ export class SessionStore {
         summary.capabilities = {
           canOpen: false,
           canWrite: false,
-          canForceOpen: summary.capabilities.canOpen || summary.capabilities.canForceOpen,
-          canRecover: summary.capabilities.canOpen || summary.capabilities.canRecover,
+          canForceOpen: false,
         }
       }
     }
@@ -510,29 +560,49 @@ export class SessionStore {
       }
     }
     const lockStates = await Promise.all(
-      summaries
-        .filter((summary) => summary.capabilities.canOpen)
-        .map(async (summary) => {
-          const locked = await isFileLocked(this.#lockPath(summary.sessionId))
-          return [
-            summary.sessionId,
-            locked ? (this.#currentSessionId === summary.sessionId ? "current" : "occupied") : "available",
-          ] as const
-        }),
+      [...lockableSessionIds].map(async (sessionId) => {
+        try {
+          const locked = await isFileLocked(this.#lockPath(sessionId))
+          return {
+            sessionId,
+            state: locked ? (this.#currentSessionId === sessionId ? "current" : "occupied") : "available",
+          } as const
+        } catch (error) {
+          return {
+            sessionId,
+            error: `读取会话占用状态失败：${error instanceof Error ? error.message : String(error)}`,
+          } as const
+        }
+      }),
     )
-    const states = new Map(lockStates)
+    const states = new Map(lockStates.map((result) => [result.sessionId, result] as const))
     for (const summary of summaries) {
-      summary.lockState = states.get(summary.sessionId) ?? "available"
-      if (summary.lockState !== "occupied") continue
-      summary.issues = [
-        ...summary.issues,
-        sessionIssues.create("session.in_use", `会话正在被其他 Agent 使用：${summary.sessionId}`),
-      ]
-      summary.state = "unavailable"
-      summary.capabilities = { canOpen: false, canWrite: false, canForceOpen: false, canRecover: false }
+      const lock = states.get(summary.sessionId)
+      if (lock && "error" in lock) {
+        summary.issues = [...summary.issues, sessionIssues.create("session.read_failed", lock.error)]
+        summary.state = "unavailable"
+        summary.capabilities = { canOpen: false, canWrite: false, canForceOpen: false }
+        continue
+      }
+      summary.lockState = lock?.state ?? "available"
+      if (summary.lockState === "occupied") {
+        summary.issues = [
+          ...summary.issues,
+          sessionIssues.create("session.in_use", `会话正在被其他 Agent 使用：${summary.sessionId}`),
+        ]
+        summary.state = "unavailable"
+        summary.capabilities = { canOpen: false, canWrite: false, canForceOpen: false }
+      } else if (summary.lockState === "current" && summary.capabilities.canForceOpen) {
+        // 强制打开不会改变文件格式；当前实例可以继续写入，但它仍不满足普通打开条件。
+        summary.capabilities = { canOpen: false, canWrite: true, canForceOpen: false }
+      }
+      if (summary.lockState === "current" && summary.capabilities.canWrite) {
+        const path = entryPaths.get(summary.entryId)
+        if (path) this.#paths.set(summary.sessionId, path)
+      }
     }
     this.#warnings = this.#index ? await this.#index.updateProject(this.#projectKey, current) : []
-    return { entries: summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt)), issues: [] }
+    return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   }
 
   async #refreshPaths(): Promise<void> {
