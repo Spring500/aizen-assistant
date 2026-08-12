@@ -34,7 +34,7 @@ async function createZip(stagingDir: string, zipPath: string): Promise<void> {
 async function main(): Promise<void> {
   const values = parseCliArgs(process.argv.slice(2), ["--version", "--platform"])
   const version = values.version
-  const platform = values["platform"]
+  const platform = values.platform
   if (!version || !platform) throw new Error("必须提供 --version 与 --platform")
   const name = executableName(platform)
   const stagingDir = join("dist", "staging")

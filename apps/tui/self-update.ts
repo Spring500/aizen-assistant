@@ -7,7 +7,7 @@
 
 import { basename, dirname, join } from "node:path"
 import { tmpdir } from "node:os"
-import { chmod, copyFile, mkdir, mkdtemp, rename, rm, stat, writeFile } from "node:fs/promises"
+import { chmod, copyFile, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises"
 import { $ } from "bun"
 import {
   type InstallRecord,
