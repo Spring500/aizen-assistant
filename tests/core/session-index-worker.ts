@@ -15,6 +15,8 @@ const warnings = await store.updateProject(project, {
       createdAt: "2026-01-01T00:00:00.000Z",
       updatedAt: "2026-01-01T00:00:00.000Z",
       preview: session,
+      issues: [],
+      capabilities: { canOpen: true, canForceOpen: false },
     },
   },
 })

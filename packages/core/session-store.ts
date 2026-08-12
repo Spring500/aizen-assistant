@@ -1,3 +1,4 @@
+import type { Stats } from "node:fs"
 import { mkdir, open, readdir, readFile, stat } from "node:fs/promises"
 import { basename, join } from "node:path"
 import { acquireFileLock, atomicWriteFile, isFileLocked, withFileLock } from "./file-transaction.ts"
@@ -9,8 +10,10 @@ import {
   type SessionLine,
   type SessionRecord,
   type TurnStartedRecord,
+  UnknownSessionRecordTypeError,
 } from "./session-format.ts"
 import { type SessionIndexEntry, SessionIndexStore } from "./session-index-store.ts"
+import { type SessionIssue, sessionIssues } from "./session-issues.ts"
 
 export type SessionLockState = "available" | "occupied" | "current"
 
@@ -25,6 +28,11 @@ export class SessionLockedError extends Error {
 /** 待追加的记录本身不合法（区别于底层存储故障）。调用方可选择单条降级，不应锁死整个会话。 */
 export class InvalidSessionRecordError extends Error {}
 
+type SessionCapabilities = {
+  canOpen: boolean
+  canForceOpen: boolean
+}
+
 export type SessionSummary = {
   sessionId: string
   name: string
@@ -32,6 +40,8 @@ export type SessionSummary = {
   createdAt: string
   updatedAt: string
   preview: string
+  issues: SessionIssue[]
+  capabilities: SessionCapabilities
   lockState?: SessionLockState
 }
 
@@ -39,6 +49,15 @@ export type LoadedSession = {
   header: SessionHeader
   records: SessionRecord[]
   warnings: string[]
+}
+
+type ForcedSession = LoadedSession & {
+  issues: SessionIssue[]
+}
+
+type InspectedSession = {
+  summary: SessionSummary
+  loaded?: LoadedSession
 }
 
 function firstText(record: TurnStartedRecord): string | undefined {
@@ -62,10 +81,12 @@ export class SessionStore {
   readonly root: string
   readonly #queues = new Map<string, Promise<void>>()
   readonly #paths = new Map<string, string>()
+  readonly #forcePaths = new Map<string, string>()
   readonly #idGenerator: MnemonicIdGenerator
   readonly #index: SessionIndexStore | undefined
   readonly #projectKey: string
   readonly #leases = new Map<string, () => Promise<void>>()
+  readonly #knownSessionIds = new Set<string>()
   #currentSessionId: string | undefined
   #warnings: string[] = []
 
@@ -151,7 +172,7 @@ export class SessionStore {
     await mkdir(this.root, { recursive: true })
     return withFileLock(join(this.root, ".sessions"), async () => {
       await this.#refreshPaths()
-      const existing = new Set([...this.#paths.keys()].map((sessionId) => sessionId.toLowerCase()))
+      const existing = new Set([...this.#knownSessionIds].map((sessionId) => sessionId.toLowerCase()))
       const sessionId = this.#idGenerator.generate((candidate) => existing.has(candidate.toLowerCase()))
       const header = await this.#writeNewSession({ ...input, sessionId }, records)
       await this.open(sessionId)
@@ -161,7 +182,8 @@ export class SessionStore {
 
   /** 生成一个不与现有会话冲突的助记词 ID。 */
   async suggestId(): Promise<string> {
-    const existing = new Set((await this.list()).map((session) => session.sessionId.toLowerCase()))
+    await this.#refreshPaths()
+    const existing = new Set([...this.#knownSessionIds].map((sessionId) => sessionId.toLowerCase()))
     return this.#idGenerator.generate((candidate) => existing.has(candidate.toLowerCase()))
   }
 
@@ -173,7 +195,7 @@ export class SessionStore {
     await mkdir(this.root, { recursive: true })
     return withFileLock(join(this.root, ".sessions"), async () => {
       await this.#refreshPaths()
-      if (this.#paths.has(input.sessionId)) throw new Error("会话 ID 已存在")
+      if (this.#knownSessionIds.has(input.sessionId)) throw new Error("会话 ID 已存在")
       return this.#writeNewSession(input, records)
     })
   }
@@ -186,7 +208,7 @@ export class SessionStore {
     await mkdir(this.root, { recursive: true })
     return withFileLock(join(this.root, ".sessions"), async () => {
       await this.#refreshPaths()
-      const existing = new Set([...this.#paths.keys()].map((sessionId) => sessionId.toLowerCase()))
+      const existing = new Set([...this.#knownSessionIds].map((sessionId) => sessionId.toLowerCase()))
       const sessionId = this.#idGenerator.generate((candidate) => existing.has(candidate.toLowerCase()))
       return this.#writeNewSession({ ...input, sessionId }, records)
     })
@@ -204,6 +226,7 @@ export class SessionStore {
     const header: SessionHeader = { kind: "session", version: 1, ...input }
     await atomicWriteFile(path, serializeSession(header, records))
     this.#paths.set(input.sessionId, path)
+    this.#knownSessionIds.add(input.sessionId)
     return header
   }
 
@@ -218,9 +241,10 @@ export class SessionStore {
     return this.#enqueue(sessionId, () =>
       this.#withWriteLease(sessionId, async () => {
         const path = await this.#sessionPath(sessionId)
+        const prefix = await this.#prepareAppend(path)
         const file = await open(path, "a")
         try {
-          await file.writeFile(`${JSON.stringify(validated)}\n`)
+          await file.writeFile(`${prefix}${JSON.stringify(validated)}\n`)
           await file.sync()
         } finally {
           await file.close()
@@ -250,28 +274,181 @@ export class SessionStore {
     return this.#readPath(await this.#sessionPath(sessionId))
   }
 
+  /** 强制打开原会话；取得写租约后再次检查，避免使用过期的列表结论。 */
+  async forceOpen(sessionId: string): Promise<ForcedSession> {
+    const summary = (await this.list()).find((session) => session.sessionId === sessionId)
+    const path = this.#forcePaths.get(sessionId)
+    if (!summary?.capabilities.canForceOpen || !path) throw new Error(`会话不可强制打开：${sessionId}`)
+    let release: () => Promise<void>
+    try {
+      release = await acquireFileLock(this.#lockPath(sessionId), { retries: 0 })
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ELOCKED") throw new SessionLockedError(sessionId)
+      throw error
+    }
+    try {
+      const inspected = await this.#inspectPath(path, basename(path), await stat(path))
+      if (
+        !inspected.loaded ||
+        inspected.loaded.header.sessionId !== sessionId ||
+        !inspected.summary.capabilities.canForceOpen
+      )
+        throw new Error(`会话不可强制打开：${sessionId}`)
+      this.#leases.set(sessionId, release)
+      this.#paths.set(sessionId, path)
+      return { ...inspected.loaded, issues: inspected.summary.issues }
+    } catch (error) {
+      await release().catch(() => {})
+      throw error
+    }
+  }
+
   async #readPath(path: string): Promise<LoadedSession> {
-    const contents = await readFile(path, "utf8")
-    const rawLines = contents.split("\n")
-    if (rawLines.at(-1) === "") rawLines.pop()
-    const lines: SessionLine[] = []
-    const warnings: string[] = []
-    for (const [index, rawLine] of rawLines.entries()) {
+    const fileStatus = await stat(path)
+    const inspected = await this.#inspectPath(path, basename(path), fileStatus)
+    if (!inspected.loaded || !inspected.summary.capabilities.canOpen) {
+      const message = inspected.summary.issues[0]?.message ?? "会话文件不可读取"
+      throw new Error(message)
+    }
+    return inspected.loaded
+  }
+
+  /**
+   * 追加前修复进程异常留下的不完整尾行。完整但不兼容的尾行不会被删除，避免静默改写业务数据。
+   */
+  async #prepareAppend(path: string): Promise<string> {
+    const contents = await readFile(path)
+    if (contents.length === 0 || contents.at(-1) === 0x0a) return ""
+    const lastNewline = contents.lastIndexOf(0x0a)
+    const tail = contents.subarray(lastNewline + 1).toString("utf8")
+    try {
+      JSON.parse(tail)
+      return "\n"
+    } catch {
+      const file = await open(path, "r+")
       try {
-        lines.push(parseSessionValue(JSON.parse(rawLine)))
-      } catch (error) {
-        const isLast = index === rawLines.length - 1
-        if (isLast && error instanceof SyntaxError) {
-          warnings.push(`忽略不完整的最后一行（第 ${index + 1} 行）`)
-          continue
-        }
-        throw new Error(`会话文件第 ${index + 1} 行无效：${error instanceof Error ? error.message : String(error)}`)
+        await file.truncate(lastNewline + 1)
+        await file.sync()
+      } finally {
+        await file.close()
+      }
+      return ""
+    }
+  }
+
+  async #inspectPath(path: string, fileName: string, fileStatus: Stats): Promise<InspectedSession> {
+    const base = {
+      sessionId: "",
+      name: fileName,
+      cwd: "",
+      createdAt: fileStatus.birthtime.toISOString(),
+      updatedAt: fileStatus.mtime.toISOString(),
+      preview: "无法读取会话摘要",
+    }
+    let contents: string
+    try {
+      contents = await readFile(path, "utf8")
+    } catch (error) {
+      const issue = sessionIssues.create(
+        "session.read_failed",
+        `读取会话文件失败：${error instanceof Error ? error.message : String(error)}`,
+      )
+      return {
+        summary: {
+          ...base,
+          issues: [issue],
+          capabilities: { canOpen: false, canForceOpen: false },
+        },
       }
     }
-    const [header, ...records] = lines
-    if (header?.kind !== "session") throw new Error("会话文件第一行不是文件头")
-    if (records.some((record) => record.kind === "session")) throw new Error("会话文件只能有一个文件头")
-    return { header, records: records as SessionRecord[], warnings }
+
+    const rawLines = contents.split("\n")
+    const terminated = rawLines.at(-1) === ""
+    if (terminated) rawLines.pop()
+    const issues: SessionIssue[] = []
+    const warnings: string[] = []
+    let header: SessionHeader | undefined
+    const records: SessionRecord[] = []
+    for (const [index, rawLine] of rawLines.entries()) {
+      let value: unknown
+      try {
+        value = JSON.parse(rawLine)
+      } catch (error) {
+        const line = index + 1
+        const message = `会话文件第 ${line} 行无效：${error instanceof Error ? error.message : String(error)}`
+        if (index === rawLines.length - 1 && !terminated && error instanceof SyntaxError) {
+          warnings.push(`忽略不完整的最后一行（第 ${line} 行）`)
+          issues.push(sessionIssues.create("session.incomplete_tail", message))
+        } else issues.push(sessionIssues.create("session.invalid_json", message))
+        continue
+      }
+      let parsed: SessionLine
+      try {
+        parsed = parseSessionValue(value)
+      } catch (error) {
+        const code =
+          error instanceof UnknownSessionRecordTypeError
+            ? "session.incompatible_record"
+            : "session.record_validation_failed"
+        issues.push(
+          sessionIssues.create(
+            code,
+            `会话文件第 ${index + 1} 行无效：${error instanceof Error ? error.message : String(error)}`,
+          ),
+        )
+        continue
+      }
+      if (index === 0) {
+        if (parsed.kind === "session") header = parsed
+        else issues.push(sessionIssues.create("session.record_validation_failed", "会话文件第一行不是文件头"))
+        continue
+      }
+      if (parsed.kind === "session") {
+        issues.push(sessionIssues.create("session.record_validation_failed", "会话文件只能有一个文件头"))
+        continue
+      }
+      records.push(parsed)
+    }
+    if (!header && !issues.some((issue) => issue.code === "session.incomplete_tail"))
+      issues.push(sessionIssues.create("session.record_validation_failed", "会话文件缺少有效文件头"))
+
+    const onlyIncomplete = issues.length > 0 && issues.every((issue) => issue.code === "session.incomplete_tail")
+    const containsIncompatible = issues.some((issue) => issue.code === "session.incompatible_record")
+    const onlyIgnorable = issues.every(
+      (issue) => issue.code === "session.incompatible_record" || issue.code === "session.incomplete_tail",
+    )
+    const hasRuntimeSettings =
+      records.some((record) => record.kind === "model_changed") &&
+      records.some((record) => record.kind === "view_changed")
+    const capabilities = header
+      ? issues.length === 0
+        ? { canOpen: true, canForceOpen: false }
+        : onlyIncomplete
+          ? { canOpen: true, canForceOpen: false }
+          : containsIncompatible && onlyIgnorable && hasRuntimeSettings
+            ? { canOpen: false, canForceOpen: true }
+            : { canOpen: false, canForceOpen: false }
+      : { canOpen: false, canForceOpen: false }
+    const firstTurn = records.find((record): record is TurnStartedRecord => record.kind === "turn_started")
+    const renamed = [...records].reverse().find((record) => record.kind === "session_renamed")
+    const summary: SessionSummary = {
+      ...base,
+      ...(header
+        ? {
+            sessionId: header.sessionId,
+            cwd: header.cwd,
+            createdAt: header.createdAt,
+            preview: firstTurn ? (firstText(firstTurn) ?? "新会话") : "新会话",
+          }
+        : {}),
+      name: header && renamed?.kind === "session_renamed" ? renamed.name : header ? "" : fileName,
+      issues,
+      capabilities,
+    }
+    return {
+      summary,
+      ...(header ? { loaded: { header, records, warnings } } : {}),
+    }
   }
 
   async list(): Promise<SessionSummary[]> {
@@ -279,12 +456,33 @@ export class SessionStore {
     const previous = (await this.#index?.readProject(this.#projectKey)) ?? {}
     const current: Record<string, SessionIndexEntry> = {}
     const summaries: SessionSummary[] = []
-    const paths = new Map<string, string>()
+    const summaryPaths = new Map<SessionSummary, string>()
+    const seenSessionIds = new Set<string>()
     const entries = await readdir(this.root, { withFileTypes: true })
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue
       const path = join(this.root, entry.name)
-      const fileStatus = await stat(path)
+      let fileStatus: Stats | undefined
+      try {
+        fileStatus = await stat(path)
+      } catch (error) {
+        const now = new Date().toISOString()
+        const issue = sessionIssues.create(
+          "session.read_failed",
+          `读取会话文件状态失败：${error instanceof Error ? error.message : String(error)}`,
+        )
+        summaries.push({
+          sessionId: "",
+          name: entry.name,
+          cwd: "",
+          createdAt: now,
+          updatedAt: now,
+          preview: "无法读取会话摘要",
+          issues: [issue],
+          capabilities: { canOpen: false, canForceOpen: false },
+        })
+        continue
+      }
       const cached = previous[entry.name]
       const unchanged =
         cached?.size === fileStatus.size &&
@@ -294,57 +492,82 @@ export class SessionStore {
       if (unchanged && cached) {
         summary = { ...cached.summary }
       } else {
-        const loaded = await this.#readPath(path)
-        const firstTurn = loaded.records.find((record): record is TurnStartedRecord => record.kind === "turn_started")
-        const renamed = [...loaded.records].reverse().find((record) => record.kind === "session_renamed")
-        summary = {
-          sessionId: loaded.header.sessionId,
-          name: renamed?.kind === "session_renamed" ? renamed.name : "",
-          cwd: loaded.header.cwd,
-          createdAt: loaded.header.createdAt,
-          updatedAt: fileStatus.mtime.toISOString(),
-          preview: firstTurn ? (firstText(firstTurn) ?? "新会话") : "新会话",
-        }
+        summary = (await this.#inspectPath(path, entry.name, fileStatus)).summary
       }
-      if (paths.has(summary.sessionId)) throw new Error(`存在重复的会话 ID：${summary.sessionId}`)
-      paths.set(summary.sessionId, path)
       current[entry.name] = {
         size: fileStatus.size,
         birthtimeMs: fileStatus.birthtimeMs,
         mtimeMs: fileStatus.mtimeMs,
-        summary,
+        summary: structuredClone(summary),
       }
+      if (summary.sessionId) {
+        if (seenSessionIds.has(summary.sessionId)) continue
+        seenSessionIds.add(summary.sessionId)
+      }
+      summaryPaths.set(summary, path)
       summaries.push(summary)
     }
+
+    const lockableSessionIds = new Set(
+      summaries
+        .filter((summary) => summary.capabilities.canOpen || summary.capabilities.canForceOpen)
+        .map((summary) => summary.sessionId),
+    )
     this.#paths.clear()
-    for (const [sessionId, path] of paths) this.#paths.set(sessionId, path)
+    this.#forcePaths.clear()
+    this.#knownSessionIds.clear()
+    for (const summary of summaries) {
+      if (!summary.sessionId) continue
+      this.#knownSessionIds.add(summary.sessionId)
+      const path = summaryPaths.get(summary)
+      if (summary.capabilities.canOpen) {
+        if (path) this.#paths.set(summary.sessionId, path)
+      }
+      if (summary.capabilities.canForceOpen && path) this.#forcePaths.set(summary.sessionId, path)
+    }
     const lockStates = await Promise.all(
-      summaries.map(async (summary) => {
-        const locked = await isFileLocked(this.#lockPath(summary.sessionId))
-        return [
-          summary.sessionId,
-          locked ? (this.#currentSessionId === summary.sessionId ? "current" : "occupied") : "available",
-        ] as const
+      [...lockableSessionIds].map(async (sessionId) => {
+        try {
+          const locked = await isFileLocked(this.#lockPath(sessionId))
+          return {
+            sessionId,
+            state: locked ? (this.#currentSessionId === sessionId ? "current" : "occupied") : "available",
+          } as const
+        } catch (error) {
+          return {
+            sessionId,
+            error: `读取会话占用状态失败：${error instanceof Error ? error.message : String(error)}`,
+          } as const
+        }
       }),
     )
-    const states = new Map(lockStates)
-    for (const summary of summaries) summary.lockState = states.get(summary.sessionId) ?? "available"
+    const states = new Map(lockStates.map((result) => [result.sessionId, result] as const))
+    for (const summary of summaries) {
+      const lock = states.get(summary.sessionId)
+      if (lock && "error" in lock) {
+        summary.issues = [...summary.issues, sessionIssues.create("session.read_failed", lock.error)]
+        summary.capabilities = { canOpen: false, canForceOpen: false }
+        continue
+      }
+      summary.lockState = lock?.state ?? "available"
+      if (summary.lockState === "occupied") {
+        summary.issues = [
+          ...summary.issues,
+          sessionIssues.create("session.in_use", `会话正在被其他 Agent 使用：${summary.sessionId}`),
+        ]
+        summary.capabilities = { canOpen: false, canForceOpen: false }
+      } else if (summary.lockState === "current" && summary.capabilities.canForceOpen) {
+        const path = summaryPaths.get(summary)
+        if (path) this.#paths.set(summary.sessionId, path)
+        summary.capabilities = { canOpen: false, canForceOpen: false }
+      }
+    }
     this.#warnings = this.#index ? await this.#index.updateProject(this.#projectKey, current) : []
     return summaries.sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
   }
 
   async #refreshPaths(): Promise<void> {
-    const paths = new Map<string, string>()
-    const entries = await readdir(this.root, { withFileTypes: true })
-    for (const entry of entries) {
-      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue
-      const path = join(this.root, entry.name)
-      const loaded = await this.#readPath(path)
-      if (paths.has(loaded.header.sessionId)) throw new Error(`存在重复的会话 ID：${loaded.header.sessionId}`)
-      paths.set(loaded.header.sessionId, path)
-    }
-    this.#paths.clear()
-    for (const [sessionId, path] of paths) this.#paths.set(sessionId, path)
+    await this.list()
   }
 
   async #sessionPath(sessionId: string): Promise<string> {

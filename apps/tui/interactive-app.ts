@@ -1900,24 +1900,42 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       overlays,
       "session-action",
       () => [
-        { name: "打开会话", description: "切换到该会话", value: "open" as const },
-        {
-          name: `会话名称  ${session.name || "当前未命名"}`,
-          description: "在当前选项内重命名；可留空",
-          value: "renamed" as const,
-          edit: {
-            label: "会话名称  ",
-            value: session.name,
-            save: async (name: string) => {
-              const result = await dispatchWithError({ type: "rename_session", sessionId, name }, "重命名会话失败")
-              if (result.ok) session.name = name
-            },
-          },
-        },
+        ...(session.capabilities.canOpen
+          ? [
+              { name: "打开会话", description: "切换到该会话", value: "open" as const },
+              {
+                name: `会话名称  ${session.name || "当前未命名"}`,
+                description: "在当前选项内重命名；可留空",
+                value: "renamed" as const,
+                edit: {
+                  label: "会话名称  ",
+                  value: session.name,
+                  save: async (name: string) => {
+                    const result = await dispatchWithError(
+                      { type: "rename_session", sessionId, name },
+                      "重命名会话失败",
+                    )
+                    if (result.ok) session.name = name
+                  },
+                },
+              },
+            ]
+          : []),
+        ...(session.capabilities.canForceOpen
+          ? [
+              {
+                name: "强制打开",
+                description: "忽略不兼容记录并打开原会话；不迁移或删除原记录",
+                value: "force-open" as const,
+              },
+            ]
+          : []),
       ],
       { title: `管理会话 · ${session.name || session.sessionId}`, signal: interactionController.signal },
     )
     if (action === "open") await dispatchWithError({ type: "open_session", sessionId }, "打开会话失败")
+    else if (action === "force-open")
+      await dispatchWithError({ type: "force_open_session", sessionId }, "强制打开会话失败")
   }
 
   async function manageSessions(): Promise<void> {
@@ -1962,7 +1980,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       )
       if (selected === "__new__") await createSession()
       else if (selected === "__manage__") await manageSessions()
-      else if (selected) await dispatchWithError({ type: "open_session", sessionId: selected }, "打开会话失败")
+      else if (selected) {
+        const session = sessions.find((item) => item.sessionId === selected)
+        if (session?.capabilities.canOpen)
+          await dispatchWithError({ type: "open_session", sessionId: session.sessionId }, "打开会话失败")
+        else await manageSession(selected)
+      }
     } finally {
       endInteraction()
     }

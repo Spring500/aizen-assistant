@@ -349,6 +349,9 @@ export class AizenCore implements CorePort {
         case "open_session":
           await this.#openSession(command.sessionId)
           break
+        case "force_open_session":
+          await this.#openSession(command.sessionId, true)
+          break
         case "rename_session":
           await this.#renameSession(command.sessionId, command.name)
           break
@@ -641,9 +644,10 @@ export class AizenCore implements CorePort {
    * 打开会话首先是纯本地历史操作。即使当前模型或视图已经失效，
    * 对话记录也必须可见；无法重建 pi 内存会话时只禁止发送新消息。
    */
-  async #openSession(sessionId: string): Promise<void> {
+  async #openSession(sessionId: string, force = false): Promise<void> {
     this.#sessionNamingAbort?.abort()
-    const loaded = await this.#store.open(sessionId)
+    const forced = force ? await this.#store.forceOpen(sessionId) : undefined
+    const loaded = forced ?? (await this.#store.open(sessionId))
     try {
       const previousCwd = this.#effectiveWorkingDirectory(loaded.header.cwd, loaded.records)
       if (normalizeProjectPath(previousCwd) !== normalizeProjectPath(this.#cwd)) {
@@ -701,6 +705,7 @@ export class AizenCore implements CorePort {
       await this.#store.activate(sessionId)
       this.#snapshot.sessions = await this.#store.list()
       this.#reportStoreWarnings()
+      if (forced && forced.issues.length > 0) this.#reportError(forced.issues.map((issue) => issue.message).join("；"))
     } catch (error) {
       await this.#store.close(sessionId).catch(() => {})
       throw error

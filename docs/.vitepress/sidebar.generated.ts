@@ -57,6 +57,10 @@ export const sidebar: DefaultTheme.Sidebar = {
       text: "开发者文档",
       items: [
         {
+          text: "会话文件错误隔离",
+          link: "/zh/core/storage-isolation"
+        },
+        {
           text: "权限系统实现规格",
           link: "/zh/permission/spec"
         },

@@ -26,6 +26,7 @@ title: AizenAssistant 文档
 
 **开发者文档**——面向实现与维护者：
 
+- [会话文件错误隔离](./core/storage-isolation.md)：会话文件的问题分类、隔离边界与强制打开行为
 - [权限系统实现规格](./permission/spec.md)：内部机制、接口契约与边界条件
 - [权限系统内置分类器说明](./permission/classifier.md)：当前内置规则覆盖范围
 - [自举套件实现规格](./bootstrap-suite/spec.md)：总体结构与扩展方式

@@ -173,6 +173,13 @@ export type SessionRecord =
 
 export type SessionLine = SessionHeader | SessionRecord
 
+/** 当前程序不认识的会话记录类型；调用方可以将其与内容损坏区分处理。 */
+export class UnknownSessionRecordTypeError extends Error {
+  constructor(recordKind: string) {
+    super(`未知的会话记录类型：${recordKind}`)
+  }
+}
+
 type UnknownObject = Record<string, unknown>
 
 function object(value: unknown, label: string): UnknownObject {
@@ -513,7 +520,7 @@ export function parseSessionValue(value: unknown): SessionLine {
       tokensBefore: finiteNumber(source.tokensBefore, "tokensBefore"),
     }
   }
-  throw new Error(`未知的会话记录类型：${kind}`)
+  throw new UnknownSessionRecordTypeError(kind)
 }
 
 export function parseSessionLine(line: string): SessionLine {
