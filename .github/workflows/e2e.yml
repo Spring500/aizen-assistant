@@ -1,0 +1,39 @@
+name: e2e-distribution
+
+# 发布链路端到端自检：构建 → 打包 → mock release → install.ps1 安装 → update → uninstall。
+# 仅当 PR 改动"分发链路实现或发布配置"时触发；也可通过 workflow_dispatch 手动随时运行。
+# 条件语义：改动 install/update/uninstall 代码、构建与打包工具、CI 与 release workflow 时自动跑。
+
+on:
+  pull_request:
+    paths:
+      - "install.sh"
+      - "install.ps1"
+      - "apps/tui/self-update.ts"
+      - "apps/tui/self-uninstall.ts"
+      - "apps/tui/deferred-powershell.ts"
+      - "apps/tui/args.ts"
+      - "apps/tui/main.ts"
+      - "packages/core/install-record.ts"
+      - "scripts/repo/**"
+      - ".github/workflows/release.yml"
+      - ".github/workflows/ci.yml"
+      - ".github/workflows/e2e.yml"
+      - "package.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e-distribution:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: 发布链路端到端自检
+        run: bun run scripts/repo/e2e-distribution-test.ts
