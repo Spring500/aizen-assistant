@@ -151,7 +151,7 @@ class IncompatibleSessionCore implements CorePort {
         updatedAt: "2026-07-23T10:00:00.000Z",
         preview: "保留内容",
         issues: [{ code: "session.incompatible_record", label: "不兼容", message: "存在不兼容记录" }],
-        capabilities: { canOpen: false, canForceOpen: true },
+        capabilities: { canOpen: true, canForceOpen: true },
         lockState: "available",
       },
       {
@@ -178,7 +178,8 @@ class IncompatibleSessionCore implements CorePort {
 
   async dispatch(command: CoreCommand) {
     this.commands.push(command)
-    if (command.type === "force_open_session") this.snapshot.currentSessionId = "incompatible"
+    if (command.type === "open_session" && command.sessionId === "incompatible")
+      this.snapshot.currentSessionId = "incompatible"
     for (const listener of this.listeners) listener({ type: "snapshot", snapshot: this.getSnapshot() })
     return { ok: true as const }
   }
@@ -424,7 +425,7 @@ async function recoverViewPrompt(): Promise<void> {
   }
 }
 
-async function forceOpenIncompatibleSession(): Promise<void> {
+async function openIncompatibleSession(): Promise<void> {
   const setup = await setupRenderer()
   const core = new IncompatibleSessionCore()
   const running = runInteractiveApp({
@@ -438,16 +439,12 @@ async function forceOpenIncompatibleSession(): Promise<void> {
     assertIncludes(sessions, "[内容损坏]")
     await pressDown(setup, 2)
     await pressEnter(setup)
-    const actions = await waitForText(setup, "强制打开")
-    assertExcludes(actions, "恢复为新会话")
-    await pressEnter(setup)
     await waitForCondition(
-      () => core.commands.some((command) => command.type === "force_open_session"),
-      "强制打开不兼容会话",
+      () => core.commands.some((command) => command.type === "open_session" && command.sessionId === "incompatible"),
+      "打开不兼容会话",
     )
-    const forceOpen = core.commands.find((command) => command.type === "force_open_session")
-    if (forceOpen?.type !== "force_open_session" || forceOpen.sessionId !== "incompatible")
-      throw new Error("强制打开没有使用会话 ID")
+    const opened = core.commands.find((command) => command.type === "open_session")
+    if (opened?.type !== "open_session" || opened.sessionId !== "incompatible") throw new Error("打开没有使用会话 ID")
   } finally {
     setup.renderer.keyInput.emit("keypress", key("\x03"))
     await running
@@ -461,5 +458,5 @@ else if (scenario === "no-views") await noViews()
 else if (scenario === "throwing-create") await throwingCreate()
 else if (scenario === "recover-prompt") await recoverPrompt()
 else if (scenario === "recover-view-prompt") await recoverViewPrompt()
-else if (scenario === "force-open-incompatible") await forceOpenIncompatibleSession()
+else if (scenario === "open-incompatible") await openIncompatibleSession()
 else throw new Error(`未知场景：${scenario}`)

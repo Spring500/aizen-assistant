@@ -247,21 +247,23 @@ describe("会话存储", () => {
     const listed = await store.list()
     const bad = listed.find((entry) => entry.sessionId === "incompatible")
     expect(bad?.issues.map((issue) => issue.code)).toEqual(["session.incompatible_record"])
-    expect(bad?.capabilities).toMatchObject({ canOpen: false, canForceOpen: true })
+    expect(bad?.capabilities).toMatchObject({ canOpen: true, canForceOpen: true })
     expect(await store.open("healthy")).toBeDefined()
     await store.close("healthy")
+    await expect(store.open("incompatible")).resolves.toBeDefined()
+    await store.close("incompatible")
     await expect(
       store.create({ sessionId: "new-session", cwd: "E:\\project", createdAt: "2026-07-23T10:01:00.000Z" }),
     ).resolves.toBeDefined()
   })
 
-  test("不兼容会话被占用时同时返回不兼容与使用中问题并禁止强制打开", async () => {
+  test("不兼容会话被占用时同时返回不兼容与使用中问题并禁止打开", async () => {
     const { root } = await makeStore()
     await writeFile(join(root, "incompatible.jsonl"), incompatibleSession())
     const first = new SessionStore(root)
     const second = new SessionStore(root)
 
-    await first.forceOpen("incompatible")
+    await first.open("incompatible")
     await first.activate("incompatible")
     const listed = (await second.list())[0]
     expect(listed?.lockState).toBe("occupied")
@@ -308,34 +310,34 @@ describe("会话存储", () => {
     }
   })
 
-  test("强制打开在列表后租约被抢占时返回占用错误", async () => {
+  test("打开在列表后租约被抢占时返回占用错误", async () => {
     const { root } = await makeStore()
     await writeFile(join(root, "incompatible.jsonl"), incompatibleSession())
     const racing = new LeaseRacingStore(root)
     const competing = new SessionStore(root)
     racing.afterNextList = async () => {
-      await competing.forceOpen("incompatible")
+      await competing.open("incompatible")
       await competing.activate("incompatible")
     }
 
-    await expect(racing.forceOpen("incompatible")).rejects.toBeInstanceOf(SessionLockedError)
+    await expect(racing.open("incompatible")).rejects.toBeInstanceOf(SessionLockedError)
     await competing.close()
   })
 
-  test("强制打开后原条目保持不兼容且不再提供打开操作", async () => {
+  test("打开不兼容会话后原条目保持不兼容标记并再次可打开", async () => {
     const { root, store } = await makeStore()
     await writeFile(join(root, "incompatible.jsonl"), incompatibleSession())
 
-    await store.forceOpen("incompatible")
+    await store.open("incompatible")
     await store.activate("incompatible")
     const current = (await store.list())[0]
     expect(current?.lockState).toBe("current")
     expect(current?.issues.map((issue) => issue.code)).toEqual(["session.incompatible_record"])
-    expect(current?.capabilities).toEqual({ canOpen: false, canForceOpen: false })
+    expect(current?.capabilities).toEqual({ canOpen: true, canForceOpen: true })
     await store.close()
   })
 
-  test("内容损坏和字段损坏均不能强制打开", async () => {
+  test("内容损坏和字段损坏均不能打开", async () => {
     const { root, store } = await makeStore()
     const createdAt = "2026-07-23T10:00:00.000Z"
     const header = (sessionId: string) =>
@@ -347,7 +349,7 @@ describe("会话存储", () => {
     )
 
     const listed = await store.list()
-    for (const entry of listed) expect(entry.capabilities.canForceOpen).toBe(false)
+    for (const entry of listed) expect(entry.capabilities.canOpen).toBe(false)
     expect(listed.find((entry) => entry.sessionId === "invalid-json")?.issues[0]?.code).toBe("session.invalid_json")
     expect(listed.find((entry) => entry.sessionId === "invalid-record")?.issues[0]?.code).toBe(
       "session.record_validation_failed",

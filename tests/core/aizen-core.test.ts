@@ -808,7 +808,7 @@ describe("核心编排", () => {
     await second.dispose()
   })
 
-  test("不兼容会话可强制打开原文件并重新选择权限设置", async () => {
+  test("不兼容会话可直接打开原文件并重新选择权限设置", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
     const file = join(root, "incompatible.jsonl")
@@ -857,7 +857,8 @@ describe("核心编排", () => {
     expect(await core.dispatch({ type: "list_sessions" })).toEqual({ ok: true })
     const incompatible = core.getSnapshot().sessions[0]
     expect(incompatible?.issues[0]?.label).toBe("不兼容")
-    expect(await core.dispatch({ type: "force_open_session", sessionId: "incompatible" })).toEqual({ ok: true })
+    expect(incompatible?.capabilities.canOpen).toBe(true)
+    expect(await core.dispatch({ type: "open_session", sessionId: "incompatible" })).toEqual({ ok: true })
     expect(core.getSnapshot().currentSessionId).toBe("incompatible")
     expect(core.getSnapshot().transcript.some((entry) => entry.type === "input")).toBe(true)
     expect(await core.dispatch({ type: "set_permission_settings", preset: "plan", reviewMode: "manual" })).toEqual({
@@ -865,10 +866,10 @@ describe("核心编排", () => {
     })
     const firstTurn = core.getSnapshot().transcript.find((entry) => entry.type === "input")
     if (firstTurn?.type !== "input") throw new Error("缺少已恢复的轮次")
-    expect((await core.dispatch({ type: "rewind", turnId: firstTurn.turnId })).ok).toBe(false)
+    expect((await core.dispatch({ type: "rewind", turnId: firstTurn.turnId })).ok).toBe(true)
     const updated = await readFile(file, "utf8")
+    // 回退重写后，未知记录类型的原始行仍保留，避免静默丢弃业务数据
     expect(updated).toContain(JSON.stringify({ kind: "permission_mode_changed", permissionMode: "unrestricted" }))
-    expect(updated).toContain('"kind":"permission_settings_changed"')
     expect(core.getSnapshot().currentPermissionPreset).toBe("plan")
     await core.dispose()
   })

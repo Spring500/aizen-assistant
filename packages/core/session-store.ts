@@ -49,10 +49,8 @@ export type LoadedSession = {
   header: SessionHeader
   records: SessionRecord[]
   warnings: string[]
-}
-
-type ForcedSession = LoadedSession & {
-  issues: SessionIssue[]
+  /** 未知记录类型的原始行（有效 JSON 但程序不认识），按文件顺序保留，避免重写时静默丢弃业务数据。 */
+  unparsed?: Array<{ beforeRecord: number; line: string }>
 }
 
 type InspectedSession = {
@@ -68,25 +66,39 @@ function firstText(record: TurnStartedRecord): string | undefined {
   return undefined
 }
 
-function serializeSession(header: SessionHeader, records: SessionRecord[]): string {
-  const validated = records.map((record) => {
+function serializeSession(
+  header: SessionHeader,
+  records: SessionRecord[],
+  unparsed: Array<{ beforeRecord: number; line: string }> = [],
+): string {
+  const lines: string[] = [JSON.stringify(header)]
+  const unparsedByRecord = new Map<number, string[]>()
+  for (const item of unparsed) {
+    const bucket = unparsedByRecord.get(item.beforeRecord) ?? []
+    bucket.push(item.line)
+    unparsedByRecord.set(item.beforeRecord, bucket)
+  }
+  for (const [index, record] of records.entries()) {
+    lines.push(...(unparsedByRecord.get(index) ?? []))
     const line = parseSessionValue(record)
     if (line.kind === "session") throw new Error("会话记录中不能包含文件头")
-    return line
-  })
-  return `${[header, ...validated].map((line) => JSON.stringify(line)).join("\n")}\n`
+    lines.push(JSON.stringify(line))
+  }
+  lines.push(...(unparsedByRecord.get(records.length) ?? []))
+  return `${lines.join("\n")}\n`
 }
 
 export class SessionStore {
   readonly root: string
   readonly #queues = new Map<string, Promise<void>>()
   readonly #paths = new Map<string, string>()
-  readonly #forcePaths = new Map<string, string>()
   readonly #idGenerator: MnemonicIdGenerator
   readonly #index: SessionIndexStore | undefined
   readonly #projectKey: string
   readonly #leases = new Map<string, () => Promise<void>>()
   readonly #knownSessionIds = new Set<string>()
+  /** 已知但存在阻塞问题、无法打开的会话及其原因，用于打开失败时的准确报错。 */
+  readonly #blockedReasons = new Map<string, string>()
   #currentSessionId: string | undefined
   #warnings: string[] = []
 
@@ -264,7 +276,7 @@ export class SessionStore {
           loaded.records.some((record, index) => record.recordId !== expectedRecords[index]?.recordId)
         )
           throw new Error("会话已被其他程序修改，请重新打开后再试")
-        await atomicWriteFile(path, serializeSession(loaded.header, records))
+        await atomicWriteFile(path, serializeSession(loaded.header, records, loaded.unparsed ?? []))
       }),
     )
   }
@@ -272,35 +284,6 @@ export class SessionStore {
   async read(sessionId: string): Promise<LoadedSession> {
     await this.#queues.get(sessionId)
     return this.#readPath(await this.#sessionPath(sessionId))
-  }
-
-  /** 强制打开原会话；取得写租约后再次检查，避免使用过期的列表结论。 */
-  async forceOpen(sessionId: string): Promise<ForcedSession> {
-    const summary = (await this.list()).find((session) => session.sessionId === sessionId)
-    const path = this.#forcePaths.get(sessionId)
-    if (!summary?.capabilities.canForceOpen || !path) throw new Error(`会话不可强制打开：${sessionId}`)
-    let release: () => Promise<void>
-    try {
-      release = await acquireFileLock(this.#lockPath(sessionId), { retries: 0 })
-    } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ELOCKED") throw new SessionLockedError(sessionId)
-      throw error
-    }
-    try {
-      const inspected = await this.#inspectPath(path, basename(path), await stat(path))
-      if (
-        !inspected.loaded ||
-        inspected.loaded.header.sessionId !== sessionId ||
-        !inspected.summary.capabilities.canForceOpen
-      )
-        throw new Error(`会话不可强制打开：${sessionId}`)
-      this.#leases.set(sessionId, release)
-      this.#paths.set(sessionId, path)
-      return { ...inspected.loaded, issues: inspected.summary.issues }
-    } catch (error) {
-      await release().catch(() => {})
-      throw error
-    }
   }
 
   async #readPath(path: string): Promise<LoadedSession> {
@@ -367,6 +350,7 @@ export class SessionStore {
     if (terminated) rawLines.pop()
     const issues: SessionIssue[] = []
     const warnings: string[] = []
+    const unparsed: Array<{ beforeRecord: number; line: string }> = []
     let header: SessionHeader | undefined
     const records: SessionRecord[] = []
     for (const [index, rawLine] of rawLines.entries()) {
@@ -396,6 +380,9 @@ export class SessionStore {
             `会话文件第 ${index + 1} 行无效：${error instanceof Error ? error.message : String(error)}`,
           ),
         )
+        // 未知记录类型是有效 JSON 但程序不认识，重写时保留原文以免静默丢弃业务数据；
+        // 其他解析失败属于内容损坏，不保留（否则重写后会话仍无法打开）。
+        if (code === "session.incompatible_record") unparsed.push({ beforeRecord: records.length, line: rawLine })
         continue
       }
       if (index === 0) {
@@ -412,22 +399,17 @@ export class SessionStore {
     if (!header && !issues.some((issue) => issue.code === "session.incomplete_tail"))
       issues.push(sessionIssues.create("session.record_validation_failed", "会话文件缺少有效文件头"))
 
-    const onlyIncomplete = issues.length > 0 && issues.every((issue) => issue.code === "session.incomplete_tail")
+    // 只有真正的阻塞问题（内容损坏、读取失败）会阻止打开；未知记录类型
+    // 不影响恢复，只保留 canForceOpen 风险标记供将来提示使用。
     const containsIncompatible = issues.some((issue) => issue.code === "session.incompatible_record")
-    const onlyIgnorable = issues.every(
-      (issue) => issue.code === "session.incompatible_record" || issue.code === "session.incomplete_tail",
+    const hasBlockingIssues = issues.some(
+      (issue) =>
+        issue.code === "session.invalid_json" ||
+        issue.code === "session.record_validation_failed" ||
+        issue.code === "session.read_failed",
     )
-    const hasRuntimeSettings =
-      records.some((record) => record.kind === "model_changed") &&
-      records.some((record) => record.kind === "view_changed")
     const capabilities = header
-      ? issues.length === 0
-        ? { canOpen: true, canForceOpen: false }
-        : onlyIncomplete
-          ? { canOpen: true, canForceOpen: false }
-          : containsIncompatible && onlyIgnorable && hasRuntimeSettings
-            ? { canOpen: false, canForceOpen: true }
-            : { canOpen: false, canForceOpen: false }
+      ? { canOpen: !hasBlockingIssues, canForceOpen: containsIncompatible }
       : { canOpen: false, canForceOpen: false }
     const firstTurn = records.find((record): record is TurnStartedRecord => record.kind === "turn_started")
     const renamed = [...records].reverse().find((record) => record.kind === "session_renamed")
@@ -447,7 +429,7 @@ export class SessionStore {
     }
     return {
       summary,
-      ...(header ? { loaded: { header, records, warnings } } : {}),
+      ...(header ? { loaded: { header, records, warnings, unparsed } } : {}),
     }
   }
 
@@ -510,7 +492,7 @@ export class SessionStore {
 
     const sessionIds = new Set(summaries.map((summary) => summary.sessionId).filter((sessionId) => sessionId !== ""))
     this.#paths.clear()
-    this.#forcePaths.clear()
+    this.#blockedReasons.clear()
     this.#knownSessionIds.clear()
     for (const summary of summaries) {
       if (!summary.sessionId) continue
@@ -518,8 +500,9 @@ export class SessionStore {
       const path = summaryPaths.get(summary)
       if (summary.capabilities.canOpen) {
         if (path) this.#paths.set(summary.sessionId, path)
+      } else if (path) {
+        this.#blockedReasons.set(summary.sessionId, summary.issues[0]?.message ?? "会话存在阻塞性问题，暂不可打开")
       }
-      if (summary.capabilities.canForceOpen && path) this.#forcePaths.set(summary.sessionId, path)
     }
     const lockStates = await Promise.all(
       [...sessionIds].map(async (sessionId) => {
@@ -552,10 +535,6 @@ export class SessionStore {
           sessionIssues.create("session.in_use", `会话正在被其他 Agent 使用：${summary.sessionId}`),
         ]
         summary.capabilities = { canOpen: false, canForceOpen: false }
-      } else if (summary.lockState === "current" && summary.capabilities.canForceOpen) {
-        const path = summaryPaths.get(summary)
-        if (path) this.#paths.set(summary.sessionId, path)
-        summary.capabilities = { canOpen: false, canForceOpen: false }
       }
     }
     this.#warnings = this.#index ? await this.#index.updateProject(this.#projectKey, current) : []
@@ -572,7 +551,11 @@ export class SessionStore {
     if (known) return known
     await this.#refreshPaths()
     const path = this.#paths.get(sessionId)
-    if (!path) throw new Error(`会话不存在：${sessionId}`)
+    if (!path) {
+      if (this.#knownSessionIds.has(sessionId))
+        throw new Error(`会话无法打开：${this.#blockedReasons.get(sessionId) ?? "会话存在阻塞性问题，暂不可打开"}`)
+      throw new Error(`会话不存在：${sessionId}`)
+    }
     return path
   }
 

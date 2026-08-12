@@ -43,7 +43,7 @@ const issueCases = [
   {
     code: "session.incompatible_record",
     label: "不兼容",
-    capabilities: { canOpen: false, canForceOpen: true },
+    capabilities: { canOpen: true, canForceOpen: true },
     disabled: false,
   },
   {
@@ -79,16 +79,15 @@ for (const issueCase of issueCases) {
   })
 }
 
-test("已强制打开的当前会话不再提供普通或强制打开能力", () => {
+test("含不兼容记录的会话可直接打开并保留风险标记", () => {
   const item = sessionDisplay(
     {
       ...base,
-      lockState: "current",
       issues: [{ code: "session.incompatible_record", label: "不兼容", message: "存在不兼容记录" }],
-      capabilities: { canOpen: false, canForceOpen: false },
+      capabilities: { canOpen: true, canForceOpen: true },
     },
-    "session-1",
+    "other",
   )
-  expect(item.disabled).toBe(true)
-  expect(item.segments.map((segment) => segment.text).join("")).toContain("[当前]")
+  expect(item.disabled).toBeUndefined()
+  expect(item.segments.map((segment) => segment.text).join("")).toContain("[不兼容]")
 })
