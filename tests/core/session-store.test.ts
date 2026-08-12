@@ -246,7 +246,7 @@ describe("会话存储", () => {
 
     const listed = await store.list()
     const bad = listed.find((entry) => entry.sessionId === "incompatible")
-    expect(bad?.issues.map((issue) => issue.code)).toContain("session.incompatible_record")
+    expect(bad?.issues.map((issue) => issue.code)).toEqual(["session.incompatible_record"])
     expect(bad?.capabilities).toMatchObject({ canOpen: false, canForceOpen: true })
     expect(await store.open("healthy")).toBeDefined()
     await store.close("healthy")
@@ -255,7 +255,7 @@ describe("会话存储", () => {
     ).resolves.toBeDefined()
   })
 
-  test("不兼容会话被占用时只显示使用中且不能强制打开", async () => {
+  test("不兼容会话被占用时同时返回不兼容与使用中问题并禁止强制打开", async () => {
     const { root } = await makeStore()
     await writeFile(join(root, "incompatible.jsonl"), incompatibleSession())
     const first = new SessionStore(root)
@@ -265,9 +265,47 @@ describe("会话存储", () => {
     await first.activate("incompatible")
     const listed = (await second.list())[0]
     expect(listed?.lockState).toBe("occupied")
-    expect(listed?.issues.map((issue) => issue.code)).toContain("session.in_use")
+    expect(listed?.issues.map((issue) => issue.code)).toEqual(["session.incompatible_record", "session.in_use"])
     expect(listed?.capabilities).toEqual({ canOpen: false, canForceOpen: false })
     await first.close()
+  })
+
+  test("不兼容且内容损坏的会话被占用时仍返回使用中问题", async () => {
+    const { root } = await makeStore()
+    const createdAt = "2026-07-23T10:00:00.000Z"
+    const sessionId = "occupied-damaged"
+    const first = new SessionStore(root)
+    const second = new SessionStore(root)
+    await first.create({ sessionId, cwd: "E:\\project", createdAt })
+    await first.open(sessionId)
+    await first.activate(sessionId)
+
+    try {
+      await appendFile(
+        join(root, sessionFileName(createdAt, sessionId)),
+        `${JSON.stringify({
+          kind: "permission_mode_changed",
+          recordId: "incompatible-permission",
+          at: "2026-07-23T10:01:00.000Z",
+          permissionMode: "unrestricted",
+        })}\n${JSON.stringify({
+          kind: "session_renamed",
+          recordId: "invalid-rename",
+          at: "2026-07-23T10:02:00.000Z",
+        })}\n`,
+      )
+
+      const listed = (await second.list())[0]
+      expect(listed?.issues.map((issue) => issue.code)).toEqual([
+        "session.incompatible_record",
+        "session.record_validation_failed",
+        "session.in_use",
+      ])
+      expect(listed?.lockState).toBe("occupied")
+      expect(listed?.capabilities).toEqual({ canOpen: false, canForceOpen: false })
+    } finally {
+      await first.close()
+    }
   })
 
   test("强制打开在列表后租约被抢占时返回占用错误", async () => {
@@ -292,7 +330,7 @@ describe("会话存储", () => {
     await store.activate("incompatible")
     const current = (await store.list())[0]
     expect(current?.lockState).toBe("current")
-    expect(current?.issues.map((issue) => issue.code)).toContain("session.incompatible_record")
+    expect(current?.issues.map((issue) => issue.code)).toEqual(["session.incompatible_record"])
     expect(current?.capabilities).toEqual({ canOpen: false, canForceOpen: false })
     await store.close()
   })
