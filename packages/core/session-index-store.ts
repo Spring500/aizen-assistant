@@ -12,11 +12,10 @@ export type SessionIndexEntry = {
 }
 
 type SessionIndex = {
-  version: 1
   projects: Record<string, Record<string, SessionIndexEntry>>
 }
 
-const emptyIndex = (): SessionIndex => ({ version: 1, projects: {} })
+const emptyIndex = (): SessionIndex => ({ projects: {} })
 const queues = new Map<string, Promise<void>>()
 
 function validEntry(value: unknown): value is SessionIndexEntry {
@@ -53,13 +52,12 @@ function validEntry(value: unknown): value is SessionIndexEntry {
 function parseIndex(value: unknown): SessionIndex {
   if (!value || typeof value !== "object" || Array.isArray(value)) return emptyIndex()
   const source = value as Partial<SessionIndex>
-  if (source.version !== 1 || !source.projects || typeof source.projects !== "object" || Array.isArray(source.projects))
-    return emptyIndex()
+  if (!source.projects || typeof source.projects !== "object" || Array.isArray(source.projects)) return emptyIndex()
   for (const project of Object.values(source.projects)) {
     if (!project || typeof project !== "object" || Array.isArray(project)) return emptyIndex()
     if (!Object.values(project).every(validEntry)) return emptyIndex()
   }
-  return { version: 1, projects: source.projects }
+  return { projects: source.projects }
 }
 
 /**
@@ -74,7 +72,7 @@ export class SessionIndexStore {
     this.#lockPath = path.replace(/\.json$/i, ".lock")
   }
 
-  /** 读取索引；文件不存在、损坏或版本不符时返回空索引。 */
+  /** 读取索引；文件不存在或结构损坏时返回空索引；未知的根级字段一律忽略。 */
   async readProject(projectKey: string): Promise<Record<string, SessionIndexEntry>> {
     const index = await this.#read()
     return structuredClone(index.projects[projectKey] ?? {})

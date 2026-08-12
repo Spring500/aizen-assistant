@@ -39,7 +39,6 @@ export type TurnInputItem = {
 
 export type SessionHeader = {
   kind: "session"
-  version: 1
   sessionId: string
   cwd: string
   createdAt: string
@@ -395,11 +394,8 @@ export function parseSessionValue(value: unknown): SessionLine {
   const source = object(value, "会话行")
   const kind = string(source.kind, "kind")
   if (kind === "session") {
-    const version = finiteNumber(source.version, "version")
-    if (version !== 1) throw new Error(`不支持的会话版本：${version}`)
     return {
       kind,
-      version,
       sessionId: string(source.sessionId, "sessionId"),
       cwd: string(source.cwd, "cwd"),
       createdAt: string(source.createdAt, "createdAt"),

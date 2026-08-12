@@ -1,6 +1,6 @@
 import { afterEach, describe, expect } from "bun:test"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
-import { appendFile, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { MnemonicIdGenerator } from "../../packages/core/mnemonic-id.ts"
@@ -199,7 +199,7 @@ describe("会话存储", () => {
     await store.create({ sessionId: "s1", cwd: "E:\\project", createdAt })
     await writeFile(
       join(root, "复制文件.jsonl"),
-      `${JSON.stringify({ kind: "session", version: 1, sessionId: "s1", cwd: "E:\\project", createdAt })}\n`,
+      `${JSON.stringify({ kind: "session", sessionId: "s1", cwd: "E:\\project", createdAt })}\n`,
     )
     const listed = await store.list()
     expect(listed).toHaveLength(1)
@@ -340,8 +340,7 @@ describe("会话存储", () => {
   test("内容损坏和字段损坏均不能打开", async () => {
     const { root, store } = await makeStore()
     const createdAt = "2026-07-23T10:00:00.000Z"
-    const header = (sessionId: string) =>
-      JSON.stringify({ kind: "session", version: 1, sessionId, cwd: "E:\\project", createdAt })
+    const header = (sessionId: string) => JSON.stringify({ kind: "session", sessionId, cwd: "E:\\project", createdAt })
     await writeFile(join(root, "invalid-json.jsonl"), `${header("invalid-json")}\nnot-json\n`)
     await writeFile(
       join(root, "invalid-record.jsonl"),
@@ -363,7 +362,7 @@ describe("会话存储", () => {
     await writeFile(
       join(root, sessionFileName(createdAt, sessionId)),
       [
-        JSON.stringify({ kind: "session", version: 1, sessionId, cwd: "E:\\project", createdAt }),
+        JSON.stringify({ kind: "session", sessionId, cwd: "E:\\project", createdAt }),
         JSON.stringify({
           kind: "turn_started",
           recordId: "started",
@@ -424,11 +423,11 @@ describe("会话存储", () => {
       items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "初始预览" }] }],
     })
     expect((await store.list())[0]?.preview).toBe("初始预览")
-    expect(JSON.parse(await readFile(indexPath, "utf8"))).toMatchObject({ version: 1 })
+    expect(JSON.parse(await readFile(indexPath, "utf8"))).not.toHaveProperty("version")
 
     await writeFile(indexPath, "损坏缓存")
     expect((await store.list())[0]?.preview).toBe("初始预览")
-    await writeFile(indexPath, JSON.stringify({ version: 1, projects: { broken: { s1: {} } } }))
+    await writeFile(indexPath, JSON.stringify({ projects: { broken: { s1: {} } } }))
     expect((await store.list())[0]?.preview).toBe("初始预览")
 
     await store.append("s1", { kind: "session_renamed", recordId: "r2", at: new Date().toISOString(), name: "新名称" })
@@ -438,6 +437,66 @@ describe("会话存储", () => {
     expect(await store.list()).toEqual([])
     const repaired = JSON.parse(await readFile(indexPath, "utf8"))
     expect(Object.values(repaired.projects)[0]).toEqual({})
+  })
+
+  test("同版本缓存含过期打开能力时重新检查文件", async () => {
+    const { root, store, indexPath } = await makeStore(true)
+    if (!indexPath) throw new Error("缺少测试索引路径")
+    const createdAt = "2026-07-23T10:00:00.000Z"
+    const sessionId = "cached-incompatible"
+    const file = join(root, sessionFileName(createdAt, sessionId))
+    await writeFile(
+      file,
+      [
+        JSON.stringify({ kind: "session", sessionId, cwd: "E:\\project", createdAt }),
+        JSON.stringify({
+          kind: "model_changed",
+          recordId: "m1",
+          at: "2026-07-23T10:00:01.000Z",
+          model: { providerId: "x", modelId: "y" },
+        }),
+        JSON.stringify({ kind: "view_changed", recordId: "v1", at: "2026-07-23T10:00:01.000Z", viewId: null }),
+        JSON.stringify({
+          kind: "permission_mode_changed",
+          recordId: "p1",
+          at: "2026-07-23T10:00:01.500Z",
+          permissionMode: "hybrid",
+        }),
+        "",
+      ].join("\n"),
+    )
+    const status = await stat(file)
+    const projectKey = root.split(/[\\/]/).at(-1) ?? ""
+    await store.list()
+    await writeFile(
+      indexPath,
+      JSON.stringify({
+        projects: {
+          [projectKey]: {
+            [sessionFileName(createdAt, sessionId)]: {
+              size: status.size,
+              birthtimeMs: status.birthtimeMs,
+              mtimeMs: status.mtimeMs,
+              summary: {
+                sessionId,
+                name: "",
+                cwd: "E:\\project",
+                createdAt,
+                updatedAt: createdAt,
+                preview: "新会话",
+                issues: [{ code: "session.incompatible_record", label: "不兼容", message: "旧判定" }],
+                capabilities: { canOpen: false, canForceOpen: true },
+              },
+            },
+          },
+        },
+      }),
+    )
+
+    const listed = await store.list()
+    const current = listed.find((entry) => entry.sessionId === sessionId)
+    expect(current?.capabilities.canOpen).toBe(true)
+    expect(current?.issues[0]?.message).not.toBe("旧判定")
   })
 
   test("忽略损坏尾行并拒绝损坏中间行", async () => {
