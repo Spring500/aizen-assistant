@@ -182,7 +182,7 @@ describe("会话格式", () => {
     expect(() => parseSessionLine(JSON.stringify(record))).toThrow("finishedAt 不能早于 startedAt")
   })
 
-  test("拒绝非 JSON 值和 pi 内部字段", () => {
+  test("拒绝非 JSON 数值并忽略未知字段", () => {
     const invalidArguments = {
       kind: "message",
       recordId: "r1",
@@ -198,6 +198,7 @@ describe("会话格式", () => {
     }
     expect(() => parseSessionLine(JSON.stringify(invalidArguments).replace("null", "1e999"))).toThrow("有限数字")
 
+    // pi 内部字段（如 piEntryId）属于未知字段，解析时忽略而不是判为损坏
     const piRecord: SessionRecord & { piEntryId: string } = {
       kind: "turn_finished",
       recordId: "r1",
@@ -206,6 +207,30 @@ describe("会话格式", () => {
       outcome: "completed",
       piEntryId: "pi-1",
     }
-    expect(() => parseSessionLine(JSON.stringify(piRecord))).toThrow("未知字段")
+    const parsed = parseSessionLine(JSON.stringify(piRecord)) as Record<string, unknown>
+    expect(parsed).toMatchObject({ kind: "turn_finished", recordId: "r1", outcome: "completed" })
+    expect("piEntryId" in parsed).toBe(false)
+  })
+
+  test("忽略历史 permissionMode 字段并正常解析", () => {
+    // 旧版本（#38～#43）写入的 turn_started 总是携带 permissionMode 字段，应被忽略而不是判为损坏
+    const record = {
+      kind: "turn_started",
+      recordId: "r3",
+      turnId: "t1",
+      at: "2026-07-23T10:00:02.000Z",
+      viewId: null,
+      permissionMode: "hybrid",
+      items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "你好" }] }],
+    }
+    const parsed = parseSessionLine(JSON.stringify(record)) as Record<string, unknown>
+    expect(parsed).toMatchObject({
+      kind: "turn_started",
+      recordId: "r3",
+      turnId: "t1",
+      viewId: null,
+      items: record.items,
+    })
+    expect("permissionMode" in parsed).toBe(false)
   })
 })
