@@ -6,7 +6,6 @@ const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 const header = {
   kind: "session",
-  version: 1,
   sessionId: "session-1",
   cwd: "E:\\project",
   createdAt: "2026-07-23T10:00:00.000Z",
@@ -115,8 +114,8 @@ describe("会话格式", () => {
     expect(parseSessionLine(JSON.stringify(record)) as unknown).toEqual(record)
   })
 
-  test("拒绝未知版本、未知记录和缺少字段", () => {
-    expect(() => parseSessionLine(JSON.stringify({ ...header, version: 2 }))).toThrow("不支持的会话版本")
+  test("拒绝未知记录和缺少字段，忽略历史 version 字段", () => {
+    expect(() => parseSessionLine(JSON.stringify({ ...header, version: 2 }))).not.toThrow()
     expect(() => parseSessionLine('{"kind":"unknown"}')).toThrow("未知的会话记录类型")
     expect(() =>
       parseSessionLine('{"kind":"turn_finished","turnId":"t1","at":"2026-07-23T10:00:00.000Z","outcome":"completed"}'),

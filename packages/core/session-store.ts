@@ -178,7 +178,7 @@ export class SessionStore {
 
   /** 在创建事务内写入并获取新会话租约。 */
   async createGeneratedAndOpen(
-    input: Omit<SessionHeader, "kind" | "version" | "sessionId">,
+    input: Omit<SessionHeader, "kind" | "sessionId">,
     records: SessionRecord[],
   ): Promise<SessionHeader> {
     await mkdir(this.root, { recursive: true })
@@ -200,10 +200,7 @@ export class SessionStore {
   }
 
   /** 原子创建包含完整初始记录的新会话。 */
-  async createWithRecords(
-    input: Omit<SessionHeader, "kind" | "version">,
-    records: SessionRecord[],
-  ): Promise<SessionHeader> {
+  async createWithRecords(input: Omit<SessionHeader, "kind">, records: SessionRecord[]): Promise<SessionHeader> {
     await mkdir(this.root, { recursive: true })
     return withFileLock(join(this.root, ".sessions"), async () => {
       await this.#refreshPaths()
@@ -214,7 +211,7 @@ export class SessionStore {
 
   /** 在创建锁内生成唯一 ID 并原子创建会话。 */
   async createGenerated(
-    input: Omit<SessionHeader, "kind" | "version" | "sessionId">,
+    input: Omit<SessionHeader, "kind" | "sessionId">,
     records: SessionRecord[],
   ): Promise<SessionHeader> {
     await mkdir(this.root, { recursive: true })
@@ -226,16 +223,13 @@ export class SessionStore {
     })
   }
 
-  async create(input: Omit<SessionHeader, "kind" | "version">): Promise<SessionHeader> {
+  async create(input: Omit<SessionHeader, "kind">): Promise<SessionHeader> {
     return this.createWithRecords(input, [])
   }
 
-  async #writeNewSession(
-    input: Omit<SessionHeader, "kind" | "version">,
-    records: SessionRecord[],
-  ): Promise<SessionHeader> {
+  async #writeNewSession(input: Omit<SessionHeader, "kind">, records: SessionRecord[]): Promise<SessionHeader> {
     const path = join(this.root, sessionFileName(input.createdAt, input.sessionId))
-    const header: SessionHeader = { kind: "session", version: 1, ...input }
+    const header: SessionHeader = { kind: "session", ...input }
     await atomicWriteFile(path, serializeSession(header, records))
     this.#paths.set(input.sessionId, path)
     this.#knownSessionIds.add(input.sessionId)
@@ -472,7 +466,12 @@ export class SessionStore {
         cached.mtimeMs === fileStatus.mtimeMs
       let summary: SessionSummary
       if (unchanged && cached) {
-        summary = { ...cached.summary }
+        // 含问题标记的摘要可能是旧版解析/判定结果（如缓存版本升级前写入的
+        // capabilities），重新检查文件以使用当前判定规则；健康会话直接复用缓存。
+        summary =
+          cached.summary.issues.length > 0
+            ? (await this.#inspectPath(path, entry.name, fileStatus)).summary
+            : { ...cached.summary }
       } else {
         summary = (await this.#inspectPath(path, entry.name, fileStatus)).summary
       }

@@ -815,7 +815,6 @@ describe("核心编排", () => {
     const lines = [
       {
         kind: "session",
-        version: 1,
         sessionId: "incompatible",
         cwd: "E:\\project",
         createdAt: "2026-07-23T10:00:00.000Z",

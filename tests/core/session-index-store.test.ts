@@ -48,6 +48,22 @@ describe("会话摘要索引存储", () => {
     expect(Object.keys(index.projects).sort()).toEqual(["project-a", "project-b"])
   })
 
+  test("旧缓存的历史 version 字段被忽略并可继续读取", async () => {
+    const path = await makePath()
+    await writeFile(
+      path,
+      JSON.stringify({
+        version: 1,
+        projects: { "project-a": { a: entry("a") } },
+      }),
+    )
+    const store = new SessionIndexStore(path)
+    expect((await store.readProject("project-a")).a?.summary.sessionId).toBe("a")
+    // 更新后不再写入 version 字段
+    await store.updateProject("project-a", { a: entry("a") })
+    expect(JSON.parse(await readFile(path, "utf8"))).not.toHaveProperty("version")
+  })
+
   test("两个进程并发更新不同项目不会覆盖", async () => {
     const path = await makePath()
     const worker = join(import.meta.dir, "session-index-worker.ts")
