@@ -27,6 +27,14 @@ export const sidebar: DefaultTheme.Sidebar = {
           link: "/zh/core/skills"
         },
         {
+          text: "便利性设计",
+          link: "/zh/core/conveniences"
+        },
+        {
+          text: "后续计划",
+          link: "/zh/core/roadmap"
+        },
+        {
           text: "权限系统使用说明",
           link: "/zh/permission/usage"
         },
