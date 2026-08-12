@@ -508,11 +508,7 @@ export class SessionStore {
       summaries.push(summary)
     }
 
-    const lockableSessionIds = new Set(
-      summaries
-        .filter((summary) => summary.capabilities.canOpen || summary.capabilities.canForceOpen)
-        .map((summary) => summary.sessionId),
-    )
+    const sessionIds = new Set(summaries.map((summary) => summary.sessionId).filter((sessionId) => sessionId !== ""))
     this.#paths.clear()
     this.#forcePaths.clear()
     this.#knownSessionIds.clear()
@@ -526,7 +522,7 @@ export class SessionStore {
       if (summary.capabilities.canForceOpen && path) this.#forcePaths.set(summary.sessionId, path)
     }
     const lockStates = await Promise.all(
-      [...lockableSessionIds].map(async (sessionId) => {
+      [...sessionIds].map(async (sessionId) => {
         try {
           const locked = await isFileLocked(this.#lockPath(sessionId))
           return {
