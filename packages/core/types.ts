@@ -90,7 +90,6 @@ export type CoreCommand =
       permissionReviewMode?: PermissionReviewMode
     }
   | { type: "open_session"; sessionId: string }
-  | { type: "force_open_session"; sessionId: string }
   | { type: "rename_session"; sessionId: string; name: string }
   | { type: "rewind"; turnId: string }
   | { type: "fork_session"; turnId: string }

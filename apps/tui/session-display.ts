@@ -14,7 +14,8 @@ export function sessionDisplay(
     .filter(Boolean)
     .map((label) => ` [${label}]`)
     .join("")
-  const hasAction = session.capabilities.canOpen || session.capabilities.canForceOpen
+  // canForceOpen 仅为风险标记（含不兼容记录），不代表可打开；可操作性只看 canOpen。
+  const hasAction = session.capabilities.canOpen
   const color = isCurrent
     ? systemColors.sessionCurrent
     : isOccupied

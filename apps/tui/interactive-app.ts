@@ -1921,21 +1921,10 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
               },
             ]
           : []),
-        ...(session.capabilities.canForceOpen
-          ? [
-              {
-                name: "强制打开",
-                description: "忽略不兼容记录并打开原会话；不迁移或删除原记录",
-                value: "force-open" as const,
-              },
-            ]
-          : []),
       ],
       { title: `管理会话 · ${session.name || session.sessionId}`, signal: interactionController.signal },
     )
     if (action === "open") await dispatchWithError({ type: "open_session", sessionId }, "打开会话失败")
-    else if (action === "force-open")
-      await dispatchWithError({ type: "force_open_session", sessionId }, "强制打开会话失败")
   }
 
   async function manageSessions(): Promise<void> {
