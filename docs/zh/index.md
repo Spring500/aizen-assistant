@@ -13,6 +13,8 @@ title: AizenAssistant 文档
 - [快速开始](./core/quickstart.md)：环境准备与启动
 - [安装与运行](./core/installation.md)：开发命令与可执行程序构建
 - [数据存储](./core/data-storage.md)：数据目录内容与备份
+- [会话管理](./core/session.md)：会话的创建、回退、分支与恢复
+- [后续计划](./core/roadmap.md)：已确认但未实现的功能规划
 - [视图式上下文](./core/views.md)：视图的组成与加载规则
 - [全局技能管理](./core/skills.md)：引入与安装技能
 - [权限系统使用说明](./permission/usage.md)：权限系统的介入时机与配置

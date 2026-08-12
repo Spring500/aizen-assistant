@@ -2,37 +2,32 @@
 
 AizenAssistant 是一个面向重度 Coding Agent 用户的本地 Coding Agent 应用，适合长期维护项目、频繁切换任务方式，并希望对 Agent 上下文做定制化管理的开发者。
 
-## 主要特性
+## 特性
 
-### 视图式上下文
+- **视图式上下文**：将系统提示词、项目规则和 Skill 组织成独立"工作预设"，按任务切换，而非固定使用工作目录下的 `AGENTS.md` 与 Skill。详细说明见[视图式上下文](https://spring500.github.io/aizen-assistant/zh/core/views.html)。
+- **全局技能管理**：通过 `/skills` 从任意 git 仓库引入符合 SKILL.md 规范的技能，跨视图全局生效。详细说明见[全局技能管理](https://spring500.github.io/aizen-assistant/zh/core/skills.html)。
+- **显式意图声明**：Agent 在执行工具前用自然语言说明调用目的，让操作更易理解，并为未来的权限审核提供依据。
 
-你可以将系统提示词、项目规则和 Skill 组织成不同视图，为新会话选择视图，也可以在对话过程中切换——而非单纯使用工作目录下的 `AGENTS.md` 和 Skill。视图是独立的"工作预设"，可配置是否加载当前工作路径的项目上下文与全局技能。"无视图"是原生模式，提供接近原生 Agent 的使用体验。详细说明见[视图式上下文](https://spring500.github.io/aizen-assistant/zh/core/views.html)。
+## 快速开始
 
-### 全局技能管理
+### 从源码启动
 
-全局技能是跨视图常驻的机器级资源：通过 `/skills` 输入任意 git 仓库地址（GitHub、GitLab 或自建仓库），引入并发现其中符合 SKILL.md 规范的技能，安装后全局生效。视图可在 `config.json` 关闭全局技能以获得纯净上下文。详细说明见[全局技能管理](https://spring500.github.io/aizen-assistant/zh/core/skills.html)。
+```powershell
+bun install --frozen-lockfile
+bun run dev:tui
+```
 
-### 显式意图声明
+### 安装启动
 
-Agent 在执行工具前需要用自然语言简要说明调用目的，让连续的文件读取、代码修改和命令执行更容易被人理解，而不只是向用户展示一组工具参数。未来在补充权限审核与沙箱能力后，调用目的还可以作为审核操作合理性、解释权限请求和发现意图与实际行为偏差的依据。
+安装包形式的启动方式尚未提供，将在后续版本补充。
 
-### 便利性设计
-
-- **助记词 ID**：会话和视图使用由三个单词组成的助记 ID，而不是难以辨认和交流的 UUID。即使没有主动命名，你仍然可以方便地查找、区分和引用它们。
-- **本地管理会话**：会话以本地单文件形式保存，文件名不参与会话身份识别，可以在应用外自行改名、备份和整理。会话支持命名、恢复、回退和创建独立分支，原始记录不会因为上下文压缩而被删除。
-
-### 后续计划
-
-- **Agent 自省体系建设**：让 Agent 感知自己的会话名称与 ID、当前模型、视图、可用能力、上下文边界和运行状态，尽可能缩小用户与 Agent 因观察窗口不同产生的信息差异。异常中断恢复也将是其中一部分：Agent 应当知道上一次工作在哪里停止，以及停止来自用户操作还是系统异常。
-- **Perforce 工作区支持**：为使用 Perforce（而非 git）管理的项目，把"当前工作区根"作为上下文加载边界，让工作路径里的 AGENTS.md 与技能只在当前工作区内向上读取。workspace 根由 Perforce 服务端维护，需要本机安装 `p4` 命令行工具并能连接服务端，本期未纳入。
-
-### 注意事项
+## 项目状态
 
 - 项目仍处于早期开发阶段，更新节奏有限。
 - 当前提供 TUI 界面，GUI 尚在规划中。
 - 暂时基于 [pi](https://github.com/earendil-works/pi) SDK 构建，后续考虑使用 `pi-ai` 并自行设计 Agent Loop。
 
-## 文档
+## 文档与参与
 
-- **使用文档**（安装、运行、使用、数据存储、模块说明）：<https://spring500.github.io/aizen-assistant/>；
-- **参与开发**：见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+- **使用文档**：<https://spring500.github.io/aizen-assistant/>
+- **参与开发**：见 [CONTRIBUTING.md](CONTRIBUTING.md)
