@@ -354,6 +354,42 @@ describe("会话存储", () => {
     )
   })
 
+  test("携带历史 permissionMode 字段的会话正常打开而不判为损坏", async () => {
+    const { root, store } = await makeStore()
+    const createdAt = "2026-07-23T10:00:00.000Z"
+    const sessionId = "legacy-permission"
+    await writeFile(
+      join(root, sessionFileName(createdAt, sessionId)),
+      [
+        JSON.stringify({ kind: "session", version: 1, sessionId, cwd: "E:\\project", createdAt }),
+        JSON.stringify({
+          kind: "turn_started",
+          recordId: "started",
+          turnId: "turn-1",
+          at: "2026-07-23T10:00:02.000Z",
+          viewId: null,
+          permissionMode: "hybrid",
+          items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "你好" }] }],
+        }),
+        JSON.stringify({
+          kind: "turn_finished",
+          recordId: "finished",
+          turnId: "turn-1",
+          at: "2026-07-23T10:00:03.000Z",
+          outcome: "completed",
+        }),
+        "",
+      ].join("\n"),
+    )
+
+    const listed = await store.list()
+    const legacy = listed.find((entry) => entry.sessionId === sessionId)
+    expect(legacy?.issues).toEqual([])
+    expect(legacy?.capabilities).toEqual({ canOpen: true, canForceOpen: false })
+    await expect(store.open(sessionId)).resolves.toBeDefined()
+    await store.close(sessionId)
+  })
+
   test("语法损坏与不完整尾行返回不同问题和操作能力", async () => {
     const { root, store } = await makeStore()
     const header = JSON.stringify({
