@@ -38,6 +38,19 @@ function Get-LatestVersion {
   return $release.tag_name.TrimStart("v")
 }
 
+# 计算文件 SHA256（hex 小写）。用 .NET 直接实现，不依赖 PowerShell 模块自动加载（部分环境不可用）。
+function Get-Sha256Hex {
+  param([string]$Path)
+  $sha = [System.Security.Cryptography.SHA256]::Create()
+  $stream = [System.IO.File]::OpenRead($Path)
+  try {
+    $hash = $sha.ComputeHash($stream)
+    return ([System.BitConverter]::ToString($hash)).Replace("-", "").ToLower()
+  } finally {
+    $stream.Dispose()
+  }
+}
+
 # 下载、校验并解压指定版本，把可执行文件放入安装目录；输出实际安装版本号。
 function Install-Release {
   param([string]$Version, [string]$Platform)
@@ -56,7 +69,7 @@ function Install-Release {
     $expectedLine = Get-Content (Join-Path $tmpDir "SHA256SUMS") | Where-Object { $_.TrimEnd() -like "*$zipName" } | Select-Object -First 1
     if (-not $expectedLine) { throw "SHA256SUMS 中找不到 $zipName" }
     $expected = ($expectedLine -split "\s+")[0]
-    $actual = (Get-FileHash -Algorithm SHA256 -Path $zipPath).Hash.ToLower()
+    $actual = Get-Sha256Hex -Path $zipPath
     if ($expected.ToLower() -ne $actual) { throw "SHA256 校验失败" }
 
     Expand-Archive -LiteralPath $zipPath -DestinationPath (Join-Path $tmpDir "extracted") -Force
