@@ -144,14 +144,14 @@ function hasUnsupportedControlSyntax(command: string): boolean {
       continue
     }
     if (character === "<") return true
-    if (character === "&" && next !== "&" && command[index - 1] !== "&") return true
+    if (character === "&" && next !== "&" && command[index - 1] !== "&" && command[index - 1] !== ">") return true
     if (character === "(" || character === ")") return true
   }
   return false
 }
 
-/** 输出重定向（>、>>，含 2>、2>> 等）会把命令输出写入文件，属于绕过 write 工具的编辑行为。 */
-function hasOutputRedirection(command: string): boolean {
+/** 输出重定向（>、>>，含 2>、2>> 等）会把命令输出写入文件，属于绕过 write 工具的编辑行为；重定向到 /dev/null（丢弃）或文件描述符（&1、&2）不算写文件。 */
+function hasFileWriteRedirection(command: string): boolean {
   let quote: "'" | '"' | undefined
   let escaped = false
   for (let index = 0; index < command.length; index++) {
@@ -172,7 +172,16 @@ function hasOutputRedirection(command: string): boolean {
       quote = character
       continue
     }
-    if (character === ">") return true
+    if (character !== ">") continue
+    // 跳过 >> 的第二个 >，再跳过空白，读取重定向目标。
+    let cursor = index + 1
+    if (command[cursor] === ">") cursor++
+    while (cursor < command.length && /\s/.test(command[cursor] ?? "")) cursor++
+    const rest = command.slice(cursor)
+    // 重定向到文件描述符（&1、&2）或丢弃到 /dev/null 均不写文件。
+    if (/^&\d/.test(rest)) continue
+    if (/^\/dev\/null(?:\s|$)/i.test(rest)) continue
+    return true
   }
   return false
 }
@@ -196,7 +205,7 @@ export function parseBash(command: string): BashParseResult {
   const structural = structuralDenyPatterns.find((item) => item.pattern.test(command))
   if (structural) return { kind: "structural-deny", reason: structural.reason }
   if (!command.trim()) return { kind: "unknown" }
-  if (hasOutputRedirection(command))
+  if (hasFileWriteRedirection(command))
     return {
       kind: "structural-deny",
       reason: "output redirection writes command output to a file; use the write tool instead",
