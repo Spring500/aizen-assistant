@@ -42,12 +42,7 @@ describe("bash 解析器", () => {
   })
 
   test("动态语法与不可靠控制结构判 unknown", () => {
-    for (const command of [
-      "echo $(cat file)",
-      "echo $TARGET",
-      "echo ok & rm -rf /",
-      "echo hi < input",
-    ])
+    for (const command of ["echo $(cat file)", "echo $TARGET", "echo ok & rm -rf /", "echo hi < input"])
       expect(parseBash(command).kind).toBe("unknown")
   })
 

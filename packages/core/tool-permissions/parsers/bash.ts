@@ -20,11 +20,13 @@ const unsupportedSyntax =
 const structuralDenyPatterns: Array<{ pattern: RegExp; reason: string }> = [
   {
     pattern: /\beval\b/,
-    reason: "eval executes data as code, so its behavior cannot be reviewed before it runs; write the command directly instead of wrapping it in eval",
+    reason:
+      "eval executes data as code, so its behavior cannot be reviewed before it runs; write the command directly instead of wrapping it in eval",
   },
   {
     pattern: /(?:^|[\s;&|])(?:source|\.)\s+\S+/,
-    reason: "source executes the contents of an external file, which is invisible at review time; write the commands to run directly",
+    reason:
+      "source executes the contents of an external file, which is invisible at review time; write the commands to run directly",
   },
   {
     pattern: /(?:^|\n)\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{/,
@@ -195,7 +197,10 @@ export function parseBash(command: string): BashParseResult {
   if (structural) return { kind: "structural-deny", reason: structural.reason }
   if (!command.trim()) return { kind: "unknown" }
   if (hasOutputRedirection(command))
-    return { kind: "structural-deny", reason: "output redirection writes command output to a file; use the write tool instead" }
+    return {
+      kind: "structural-deny",
+      reason: "output redirection writes command output to a file; use the write tool instead",
+    }
   if (unsupportedSyntax.test(command) || hasUnsupportedControlSyntax(command)) return { kind: "unknown" }
   const nodes = splitNodes(command)
   if (!nodes || nodes.length === 0) return { kind: "unknown" }
