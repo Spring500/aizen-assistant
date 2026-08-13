@@ -43,6 +43,8 @@ export type DiagnosticTestContext = {
   trackProcess(name: string, process: Pick<Bun.Subprocess, "pid" | "exitCode" | "signalCode" | "killed">): () => void
   /** 注册超时时需要检查的文件系统路径，并返回取消注册函数。 */
   trackPath(name: string, path: string): () => void
+  /** 记录一个检查点：超时报告中会输出其距用例开始、距上一检查点的时间，用于定位慢环节。 */
+  checkpoint(name: string): void
 }
 
 export type DiagnosticTestOptions = {
@@ -66,10 +68,16 @@ type DiagnosticTestBody = (context: DiagnosticTestContext) => unknown | Promise<
 /** 替身版 test 函数：签名与 bun:test 的 test 一致，额外支持本文件定义的诊断选项。 */
 type DiagnosticTest = (name: string, body: DiagnosticTestBody, options?: DiagnosticTestOptions) => void
 
-/** 单个用例运行时收集的诊断状态：已注册的子进程与文件路径。 */
+/** 单个用例运行时收集的诊断状态：已注册的子进程、文件路径与检查点时间线。 */
 type DiagnosticState = {
   processes: Map<string, TrackedProcess>
   paths: Map<string, TrackedPath>
+  /** 用例体开始执行的单调时间戳（ms），用于计算检查点相对时间。 */
+  startedAtMs: number
+  /** 上一个检查点的单调时间戳（ms），用于计算检查点间隔。 */
+  lastCheckpointAtMs: number
+  /** 已记录的检查点：名称、距开始时间、距上一检查点时间。 */
+  checkpoints: Array<{ name: string; sinceStartMs: number; sincePrevMs: number }>
 }
 
 /** 进程转储与诊断产物输出目录，可用 AIZEN_TEST_DIAGNOSTICS_DIR 覆盖。 */
@@ -139,11 +147,13 @@ async function captureDump(target: TrackedProcess, testName: string): Promise<vo
 }
 
 /**
- * 输出业务超时诊断报告：汇总进程内存、已注册子进程状态与已注册文件路径状态，
- * 可选地对存活进程采集 Windows 转储。报告写入 stderr，与正常测试输出区分。
+ * 输出业务超时诊断报告：汇总进程内存、已注册子进程状态、已注册文件路径状态
+ * 与检查点时间线，可选地对存活进程采集 Windows 转储。报告写入 stderr，与正常
+ * 测试输出区分。检查点末尾会追加一个 "<timeout>" 伪检查点标记超时发生时刻。
  */
 async function reportTimeout(testName: string, state: DiagnosticState, dumpProcesses: boolean): Promise<void> {
   const memory = process.memoryUsage()
+  const now = performance.now()
   const report = {
     testName,
     runtime: {
@@ -160,6 +170,14 @@ async function reportTimeout(testName: string, state: DiagnosticState, dumpProce
       ...target.state(),
     })),
     paths: await Promise.all([...state.paths.values()].map(inspectPath)),
+    checkpoints: [
+      ...state.checkpoints,
+      {
+        name: "<timeout>",
+        sinceStartMs: Math.round(now - state.startedAtMs),
+        sincePrevMs: Math.round(now - state.lastCheckpointAtMs),
+      },
+    ],
   }
   console.error(`[测试诊断] 业务超时状态：\n${JSON.stringify(report, null, 2)}`)
 
@@ -208,7 +226,14 @@ export function createDiagnosticTest(fileOptions: DiagnosticTestFileOptions): Di
     bunTest(
       name,
       async () => {
-        const state: DiagnosticState = { processes: new Map(), paths: new Map() }
+        const startedAtMs = performance.now()
+        const state: DiagnosticState = {
+          processes: new Map(),
+          paths: new Map(),
+          startedAtMs,
+          lastCheckpointAtMs: startedAtMs,
+          checkpoints: [],
+        }
         const context: DiagnosticTestContext = {
           trackProcess(processName, child) {
             state.processes.set(processName, {
@@ -221,6 +246,15 @@ export function createDiagnosticTest(fileOptions: DiagnosticTestFileOptions): Di
           trackPath(pathName, path) {
             state.paths.set(pathName, { name: pathName, path })
             return () => state.paths.delete(pathName)
+          },
+          checkpoint(checkpointName) {
+            const now = performance.now()
+            state.checkpoints.push({
+              name: checkpointName,
+              sinceStartMs: Math.round(now - state.startedAtMs),
+              sincePrevMs: Math.round(now - state.lastCheckpointAtMs),
+            })
+            state.lastCheckpointAtMs = now
           },
         }
         let timer: ReturnType<typeof setTimeout> | undefined
