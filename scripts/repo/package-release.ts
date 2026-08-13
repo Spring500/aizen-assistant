@@ -11,7 +11,7 @@
 
 import { $ } from "bun"
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { parseCliArgs } from "./parse-cli-args.ts"
 
 /** 根据平台标识推断压缩包内可执行文件名（Windows 带 .exe 后缀）。 */
@@ -27,7 +27,9 @@ async function createZip(stagingDir: string, zipPath: string): Promise<void> {
     const exitCode = await proc.exited
     if (exitCode !== 0) throw new Error("压缩失败（Compress-Archive）")
   } else {
-    await $`cd ${stagingDir} && zip -qr ${zipPath} .`
+    // cd 到 stagingDir 后相对路径会失效，输出必须用绝对路径
+    const absoluteZipPath = resolve(zipPath)
+    await $`cd ${stagingDir} && zip -qr ${absoluteZipPath} .`
   }
 }
 
