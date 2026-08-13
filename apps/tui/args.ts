@@ -2,7 +2,7 @@
 export type ParsedArguments =
   | { command: "interactive"; dataDirectory?: string }
   | { command: "update"; releaseApi?: string }
-  | { command: "uninstall"; yes: boolean }
+  | { command: "uninstall"; yes: boolean; skipPath: boolean }
 
 /** 解析 TUI 启动参数；首个参数为 update / uninstall 时进入分发命令，否则为交互模式。 */
 export function parseArguments(args: string[]): ParsedArguments {
@@ -23,8 +23,9 @@ export function parseArguments(args: string[]): ParsedArguments {
   }
   if (first === "uninstall") {
     const extra = args.slice(1)
-    if (extra.some((argument) => argument !== "--yes")) throw new Error("uninstall 只接受 --yes 参数")
-    return { command: "uninstall", yes: extra.includes("--yes") }
+    if (extra.some((argument) => argument !== "--yes" && argument !== "--skip-path"))
+      throw new Error("uninstall 只接受 --yes 与 --skip-path 参数")
+    return { command: "uninstall", yes: extra.includes("--yes"), skipPath: extra.includes("--skip-path") }
   }
 
   let dataDirectory: string | undefined
@@ -50,7 +51,7 @@ export function usage(): string {
     "    启动多轮终端界面",
     "  aizen-assistant update [--release-api <url>]",
     "    检查并安装最新版本（--release-api 指定发布 API 地址）",
-    "  aizen-assistant uninstall [--yes]",
-    "    卸载并回滚 PATH（--yes 跳过确认）",
+    "  aizen-assistant uninstall [--yes] [--skip-path]",
+    "    卸载并回滚 PATH（--yes 跳过确认；--skip-path 不回滚 PATH）",
   ].join("\n")
 }

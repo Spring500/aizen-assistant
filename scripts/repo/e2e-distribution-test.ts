@@ -184,9 +184,9 @@ async function main(): Promise<void> {
     assert(leftover.length === 0, `延迟替换的临时目录未被清理：${leftover.join(",")}`)
     console.log("更新断言通过：版本已升级到 0.2.0，延迟替换已执行")
 
-    // 6. 执行卸载并断言清理
+    // 6. 执行卸载并断言清理（默认 --skip-path 时卸载也不碰真实 PATH，保持本地无副作用）
     console.log("[6/6] 执行 uninstall --yes 并断言清理")
-    await runInstalledExe(tempHome, ["uninstall", "--yes"])
+    await runInstalledExe(tempHome, withPath ? ["uninstall", "--yes"] : ["uninstall", "--yes", "--skip-path"])
     await Bun.sleep(3_000) // Windows 延迟删除约 1 秒
     if (await pathExists(join(tempHome, ".aizen"))) {
       const leftover =

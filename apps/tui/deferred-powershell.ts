@@ -30,5 +30,10 @@ export async function scheduleDeferredPowerShell(scriptLines: string[]): Promise
   ]
     .map(quotedPowerShell)
     .join(",")}`
-  await Bun.spawn({ cmd: ["powershell", "-NoProfile", "-Command", launch], stdout: "ignore", stderr: "ignore" }).exited
+  const launcher = Bun.spawn({ cmd: ["powershell", "-NoProfile", "-Command", launch], stdout: "pipe", stderr: "pipe" })
+  const exitCode = await launcher.exited
+  if (exitCode !== 0) {
+    const stderr = await new Response(launcher.stderr).text()
+    throw new Error(`启动延迟 PowerShell 失败：exit=${exitCode}${stderr ? `；${stderr.trim()}` : ""}`)
+  }
 }

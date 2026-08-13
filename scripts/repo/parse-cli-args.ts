@@ -16,7 +16,11 @@ export function parseCliArgs(args: string[], allowedFlags: string[]): Record<str
       continue
     }
     if (argument.startsWith("--")) {
-      const [key, value] = argument.slice(2).split("=")
+      // 按首个 = 分割，value 保留后续所有内容（如 URL 含查询参数时不被截断）
+      const eq = argument.indexOf("=")
+      if (eq === -1) throw new Error(`${argument} 必须提供值`)
+      const key = argument.slice(2, eq)
+      const value = argument.slice(eq + 1)
       if (!key || !value) throw new Error(`${argument} 必须提供值`)
       if (!allowedFlags.includes(`--${key}`)) throw new Error(`未知参数：${argument}`)
       values[key] = value.trim()

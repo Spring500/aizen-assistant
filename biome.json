@@ -10,9 +10,9 @@
       "!!**/dist",
       "!!tests/fixtures/app/invalid-model/custom-providers.json",
       "!!docs/.vitepress/sidebar.generated.ts",
-      "!!docs/.vitepress/cache/**",
-      "!!docs/.vitepress/.temp/**",
-      "!!docs/.vitepress/dist/**"
+      "!!docs/.vitepress/cache",
+      "!!docs/.vitepress/.temp",
+      "!!docs/.vitepress/dist"
     ]
   },
   "formatter": {

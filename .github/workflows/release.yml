@@ -91,7 +91,10 @@ jobs:
       - name: 生成 SHA256SUMS
         run: |
           cd assets
-          find . -name "*.zip" -exec sha256sum {} + | sed 's|\./||' > SHA256SUMS
+          # 用 basename 生成，确保记录名与实际上传的资产名一致（不带子目录前缀）
+          for f in $(find . -name "*.zip"); do
+            (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
+          done > SHA256SUMS
       - name: 创建 Draft Release
         run: >-
           gh release create "v${{ needs.verify-tag.outputs.version }}"

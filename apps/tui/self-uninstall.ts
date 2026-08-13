@@ -39,8 +39,10 @@ async function confirmUninstall(skipConfirmation: boolean): Promise<boolean> {
   return answer.trim().toLowerCase() === "y"
 }
 
-/** 从 bash/zsh/fish 配置中移除指向 ~/.aizen/bin 的 PATH 行（幂等重写）。 */
+/** 从 bash/zsh/fish 配置中移除安装目录相关的 PATH 行（幂等重写）。 */
 async function removeShellPathEntries(home: string): Promise<void> {
+  // 安装目录绝对路径（覆盖 --install-dir 自定义安装场景与手写绝对路径的条目，与 Windows $entry3 对齐）
+  const installBinDir = dirname(process.execPath)
   const candidates = [join(home, ".bashrc"), join(home, ".zshrc"), join(home, ".config", "fish", "config.fish")]
   for (const file of candidates) {
     let text: string
@@ -52,7 +54,9 @@ async function removeShellPathEntries(home: string): Promise<void> {
       continue
     }
     const lines = text.split(/\r?\n/)
-    const kept = lines.filter((line) => !INSTALLED_PATH_LINES.some((installed) => line.includes(installed)))
+    const kept = lines.filter(
+      (line) => !INSTALLED_PATH_LINES.some((installed) => line.includes(installed)) && !line.includes(installBinDir),
+    )
     if (kept.length === lines.length) continue
     await writeFile(file, `${kept.join("\n")}\n`)
     console.log(`已从 ${file} 移除 PATH 条目`)
@@ -111,8 +115,8 @@ async function removeAizenDirectory(): Promise<void> {
   }
 }
 
-/** 执行卸载；返回进程退出码。 */
-export async function runUninstall(skipConfirmation: boolean): Promise<number> {
+/** 执行卸载；skipPath 跳过 PATH 回滚（测试/无副作用场景）；返回进程退出码。 */
+export async function runUninstall(skipConfirmation: boolean, skipPath = false): Promise<number> {
   const home = homedir()
   const record = await readInstallRecord()
   if (!record) {
@@ -125,9 +129,11 @@ export async function runUninstall(skipConfirmation: boolean): Promise<number> {
     return 0
   }
   console.log(`卸载来源：${record.channel} ${record.version}（${record.platform}）`)
-  if (process.platform === "win32") await removeWindowsPathEntry()
-  else await removeShellPathEntries(home)
+  if (!skipPath) {
+    if (process.platform === "win32") await removeWindowsPathEntry()
+    else await removeShellPathEntries(home)
+  }
   await removeAizenDirectory()
-  console.log("卸载完成：~/.aizen 已删除，PATH 已回滚")
+  console.log(`卸载完成：~/.aizen 已删除${skipPath ? "（--skip-path，未触碰 PATH）" : "，PATH 已回滚"}`)
   return 0
 }

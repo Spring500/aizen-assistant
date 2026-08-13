@@ -22,8 +22,13 @@ describe("TUI 参数", () => {
       command: "update",
       releaseApi: "http://localhost:18081",
     })
-    expect(parseArguments(["uninstall"])).toEqual({ command: "uninstall", yes: false })
-    expect(parseArguments(["uninstall", "--yes"])).toEqual({ command: "uninstall", yes: true })
+    expect(parseArguments(["uninstall"])).toEqual({ command: "uninstall", yes: false, skipPath: false })
+    expect(parseArguments(["uninstall", "--yes"])).toEqual({ command: "uninstall", yes: true, skipPath: false })
+    expect(parseArguments(["uninstall", "--yes", "--skip-path"])).toEqual({
+      command: "uninstall",
+      yes: true,
+      skipPath: true,
+    })
   })
 
   test("拒绝未知、重复和缺少值的参数", () => {
@@ -31,7 +36,7 @@ describe("TUI 参数", () => {
     expect(() => parseArguments(["--data-dir"])).toThrow("必须提供目录")
     expect(() => parseArguments(["--data-dir", "one", "--data-dir", "two"])).toThrow("不能重复指定")
     expect(() => parseArguments(["update", "--force"])).toThrow("update 只接受 --release-api 参数")
-    expect(() => parseArguments(["uninstall", "--bad"])).toThrow("uninstall 只接受 --yes 参数")
+    expect(() => parseArguments(["uninstall", "--bad"])).toThrow("uninstall 只接受 --yes 与 --skip-path 参数")
   })
 
   test("用法包含所有可用启动参数与子命令", () => {

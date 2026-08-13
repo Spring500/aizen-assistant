@@ -122,7 +122,9 @@ download_and_install() {
   cp -f "$extracted_dir/aizen-assistant" "$INSTALL_DIR/aizen-assistant"
   chmod +x "$INSTALL_DIR/aizen-assistant"
 
-  installed_version="$(tr -d '[:space:]' < "$extracted_dir/version")"
+  if [ -f "$extracted_dir/version" ]; then
+    installed_version="$(tr -d '[:space:]' < "$extracted_dir/version")"
+  fi
   [ -n "$installed_version" ] || installed_version="$version"
   rm -rf "$tmp_dir"
   echo "$installed_version"

@@ -18,4 +18,4 @@ sort: 1
 | 命令 | 行为 |
 |---|---|
 | `aizen-assistant update [--release-api <url>]` | 检查并安装最新版本：查询 GitHub Releases → 下载 → SHA256 校验 → 原子替换自身。便携模式（未通过安装脚本安装）无法自动更新。`--release-api` 指定发布 API 地址（测试或自建镜像场景）。 |
-| `aizen-assistant uninstall [--yes]` | 卸载：确认后删除 `~/.aizen` 并回滚 PATH；`--yes` 跳过确认（非交互终端必须显式指定）。 |
+| `aizen-assistant uninstall [--yes] [--skip-path]` | 卸载：确认后删除 `~/.aizen` 并回滚 PATH；`--yes` 跳过确认（非交互终端必须显式指定）；`--skip-path` 跳过 PATH 回滚（测试/无副作用场景）。 |
