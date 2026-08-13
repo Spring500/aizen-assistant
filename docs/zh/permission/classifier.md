@@ -97,8 +97,8 @@ sort: 2
 
 解析器判定三类结果：
 
-- **结构性拒绝**（分类器声称 `violation` 固定拒绝）：`eval`、`source`/`.`、函数定义、alias 定义、fork bomb；
-- **unknown**（分类器弃权转人工）：变量展开（`$TARGET`、`${TARGET}`）、命令替换（`$(command)`、反引号）、单字符重定向与控制语法（`>`、`<`、裸 `&`、`(`、`)`）、解释器从不可见来源取码（`curl x | bash`、`bash < script`）、引号或转义未闭合。
+- **结构性拒绝**（分类器声称 `violation` 固定拒绝）：`eval`、`source`/`.`、函数定义、alias 定义、fork bomb、输出重定向（`>`、`>>`，含 `2>` 等）；
+- **unknown**（分类器弃权转人工）：变量展开（`$TARGET`、`${TARGET}`）、命令替换（`$(command)`、反引号）、输入重定向与单字符控制语法（`<`、裸 `&`、`(`、`)`）、解释器从不可见来源取码（`curl x | bash`、`bash < script`）、引号或转义未闭合。
 
 逐节点分类覆盖的命令族：
 
@@ -106,7 +106,8 @@ sort: 2
 - 网络命令（curl、wget）→ 无上传且 GET/HEAD 为 `network-fetch`，有上传或非 GET/HEAD 为 `network-send`；
 - git：status/diff/log/show 正面担保；pull/fetch/clone 为 `network-fetch`；push 为 `network-send`；其余弃权；
 - 包管理器：npm 按子命令细粒度分类（见 3.2-3.4），其余（bun、pnpm、yarn、cargo、pip 等）为 `network-fetch` 加工作区 `edit-*`；
-- 文件操作（rm、mv、cp、mkdir）→ 按目标作用域产生 `edit-*`；递归删除系统根或盘符根声称 `violation`；
+- 内容编辑命令（`sed -i`、`tee`、`dd of=`）→ 固定声称 `violation`，引导改用 `write`/`edit` 工具；
+- 文件操作（rm、mv、cp、mkdir、touch、install）→ 按目标作用域产生 `edit-*`；目标位于应用数据目录内时声称 `violation`；递归删除系统根或盘符根声称 `violation`；
 - 系统级更改命令（sudo、systemctl、chmod 等）→ `system-change`。
 
 任一节点无法分类时整体弃权（→ `unknown` → 人工）。
