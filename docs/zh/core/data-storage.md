@@ -9,9 +9,9 @@ sort: 3
 
 AizenAssistant 的数据保存在本地：
 
-- 通过 `bun run dev:tui` 启动时，默认数据目录为 `<worktree>/.aizen/dev-data`；相对路径以 worktree 根目录为基准；
+- 通过 `bun run dev:tui` 启动时，默认数据目录为 `<worktree>/.aizen`；相对路径以 worktree 根目录为基准；
 - 直接运行 `bun apps/tui/main.ts` 时必须指定 `--data-dir <目录>`；相对路径以执行命令时的当前目录为基准；
-- 运行 `aizen-tui.exe` 时，默认数据目录为 `<可执行文件所在目录>/data`；
+- 运行 `aizen-assistant.exe` 时，默认数据目录为 `<可执行文件所在目录>/.aizen`；
 - 以上启动方式都可以通过 `--data-dir <目录>` 改用指定的数据目录，数据目录不能直接指定为当前工作目录。
 
 ## 目录内容

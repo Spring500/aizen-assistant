@@ -7,7 +7,7 @@ const test = createDiagnosticTest({ timeoutMs: 5_000 })
 describe("数据路径", () => {
   test("生产数据目录位于 exe 同目录", () => {
     expect(dataDirectoryFromExecutable("C:\\Apps\\AizenAssistant\\aizen-assistant.exe")).toBe(
-      "C:\\Apps\\AizenAssistant\\data",
+      "C:\\Apps\\AizenAssistant\\.aizen",
     )
   })
 
@@ -22,8 +22,8 @@ describe("数据路径", () => {
     expect(() => resolveDataDirectory(undefined, "C:\\Bun\\bun.exe", "E:\\Project", true)).toThrow(
       "必须传入 --data-dir",
     )
-    expect(resolveDataDirectory(".aizen/dev-data", "C:\\Bun\\bun.exe", "E:\\Project", true)).toBe(
-      "E:\\Project\\.aizen\\dev-data",
+    expect(resolveDataDirectory(".aizen", "C:\\Bun\\bun.exe", "E:\\Project", true)).toBe(
+      "E:\\Project\\.aizen",
     )
     expect(() => resolveDataDirectory(".", "C:\\Bun\\bun.exe", "E:\\Project", true)).toThrow(
       "数据目录不能是当前工作目录",

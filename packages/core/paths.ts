@@ -2,7 +2,7 @@ import { basename, dirname, join, resolve, win32 } from "node:path"
 
 export function dataDirectoryFromExecutable(executablePath: string): string {
   const path = /^[A-Za-z]:[\\/]/.test(executablePath) ? win32 : { dirname, join }
-  return path.join(path.dirname(executablePath), "data")
+  return path.join(path.dirname(executablePath), ".aizen")
 }
 
 export function resolveDataDirectory(

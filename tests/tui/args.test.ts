@@ -6,9 +6,9 @@ const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 describe("TUI 参数", () => {
   test("接受数据目录参数", () => {
-    expect(parseArguments(["--data-dir", ".aizen/dev-data"])).toEqual({
+    expect(parseArguments(["--data-dir", ".aizen"])).toEqual({
       mode: "interactive",
-      dataDirectory: ".aizen/dev-data",
+      dataDirectory: ".aizen",
     })
   })
 
