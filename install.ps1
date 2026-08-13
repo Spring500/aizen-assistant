@@ -155,8 +155,8 @@ function Main {
   Write-Host ""
   Write-Host "请重新打开终端后运行："
   Write-Host "  aizen-assistant"
-  Write-Host "更新：aizen-assistant update（即将支持）"
-  Write-Host "卸载：aizen-assistant uninstall（即将支持）"
+  Write-Host "更新：aizen-assistant update"
+  Write-Host "卸载：aizen-assistant uninstall"
 }
 
 Main

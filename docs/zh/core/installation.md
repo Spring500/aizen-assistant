@@ -31,9 +31,9 @@ curl -fsSL https://cdn.jsdelivr.net/gh/Spring500/aizen-assistant@main/install.sh
 
 当前提供官方安装包的平台：**Windows x64、Linux x64、macOS（Apple Silicon）**。Windows ARM64、Linux ARM64 与 Intel Mac（darwin-x64）暂不支持，安装脚本检测到这些平台时会明确提示，不会返回 404。
 
-**更新（即将支持）**：运行 `aizen-assistant update`，自动从 GitHub Releases 下载最新版并原子替换自身。
+**更新**：运行 `aizen-assistant update`，自动从 GitHub Releases 下载最新版并原子替换自身。
 
-**卸载（即将支持）**：运行 `aizen-assistant uninstall`，确认后删除 `~/.aizen` 并回滚 PATH。
+**卸载**：运行 `aizen-assistant uninstall`，确认后删除 `~/.aizen` 并回滚 PATH。
 
 **macOS 提示**：未签名的发布版首次运行可能被 Gatekeeper 拦截，请右键点击打开，或在终端执行：
 

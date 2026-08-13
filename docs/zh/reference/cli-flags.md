@@ -15,6 +15,8 @@ sort: 1
 
 ## 分发子命令
 
+以下命令仅适用于通过安装脚本（install.sh / install.ps1）装出的分发版本；源码运行（bun 启动）与便携拷贝不支持。
+
 | 命令 | 行为 |
 |---|---|
 | `aizen-assistant update [--release-api <url>]` | 检查并安装最新版本：查询 GitHub Releases → 下载 → SHA256 校验 → 原子替换自身。便携模式（未通过安装脚本安装）无法自动更新。`--release-api` 指定发布 API 地址（测试或自建镜像场景）。 |

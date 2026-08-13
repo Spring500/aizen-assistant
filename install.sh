@@ -235,8 +235,8 @@ main() {
 
 请重新打开终端后运行：
   aizen-assistant
-更新：aizen-assistant update（即将支持）
-卸载：aizen-assistant uninstall（即将支持）
+更新：aizen-assistant update
+卸载：aizen-assistant uninstall
 EOF
 }
 
