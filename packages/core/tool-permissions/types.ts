@@ -2,13 +2,6 @@ import type { JsonValue } from "../session-format.ts"
 import type { PermissionPresetId, PermissionReviewMode } from "./policy-types.ts"
 import type { SensitiveFieldMatcher } from "./sanitizer.ts"
 
-export type PermissionCoverageGap = {
-  code: string
-  kind: "unsupported-environment" | "unsupported-syntax" | "parse-failure" | "rule-miss" | "coarse-rule"
-  summary: string
-  evidence?: string
-}
-
 export type ToolAssessment = {
   summary: string
   targets: string[]
@@ -17,7 +10,6 @@ export type ToolAssessment = {
   tags?: Array<{ tag: string; name: string; evidence?: string }>
   /** 分类器无法判定（unknown）时的标志，供审核界面给出专门提示。 */
   unclassified?: boolean
-  coverageGaps?: PermissionCoverageGap[]
   details?: JsonValue
   match?: JsonValue
   normalizedArguments?: JsonValue
@@ -139,28 +131,6 @@ export interface AiPermissionReviewer {
 export interface HumanPermissionReviewer {
   /** 一次展示并提交同一工具批次中所有需要人工判断的调用。 */
   review(request: HumanReviewBatchRequest, signal?: AbortSignal): Promise<HumanReviewBatchDecision>
-}
-
-export type PermissionGapRecord = {
-  version: 1
-  at: string
-  sessionId: string
-  turnId: string
-  toolCallId: string
-  toolName: string
-  declaredIntent: string
-  cwd: string
-  environment?: JsonValue
-  validatorDecision: ToolPermissionDecision["type"] | "missing" | "error"
-  gaps: PermissionCoverageGap[]
-  arguments: JsonValue
-}
-
-export interface PermissionGapRecorder {
-  /** 将一条规则缺口记录写入仅限本机的数据文件。 */
-  record(record: PermissionGapRecord): Promise<void>
-  /** 等待已排队记录写入完成并释放文件句柄。 */
-  close?(): Promise<void>
 }
 
 export type PermissionAuditEvent =

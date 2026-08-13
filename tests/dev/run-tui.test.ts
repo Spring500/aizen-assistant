@@ -16,12 +16,3 @@ test("开发命令保留显式启动参数", () => {
     "test-data",
   ])
 })
-
-test("开发命令只指定收集开关时仍补充默认数据目录", () => {
-  const root = "E:\\project\\worktree"
-  expect(developmentArguments(["--collect-permission-gaps"], root)).toEqual([
-    "--data-dir",
-    join(root, ".aizen", "dev-data"),
-    "--collect-permission-gaps",
-  ])
-})
