@@ -1,0 +1,281 @@
+/**
+ * update 子命令：检查并安装最新版本。
+ *
+ * 仅 github 通道执行自更新（查询 GitHub API → 下载 → SHA256 校验 → 替换自身）。
+ * npm 通道（预留）与便携模式不做自更新，分别提示对应操作。
+ */
+
+import { basename, dirname, join } from "node:path"
+import { tmpdir } from "node:os"
+import { chmod, copyFile, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises"
+import { $ } from "bun"
+import {
+  type InstallRecord,
+  installRecordPath,
+  readInstallRecord,
+  writeInstallRecord,
+} from "../../packages/core/install-record.ts"
+import { quotedPowerShell, scheduleDeferredPowerShell } from "./deferred-powershell.ts"
+
+/** 默认 GitHub API 基地址，用于查询最新 release；资产 URL 取自返回 JSON，无需额外配置。 */
+const DEFAULT_RELEASE_API = "https://api.github.com/repos/Spring500/aizen-assistant"
+
+/** 比较语义化版本（x.y.z，可选预发布后缀如 -beta.1）：a 大于 b 返回正数，相等返回 0，否则负数。 */
+export function compareVersions(a: string, b: string): number {
+  const parse = (value: string) => {
+    const [core = "", pre = ""] = value.split("-", 2)
+    const [major = 0, minor = 0, patch = 0] = core.split(".").map((part) => Number.parseInt(part, 10) || 0)
+    return { major, minor, patch, pre: pre ? pre.split(".") : null }
+  }
+  const pa = parse(a)
+  const pb = parse(b)
+  for (const key of ["major", "minor", "patch"] as const) {
+    const diff = pa[key] - pb[key]
+    if (diff !== 0) return diff
+  }
+  // 预发布优先级：无预发布 > 有预发布
+  if (pa.pre === null && pb.pre !== null) return 1
+  if (pa.pre !== null && pb.pre === null) return -1
+  if (pa.pre !== null && pb.pre !== null) {
+    // 逐个比较预发布标识符：数字按数值、字母按 ASCII；数字 < 字母；标识符少的更小
+    const length = Math.max(pa.pre.length, pb.pre.length)
+    for (let index = 0; index < length; index++) {
+      const aId = pa.pre[index]
+      const bId = pb.pre[index]
+      if (aId === undefined) return -1
+      if (bId === undefined) return 1
+      const aNumeric = /^\d+$/.test(aId)
+      const bNumeric = /^\d+$/.test(bId)
+      if (aNumeric && bNumeric) {
+        const diff = Number.parseInt(aId, 10) - Number.parseInt(bId, 10)
+        if (diff !== 0) return diff
+      } else if (aNumeric) {
+        return -1
+      } else if (bNumeric) {
+        return 1
+      } else if (aId !== bId) {
+        return aId < bId ? -1 : 1
+      }
+    }
+  }
+  return 0
+}
+
+/** 计算文件的 SHA256（hex 小写）。 */
+async function sha256Of(path: string): Promise<string> {
+  const hasher = new Bun.CryptoHasher("sha256")
+  hasher.update(await Bun.file(path).arrayBuffer())
+  return hasher.digest("hex")
+}
+
+/** GitHub release 的最新版本与资产清单。 */
+type LatestRelease = {
+  version: string
+  assets: { name: string; url: string }[]
+}
+
+/** 查询仓库最新 release；releaseApi 为 API 基地址（测试或自建镜像场景传入）。 */
+async function fetchLatestRelease(releaseApi: string): Promise<LatestRelease> {
+  const response = await fetch(`${releaseApi}/releases/latest`, {
+    headers: { Accept: "application/vnd.github+json", "User-Agent": "aizen-assistant" },
+    signal: AbortSignal.timeout(30_000),
+  })
+  if (!response.ok) throw new Error(`查询最新版本失败：HTTP ${response.status}`)
+  const payload = (await response.json()) as {
+    tag_name?: string
+    assets?: { name: string; browser_download_url: string }[]
+  }
+  const tag = payload.tag_name ?? ""
+  if (!tag.startsWith("v")) throw new Error("最新 release 的 tag 格式异常")
+  return {
+    version: tag.slice(1),
+    assets: (payload.assets ?? []).map((asset) => ({ name: asset.name, url: asset.browser_download_url })),
+  }
+}
+
+/** 下载远程文件到本地路径（大文件给更长超时）。 */
+async function download(url: string, dest: string): Promise<void> {
+  const response = await fetch(url, { signal: AbortSignal.timeout(120_000) })
+  if (!response.ok) throw new Error(`下载失败：HTTP ${response.status}`)
+  await Bun.write(dest, response)
+}
+
+/** 解压 zip 到目标目录（Windows 用 PowerShell，其余平台用 unzip）。 */
+async function extractZip(zipPath: string, destDir: string): Promise<void> {
+  await mkdir(destDir, { recursive: true })
+  if (process.platform === "win32") {
+    const script = `Expand-Archive -LiteralPath ${quotedPowerShell(zipPath)} -DestinationPath ${quotedPowerShell(destDir)} -Force`
+    const proc = Bun.spawn({ cmd: ["powershell", "-NoProfile", "-Command", script] })
+    const exitCode = await proc.exited
+    if (exitCode !== 0) throw new Error("解压失败（Expand-Archive）")
+  } else {
+    await $`unzip -o ${zipPath} -d ${destDir}`
+  }
+}
+
+/**
+ * 用新可执行文件替换当前进程的可执行文件。
+ * - Windows：运行中 exe 被锁，延迟替换；替换成功后由延迟脚本写 install.json（避免版本记录与实际 exe 不一致）。
+ * - POSIX：rename 原子替换；跨文件系统（EXDEV）时先复制到目标同目录再 rename。
+ * cleanupDir：Windows 延迟替换时由延迟脚本负责删除的临时目录（调用方不得提前删除其中的新文件）。
+ * successRecord：Windows 下替换成功后写入的安装记录（channel/version/platform）。
+ */
+async function replaceExecutable(
+  newExecutable: string,
+  currentExecutable: string,
+  cleanupDir?: string,
+  successRecord?: InstallRecord,
+): Promise<void> {
+  if (process.platform === "win32") {
+    // 延迟脚本独立进程执行，结果无法回传主进程，落盘日志供排查（成功/失败都写一行）。
+    const logFile = join(dirname(currentExecutable), `aizen-update-${Date.now()}.log`)
+    const oldExecutable = `${currentExecutable}.old`
+    const log = (message: string) =>
+      `Add-Content -Encoding UTF8 -Path ${quotedPowerShell(logFile)} -Value ${quotedPowerShell(message)}`
+    const lines = [
+      // try/finally 保证无论替换成功与否都清理 workDir（含下载的 zip）
+      "try {",
+      "Start-Sleep -Seconds 1",
+      // 用 .NET 计算新文件哈希作为替换成功的基准（不依赖 PowerShell 模块自动加载）。
+      // FileStream 必须显式 Dispose：OpenRead 默认 FileShare.Read，未关闭的流会阻止后续 Move-Item。
+      "$sha = [System.Security.Cryptography.SHA256]::Create()",
+      `$newStream = [System.IO.File]::OpenRead(${quotedPowerShell(newExecutable)})`,
+      "try { $newHash = [System.BitConverter]::ToString($sha.ComputeHash($newStream)).Replace('-','').ToLower() } finally { $newStream.Dispose() }",
+      // 运行中的 exe 不可删除但可重命名：先改名旧 exe，再落位新 exe，规避删除被锁文件的竞态
+      `Rename-Item -Force ${quotedPowerShell(currentExecutable)} ${quotedPowerShell(oldExecutable)}`,
+      `Move-Item -Force ${quotedPowerShell(newExecutable)} ${quotedPowerShell(currentExecutable)}`,
+      // Test-Path 无法区分目标处是新 exe 还是被锁残留的旧 exe，必须比较内容哈希一致才认为替换成功
+      `if (-not [System.IO.File]::Exists(${quotedPowerShell(currentExecutable)})) { ${log("替换失败：新可执行文件未落位")}; exit 1 }`,
+      `$currentStream = [System.IO.File]::OpenRead(${quotedPowerShell(currentExecutable)})`,
+      "try { $currentHash = [System.BitConverter]::ToString($sha.ComputeHash($currentStream)).Replace('-','').ToLower() } finally { $currentStream.Dispose() }",
+      `if ($currentHash -ne $newHash) { ${log("替换失败：落位后哈希不一致")}; exit 1 }`,
+      // 旧 exe 可能仍被进程占用，退避重试删除；失败则残留 .old（下次更新可清理）
+      `for ($retry = 0; $retry -lt 5; $retry++) { try { Remove-Item -Force ${quotedPowerShell(oldExecutable)} -ErrorAction Stop; break } catch { Start-Sleep -Seconds 1 } }`,
+      ...(successRecord
+        ? [
+            `[System.IO.File]::WriteAllText(${quotedPowerShell(installRecordPath())}, ${quotedPowerShell(
+              JSON.stringify(successRecord),
+            )}, (New-Object System.Text.UTF8Encoding($false)))`,
+          ]
+        : []),
+      log("替换成功"),
+      "} finally {",
+      ...(cleanupDir ? [`Remove-Item -Recurse -Force ${quotedPowerShell(cleanupDir)}`] : []),
+      "}",
+    ]
+    await scheduleDeferredPowerShell(lines)
+  } else {
+    try {
+      await rename(newExecutable, currentExecutable)
+    } catch (error) {
+      if (error && typeof error === "object" && "code" in error && error.code === "EXDEV") {
+        // 跨文件系统：临时目录与安装目录不在同一挂载点（如 Linux /tmp 为 tmpfs），rename 抛 EXDEV。
+        // 先复制到目标同目录（同卷）再 rename，保持同卷原子替换并保留可执行权限。
+        const staged = join(dirname(currentExecutable), `.aizen-update-${process.pid}.tmp`)
+        try {
+          const mode = (await stat(newExecutable)).mode
+          await copyFile(newExecutable, staged)
+          await chmod(staged, mode)
+          await rename(staged, currentExecutable)
+        } finally {
+          await rm(staged, { force: true })
+        }
+      } else {
+        throw error
+      }
+    }
+  }
+}
+
+/** 执行更新；releaseApi 可选（默认 GitHub，测试或自建镜像场景传入）；返回进程退出码。 */
+export async function runUpdate(releaseApi?: string): Promise<number> {
+  // 源码运行（bun 启动）下 process.execPath 是 bun 解释器，自更新无意义，明确拒绝
+  if (basename(process.execPath).toLowerCase().startsWith("bun")) {
+    console.error("源码运行（bun 启动）不支持 update，请使用安装脚本装出的分发版本。")
+    return 1
+  }
+  if (process.env.AIZEN_MANAGED_BY === "npm") {
+    console.log("npm 通道安装：运行 `npm update -g aizen-assistant` 即可更新，launcher 会自动更新二进制。")
+    return 0
+  }
+  const record = await readInstallRecord()
+  if (!record) {
+    console.error("便携模式（未检测到安装记录）：无法自动更新，请从 GitHub Releases 手动下载新版替换。")
+    return 1
+  }
+  if (record.channel !== "github") {
+    console.log("当前通道无需自更新，请按对应安装方式更新。")
+    return 0
+  }
+
+  let release: LatestRelease
+  try {
+    release = await fetchLatestRelease(releaseApi ?? DEFAULT_RELEASE_API)
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error))
+    return 1
+  }
+  if (compareVersions(release.version, record.version) <= 0) {
+    console.log(`已是最新版本：${record.version}`)
+    return 0
+  }
+
+  const assetName = `aizen-assistant-${release.version}-${record.platform}.zip`
+  const asset = release.assets.find((item) => item.name === assetName)
+  if (!asset) {
+    console.error(`发布中找不到当前平台（${record.platform}）的资产：${assetName}`)
+    return 1
+  }
+
+  const workDir = await mkdtemp(join(tmpdir(), "aizen-update-"))
+  // Windows 下已调度延迟替换时，workDir 由延迟脚本清理，主流程不得提前删除（否则新文件丢失）。
+  let delayReplaceScheduled = false
+  try {
+    const zipPath = join(workDir, assetName)
+    await download(asset.url, zipPath)
+
+    // 校验 SHA256：SHA256SUMS 资产或对应行缺失时一律视为校验失败，不允许静默降级
+    const sumsAsset = release.assets.find((item) => item.name === "SHA256SUMS")
+    if (!sumsAsset) {
+      console.error("发布缺少 SHA256SUMS 资产，无法校验，已中止更新")
+      return 1
+    }
+    const sumsResponse = await fetch(sumsAsset.url, { signal: AbortSignal.timeout(30_000) })
+    if (!sumsResponse.ok) {
+      console.error(`下载 SHA256SUMS 失败：HTTP ${sumsResponse.status}`)
+      return 1
+    }
+    const sumsText = await sumsResponse.text()
+    const line = sumsText.split(/\r?\n/).find((item) => item.trimEnd().endsWith(assetName))
+    if (!line) {
+      console.error(`SHA256SUMS 中找不到 ${assetName} 的校验和，已中止更新`)
+      return 1
+    }
+    const expected = line.trim().split(/\s+/)[0]
+    const actual = await sha256Of(zipPath)
+    if (expected !== actual) {
+      console.error("SHA256 校验失败，已中止更新")
+      return 1
+    }
+
+    await extractZip(zipPath, join(workDir, "extracted"))
+    const newExecutable = join(workDir, "extracted", basename(process.execPath))
+    if (!(await Bun.file(newExecutable).exists())) throw new Error("压缩包内未找到可执行文件")
+
+    const successRecord: InstallRecord = { channel: "github", version: release.version, platform: record.platform }
+    await replaceExecutable(newExecutable, process.execPath, workDir, successRecord)
+    // Windows 下延迟替换尚未完成，workDir 由延迟脚本清理；POSIX 下替换同步完成，由 finally 清理。
+    if (process.platform === "win32") {
+      delayReplaceScheduled = true
+    } else {
+      await writeInstallRecord(successRecord)
+    }
+    console.log(`更新完成：${record.version} → ${release.version}`)
+    return 0
+  } catch (error) {
+    console.error(`更新失败：${error instanceof Error ? error.message : String(error)}`)
+    return 1
+  } finally {
+    if (!delayReplaceScheduled) await rm(workDir, { recursive: true, force: true })
+  }
+}
