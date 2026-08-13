@@ -259,6 +259,24 @@ export class AizenCore implements CorePort {
           this.#snapshot.models = await this.#pi.listModels()
           if (this.#pi.listProviders) this.#snapshot.piProviders = await this.#pi.listProviders()
           break
+        case "describe_context": {
+          // 只读展示命令：现场读取当前运行时上下文，不触发模型请求也不落盘。
+          const sessionId = this.#snapshot.currentSessionId
+          const viewId = this.#snapshot.currentViewId
+          if (!sessionId || viewId === undefined) throw new Error("请先新建或恢复会话")
+          const runtime = await this.#pi.describeRuntime()
+          // 预览“下一条消息将被注入的临时上下文”；当前无草稿可传，以空文本近似。
+          const injectedItems = await this.#extraMessages({
+            cwd: this.#cwd,
+            sessionId,
+            turnId: crypto.randomUUID(),
+            viewId,
+            text: "",
+          })
+          for (const listener of this.#listeners)
+            listener({ type: "context_report", report: { ...runtime, injectedItems } })
+          break
+        }
         case "load_model_config":
           this.#snapshot.modelConfig = await this.#requireModelConfigStore().read()
           break

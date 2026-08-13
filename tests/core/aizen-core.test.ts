@@ -1228,6 +1228,45 @@ describe("核心编排", () => {
     await core.dispose()
   })
 
+  test("describe_context 现场组装系统提示词、工具与注入上下文报告", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new (class extends FakePi {
+      override describeRuntime = async (): Promise<RuntimeContextReport> => ({
+        systemPrompt: "完整系统提示词",
+        activeToolNames: ["read"],
+        tools: [{ name: "read", description: "读取文件", parameters: { type: "object", properties: {} } }],
+      })
+    })()
+    const core = new AizenCore({
+      cwd: "E:\\project",
+      store: new SessionStore(root),
+      pi,
+      extraMessages: async () => [
+        { source: "clock", role: "developer", useLater: false, parts: [{ kind: "text", text: "临时上下文" }] },
+      ],
+    })
+    const events: unknown[] = []
+    core.subscribe((event) => events.push(event))
+
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    events.length = 0
+    const result = await core.dispatch({ type: "describe_context" })
+    expect(result).toEqual({ ok: true })
+    expect(events).toContainEqual({
+      type: "context_report",
+      report: {
+        systemPrompt: "完整系统提示词",
+        activeToolNames: ["read"],
+        tools: [{ name: "read", description: "读取文件", parameters: { type: "object", properties: {} } }],
+        injectedItems: [
+          { source: "clock", role: "developer", useLater: false, parts: [{ kind: "text", text: "临时上下文" }] },
+        ],
+      },
+    })
+    await core.dispose()
+  })
+
   test("首次回复前显示零，未确认和最终零用量不覆盖有效上下文", async () => {
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
