@@ -18,6 +18,13 @@ import { quotedPowerShell, scheduleDeferredPowerShell } from "./deferred-powersh
  */
 const INSTALLED_PATH_LINES = ['export PATH="$HOME/.aizen/bin:$PATH"', "fish_add_path $HOME/.aizen/bin"]
 
+/** 从 shell 配置行中过滤掉安装 PATH 行；installBinDir 为安装目录绝对路径（覆盖手写绝对路径条目）。 */
+export function filterInstalledPathLines(lines: string[], installBinDir: string): string[] {
+  return lines.filter(
+    (line) => !INSTALLED_PATH_LINES.some((installed) => line.includes(installed)) && !line.includes(installBinDir),
+  )
+}
+
 /** 交互确认卸载；非交互终端必须显式 --yes。 */
 async function confirmUninstall(skipConfirmation: boolean): Promise<boolean> {
   if (skipConfirmation) return true
@@ -54,9 +61,7 @@ async function removeShellPathEntries(home: string): Promise<void> {
       continue
     }
     const lines = text.split(/\r?\n/)
-    const kept = lines.filter(
-      (line) => !INSTALLED_PATH_LINES.some((installed) => line.includes(installed)) && !line.includes(installBinDir),
-    )
+    const kept = filterInstalledPathLines(lines, installBinDir)
     if (kept.length === lines.length) continue
     await writeFile(file, `${kept.join("\n")}\n`)
     console.log(`已从 ${file} 移除 PATH 条目`)
@@ -118,6 +123,11 @@ async function removeAizenDirectory(): Promise<void> {
 
 /** 执行卸载；skipPath 跳过 PATH 回滚（测试/无副作用场景）；返回进程退出码。 */
 export async function runUninstall(skipConfirmation: boolean, skipPath = false): Promise<number> {
+  // 源码运行（bun 启动）下 process.execPath 是 bun 解释器，卸载无意义，明确拒绝
+  if (basename(process.execPath).toLowerCase().startsWith("bun")) {
+    console.error("源码运行（bun 启动）不支持 uninstall，请使用安装脚本装出的分发版本。")
+    return 1
+  }
   const home = homedir()
   const record = await readInstallRecord()
   if (!record) {
