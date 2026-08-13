@@ -6,7 +6,7 @@ const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
 describe("数据路径", () => {
   test("生产数据目录位于 exe 同目录", () => {
-    expect(dataDirectoryFromExecutable("C:\\Apps\\AizenAssistant\\aizen-tui.exe")).toBe(
+    expect(dataDirectoryFromExecutable("C:\\Apps\\AizenAssistant\\aizen-assistant.exe")).toBe(
       "C:\\Apps\\AizenAssistant\\data",
     )
   })
