@@ -18,7 +18,7 @@ curl -fsSL https://raw.githubusercontent.com/Spring500/aizen-assistant/main/inst
 Windows（PowerShell）：
 
 ```powershell
-irm https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.ps1 | iex
+iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.ps1'))
 ```
 
 国内网络可改用 jsDelivr 镜像脚本（可选）：
