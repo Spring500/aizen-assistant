@@ -7,7 +7,41 @@ sort: 2
 
 # 安装与运行
 
-## 环境准备
+## 安装分发版本
+
+macOS / Linux：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.sh | bash
+```
+
+Windows（PowerShell）：
+
+```powershell
+irm https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.ps1 | iex
+```
+
+国内网络可改用 jsDelivr 镜像脚本（可选）：
+
+```bash
+curl -fsSL https://cdn.jsdelivr.net/gh/Spring500/aizen-assistant@main/install.sh | bash
+```
+
+安装到 `~/.aizen/bin/`（Windows 为 `%USERPROFILE%\.aizen\bin`），只修改用户级环境（`~/.aizen`、shell 配置、用户 PATH），全程无需管理员权限；重复执行安全。需要指定历史版本时：macOS/Linux 用 `bash install.sh 0.1.0`，Windows 下载脚本后 `powershell -ExecutionPolicy Bypass -File install.ps1 0.1.0`。
+
+当前提供官方安装包的平台：**Windows x64、Linux x64、macOS（Apple Silicon）**。Windows ARM64、Linux ARM64 与 Intel Mac（darwin-x64）暂不支持，安装脚本检测到这些平台时会明确提示，不会返回 404。
+
+**更新（即将支持）**：运行 `aizen-assistant update`，自动从 GitHub Releases 下载最新版并原子替换自身。
+
+**卸载（即将支持）**：运行 `aizen-assistant uninstall`，确认后删除 `~/.aizen` 并回滚 PATH。
+
+**macOS 提示**：未签名的发布版首次运行可能被 Gatekeeper 拦截，请右键点击打开，或在终端执行：
+
+```bash
+xattr -d com.apple.quarantine ~/.aizen/bin/aizen-assistant
+```
+
+## 环境准备（源码开发）
 
 项目使用 Bun workspace，Bun 版本见 `.bun-version` 和 `package.json`。
 

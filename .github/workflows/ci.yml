@@ -35,6 +35,15 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
+      - name: 校验 bash 安装脚本语法
+        shell: bash
+        run: bash -n install.sh
+      - name: 校验 PowerShell 安装脚本语法
+        shell: powershell
+        run: |
+          $parseErrors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile('install.ps1', [ref]$null, [ref]$parseErrors) | Out-Null
+          if ($parseErrors.Count -gt 0) { $parseErrors | ForEach-Object { $_.Message }; exit 1 }
       - name: 准备测试诊断工具
         shell: powershell
         run: ./scripts/ci/setup-test-diagnostics.ps1
