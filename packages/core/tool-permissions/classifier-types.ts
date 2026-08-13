@@ -11,6 +11,8 @@ export type PermissionClassifyInput = {
 export type PermissionClassifyContext = {
   workspaceRoot: string
   homeDirectory?: string
+  /** 数据目录绝对路径：文件分类器据此保护数据目录内容。 */
+  dataDirectory?: string
   sensitivePaths: string[]
   shell: string
   platform: string

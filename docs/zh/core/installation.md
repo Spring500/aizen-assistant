@@ -25,12 +25,12 @@ bun install --frozen-lockfile
 bun run dev:tui
 ```
 
-该命令直接运行 TypeScript 源码，不编译可执行文件，也不会自动重启。无论从 worktree 内哪个目录执行，工作目录均为 worktree 根目录，默认数据目录为 `<worktree>/.aizen/dev-data`。
+该命令直接运行 TypeScript 源码，不编译可执行文件，也不会自动重启。无论从 worktree 内哪个目录执行，工作目录均为 worktree 根目录，默认数据目录为 `<worktree>/.aizen`。
 
 需要隔离开发数据时，可以指定其它目录：
 
 ```powershell
-bun run dev:tui --data-dir .aizen/另一组数据
+bun run dev:tui --data-dir .aizen-other
 ```
 
 相对路径以 worktree 根目录为基准，数据目录不能直接指定为 worktree 根目录。
@@ -58,7 +58,7 @@ bun run build:tui --target bun-linux-x64
 bun run build:tui --target bun-darwin-arm64
 ```
 
-产物位于 `dist/`（Windows 为 `aizen-assistant.exe`，其余平台为 `aizen-assistant`），运行时不要求另行安装 Node.js 或 Bun。默认数据目录为可执行文件同目录的 `data`，也可以显式指定：
+产物位于 `dist/`（Windows 为 `aizen-assistant.exe`，其余平台为 `aizen-assistant`），运行时不要求另行安装 Node.js 或 Bun。默认数据目录为可执行文件同目录的 `.aizen`，也可以显式指定：
 
 ```powershell
 .\dist\aizen-assistant.exe --data-dir <目录>

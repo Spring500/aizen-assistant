@@ -185,7 +185,7 @@ classify(input: ClassifyInput, ctx: ClassifyContext): ClassifyResult
 
 标识形如 `namespace/name@version`，仅用于审计归因与用户管理。**策略表只引用标签，不引用分类器。**
 
-**自定义分类器不从项目目录自动发现。** 项目内容可被 Agent 写入，若从项目目录加载，等于让被管辖者自行授予声称权。分类器只能注册到应用级目录（`.aizen/dev-data/classifiers/`），加载失败须显著提示，不得静默跳过。分类器目录列入内置敏感路径保护。
+**自定义分类器不从项目目录自动发现。** 项目内容可被 Agent 写入，若从项目目录加载，等于让被管辖者自行授予声称权。分类器只能注册到应用数据目录（`<数据目录>/classifiers/`），加载失败须显著提示，不得静默跳过。分类器目录列入内置敏感路径保护。
 
 禁用内置分类器后，对应命令全员弃权 → `unknown` → 人工审核。这是预期行为，UI 需在禁用时明确提示后果。
 
@@ -449,7 +449,7 @@ Operation denied: rule "modifying files outside the workspace" is not allowed.
 
 默认包含：`.env` 及其变体、`.npmrc`、`.pypirc`、`credentials`、`id_rsa`、`id_ed25519`、`.ssh`、`.git`、`auth.json`、`.pem` / `.key` / `.p12` / `.pfx` 等。
 
-用户可在应用级配置中增删。**应用自身配置路径（`.aizen/` 下的规则、策略表、分类器目录）强制不可移除**，任何分类器或 Agent 均无法解除对这些路径的保护。
+用户可在应用级配置中增删。**应用数据目录（规则、策略表、分类器目录所在）强制不可移除**，任何分类器或 Agent 均无法解除对这些路径的保护。
 
 具体匹配规则（精确名、前缀、后缀）属于内置文件分类器的实现细节，不在本规格约束范围内。
 

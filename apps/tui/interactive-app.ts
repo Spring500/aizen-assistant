@@ -108,6 +108,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     options.testing?.core ??
     new AizenCore({
       cwd: options.cwd,
+      dataDirectory: options.dataDirectory,
       store,
       pi: pi as PiSessionRuntime,
       modelConfigStore: new ModelConfigStore(join(options.dataDirectory, "custom-providers.json")),

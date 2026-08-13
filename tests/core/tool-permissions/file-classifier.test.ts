@@ -17,12 +17,16 @@ async function fixture() {
   await mkdir(join(workspace, "src"), { recursive: true })
   await writeFile(join(workspace, "src", "a.ts"), "export {}")
   await writeFile(join(workspace, ".env"), "TOKEN=test")
+  const dataDirectory = join(home, "data")
+  await mkdir(dataDirectory, { recursive: true })
   return {
     home,
     workspace,
+    dataDirectory,
     context: {
       workspaceRoot: workspace,
       homeDirectory: home,
+      dataDirectory,
       sensitivePaths: [
         ".env",
         ".npmrc",
@@ -33,7 +37,6 @@ async function fixture() {
         "id_ed25519",
         ".ssh",
         ".git",
-        ".aizen",
         "auth.json",
       ],
       shell: "bash",
@@ -79,13 +82,13 @@ describe("内置文件工具分类器", () => {
     expect(tags(result)).toEqual(["read-workspace", "read-home", "read-sensitive"])
   })
 
-  test("写入权限系统配置声称 violation", async () => {
-    const { workspace, context } = await fixture()
+  test("写入应用数据目录声称 violation", async () => {
+    const { workspace, dataDirectory, context } = await fixture()
     const result = await createBuiltinFileClassifier().classify(
-      { toolName: "write", arguments: { path: ".aizen/policy.json", content: "{}" }, cwd: workspace },
+      { toolName: "write", arguments: { path: join(dataDirectory, "auth.json"), content: "{}" }, cwd: workspace },
       context,
     )
-    expect(tags(result)).toEqual(["edit-workspace", "edit-home", "edit-sensitive", "violation"])
+    expect(tags(result)).toEqual(["edit-home", "edit-sensitive", "violation"])
   })
 
   test("私钥与证书扩展名路径声称敏感", async () => {

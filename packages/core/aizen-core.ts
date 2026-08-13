@@ -69,6 +69,8 @@ export type AizenCoreOptions = {
   modelConfigStore?: ModelConfigStore
   preferencesStore?: AppPreferencesStore
   toolRegistrations?: AizenToolRegistration[]
+  /** 数据目录绝对路径：权限系统据此保护数据目录内容，不依赖目录名。 */
+  dataDirectory?: string
   /** 权限判定审计的本地 JSONL 落盘器（含轮转）；不提供时只写会话记录。 */
   permissionAuditRecorder?: PermissionAuditRecorder
 }
@@ -93,6 +95,7 @@ class CoreCommandError extends Error {
 
 export class AizenCore implements CorePort {
   readonly #cwd: string
+  readonly #dataDirectory: string | undefined
   readonly #store: SessionStore
   readonly #pi: PiPort
   readonly #views: ViewStore | undefined
@@ -128,6 +131,7 @@ export class AizenCore implements CorePort {
 
   constructor(options: AizenCoreOptions) {
     this.#cwd = options.cwd
+    this.#dataDirectory = options.dataDirectory
     this.#sessionInitialCwd = options.cwd
     this.#store = options.store
     this.#pi = options.pi
@@ -176,6 +180,7 @@ export class AizenCore implements CorePort {
         {
           workspaceRoot: this.#cwd,
           homeDirectory: homedir(),
+          ...(this.#dataDirectory ? { dataDirectory: this.#dataDirectory } : {}),
           sensitivePaths: [
             ".env",
             ".npmrc",
@@ -186,7 +191,6 @@ export class AizenCore implements CorePort {
             "id_ed25519",
             ".ssh",
             ".git",
-            ".aizen",
             "auth.json",
           ],
           shell:
@@ -1192,6 +1196,7 @@ export class AizenCore implements CorePort {
       {
         workspaceRoot: this.#cwd,
         homeDirectory: homedir(),
+        ...(this.#dataDirectory ? { dataDirectory: this.#dataDirectory } : {}),
         sensitivePaths: [
           ".env",
           ".npmrc",
@@ -1202,7 +1207,6 @@ export class AizenCore implements CorePort {
           "id_ed25519",
           ".ssh",
           ".git",
-          ".aizen",
           "auth.json",
         ],
         shell:

@@ -72,14 +72,14 @@ sort: 2
 
 ```text
 .env、.npmrc、.pypirc、credentials、id_rsa、id_ed25519、
-.ssh、.git、.aizen、auth.json
+.ssh、.git、auth.json
 ```
 
 当前匹配规则为：不含路径分隔符的配置按完整路径段匹配；含路径分隔符的配置按规范化路径片段匹配。匹配不区分大小写。
 
-### 2.4 权限系统配置保护
+### 2.4 应用数据目录保护
 
-`write` 或 `edit` 的目标路径中包含 `.aizen` 路径段时，分类器除文件作用域标签外还会产生 `violation`。`violation` 固定拒绝，不受预设和审核方式影响。
+`write` 或 `edit` 的目标路径位于应用数据目录内时，分类器除文件作用域标签外还会产生 `violation`。`violation` 固定拒绝，不受预设和审核方式影响。
 
 ---
 

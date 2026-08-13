@@ -33,20 +33,22 @@ async function canonicalPath(path: string): Promise<string> {
   }
 }
 
-function sensitive(target: string, context: PermissionClassifyContext): boolean {
+function sensitive(target: string, context: PermissionClassifyContext, dataDirectory?: string): boolean {
   const normalized = target.replace(/\\/g, "/").toLowerCase()
   const segments = normalized.split("/")
   const name = segments.at(-1) ?? ""
   // 私钥与证书扩展名后缀规则（与路径段规则互补）。
   if (/\.(pem|key|p12|pfx)$/.test(name)) return true
+  // 数据目录整体视为敏感，不依赖目录名。
+  if (dataDirectory && inside(dataDirectory, target)) return true
   return context.sensitivePaths.some((pattern) => {
     const value = pattern.replace(/\\/g, "/").toLowerCase()
     return value.includes("/") ? normalized.includes(value) : segments.includes(value)
   })
 }
 
-function protectedPermissionPath(target: string): boolean {
-  return target.replace(/\\/g, "/").toLowerCase().split("/").includes(".aizen")
+function protectedPermissionPath(target: string, dataDirectory?: string): boolean {
+  return dataDirectory ? inside(dataDirectory, target) : false
 }
 
 function claim(tag: PermissionTag, reason: string): PermissionClaim {
@@ -71,15 +73,19 @@ export function createBuiltinFileClassifier(): PermissionClassifier {
       const home = context.homeDirectory
         ? await realpath(context.homeDirectory).catch(() => resolve(context.homeDirectory as string))
         : undefined
+      const dataDirectory = context.dataDirectory
+        ? await realpath(context.dataDirectory).catch(() => resolve(context.dataDirectory as string))
+        : undefined
       const claims: PermissionClaim[] = []
       if (inside(workspace, target))
         claims.push(claim(`${operation}-workspace`, `目标路径位于工作区：${target}` as string))
       if (home && inside(home, target)) claims.push(claim(`${operation}-home`, `目标路径位于用户目录：${target}`))
       if (!inside(workspace, target) && (!home || !inside(home, target)))
         claims.push(claim(`${operation}-system`, `目标路径位于工作区和用户目录之外：${target}`))
-      if (sensitive(target, context)) claims.push(claim(`${operation}-sensitive`, `目标路径命中敏感路径：${target}`))
-      if (operation === "edit" && protectedPermissionPath(target))
-        claims.push(claim("violation", `目标路径属于权限系统配置：${target}`))
+      if (sensitive(target, context, dataDirectory))
+        claims.push(claim(`${operation}-sensitive`, `目标路径命中敏感路径：${target}`))
+      if (operation === "edit" && protectedPermissionPath(target, dataDirectory))
+        claims.push(claim("violation", `目标路径属于应用数据目录：${target}`))
       return { kind: "claims", claims }
     },
   }
