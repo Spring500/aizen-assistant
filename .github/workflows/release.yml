@@ -100,6 +100,8 @@ jobs:
           --title "AizenAssistant v${{ needs.verify-tag.outputs.version }}"
         env:
           GH_TOKEN: ${{ github.token }}
+          # release job 用 download-artifact 未 checkout，gh CLI 需要 GH_REPO 指定仓库
+          GH_REPO: ${{ github.repository }}
       - name: 上传 Release 资产
         run: |
           cd assets
@@ -107,3 +109,4 @@ jobs:
           gh release upload "v${{ needs.verify-tag.outputs.version }}" ./*.zip SHA256SUMS --clobber
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
