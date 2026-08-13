@@ -14,13 +14,14 @@ import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { type DiscoveredSkill, type InstalledSkill, SkillStore } from "../../packages/core/skill-store.ts"
 import { JsonlPermissionAuditRecorder } from "../../packages/core/tool-permissions/permission-audit.ts"
-import type { CorePort } from "../../packages/core/types.ts"
+import type { ContextReport, CorePort } from "../../packages/core/types.ts"
 import { type ProjectSources, readViewConfig, writeViewConfig } from "../../packages/core/view-config.ts"
 import { ViewStore } from "../../packages/core/view-store.ts"
 import type { ModelOption } from "../../packages/core/pi-port.ts"
 import { PiSessionRuntime } from "../../packages/pi-adapter/session-runtime.ts"
 import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { createChatView } from "../../packages/tui-kit/chat-view.ts"
+import { showContextReport } from "../../packages/tui-kit/context-report-view.ts"
 import { cycleMenu } from "../../packages/tui-kit/cycle-menu.ts"
 import { selectEditableItem } from "../../packages/tui-kit/editable-selector.ts"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
@@ -124,6 +125,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   let interactionDepth = 0
   let terminalTitle = ""
   let permissionReview: PermissionReviewController | undefined
+  /** 等待 context_report 事件的单次回调；同时只会有一个 /context 请求。 */
+  let resolveContextReport: ((report: ContextReport) => void) | undefined
 
   const syncTerminalTitle = (snapshot: ReturnType<typeof core.getSnapshot>) => {
     const identity = snapshot.currentSessionId
@@ -195,6 +198,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         else if (command.name === "/views") runAction(manageViews)
         else if (command.name === "/toggle-think") runAction(() => toggleFold("think"))
         else if (command.name === "/toggle-tool") runAction(() => toggleFold("tool"))
+        else if (command.name === "/context") runAction(showContext)
         else if (command.name === "/models") runAction(manageModels)
         else if (command.name === "/preferences") runAction(openPreferences)
         else if (command.name === "/skills") runAction(manageSkills)
@@ -205,6 +209,20 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     tuiCommands,
   )
   editor.setInputVisible(false)
+
+  /** 请求并展示当前运行时上下文：先派发 describe_context，报告经事件回传后打开只读浮窗。 */
+  async function showContext(): Promise<void> {
+    const report = await new Promise<ContextReport | undefined>((resolve) => {
+      resolveContextReport = resolve
+      void dispatchWithError({ type: "describe_context" }, "读取运行时上下文失败").then((result) => {
+        if (!result.ok) {
+          resolveContextReport = undefined
+          resolve(undefined)
+        }
+      })
+    })
+    if (report) await showContextReport(overlays, report, interactionController.signal)
+  }
 
   const openPermissionReview = () => {
     const requests = core.getSnapshot().pendingPermissionRequests ?? []
@@ -368,6 +386,9 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
             value,
           })
       })
+    } else if (event.type === "context_report") {
+      resolveContextReport?.(event.report)
+      resolveContextReport = undefined
     }
   })
 
