@@ -37,7 +37,13 @@ async function confirmUninstall(skipConfirmation: boolean): Promise<boolean> {
 async function removeShellPathEntries(home: string): Promise<void> {
   // 安装目录绝对路径（覆盖 --install-dir 自定义安装场景与手写绝对路径的条目，与 Windows $entry3 对齐）
   const installBinDir = dirname(process.execPath)
-  const candidates = [join(home, ".bashrc"), join(home, ".zshrc"), join(home, ".config", "fish", "config.fish")]
+  // 覆盖 install.sh 的 bash 分支写入的 .bashrc 与 .bash_profile（macOS 登录 shell 读 .bash_profile）
+  const candidates = [
+    join(home, ".bashrc"),
+    join(home, ".bash_profile"),
+    join(home, ".zshrc"),
+    join(home, ".config", "fish", "config.fish"),
+  ]
   for (const file of candidates) {
     let text: string
     try {

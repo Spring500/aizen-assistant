@@ -25,6 +25,9 @@ export function parseArguments(args: string[]): ParsedArguments {
     const extra = args.slice(1)
     if (extra.some((argument) => argument !== "--yes" && argument !== "--skip-path"))
       throw new Error("uninstall 只接受 --yes 与 --skip-path 参数")
+    if (extra.filter((argument) => argument === "--yes").length > 1) throw new Error("uninstall 的 --yes 不能重复指定")
+    if (extra.filter((argument) => argument === "--skip-path").length > 1)
+      throw new Error("uninstall 的 --skip-path 不能重复指定")
     return { command: "uninstall", yes: extra.includes("--yes"), skipPath: extra.includes("--skip-path") }
   }
 

@@ -37,6 +37,10 @@ describe("TUI 参数", () => {
     expect(() => parseArguments(["--data-dir", "one", "--data-dir", "two"])).toThrow("不能重复指定")
     expect(() => parseArguments(["update", "--force"])).toThrow("update 只接受 --release-api 参数")
     expect(() => parseArguments(["uninstall", "--bad"])).toThrow("uninstall 只接受 --yes 与 --skip-path 参数")
+    expect(() => parseArguments(["uninstall", "--yes", "--yes"])).toThrow("uninstall 的 --yes 不能重复指定")
+    expect(() => parseArguments(["uninstall", "--skip-path", "--skip-path"])).toThrow(
+      "uninstall 的 --skip-path 不能重复指定",
+    )
   })
 
   test("用法包含所有可用启动参数与子命令", () => {
