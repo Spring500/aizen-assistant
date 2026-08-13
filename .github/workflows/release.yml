@@ -1,6 +1,6 @@
 name: release
 
-# 发布流程：push v* tag 触发 → 校验 tag → 4 平台原生矩阵构建并冒烟 → 打包上传 → 创建 Draft Release。
+# 发布流程：push v* tag 触发 → 校验 tag → 3 平台原生矩阵构建并冒烟 → 打包上传 → 创建 Draft Release。
 # 全部产物由 CI 生成，人工只需在 GitHub Releases 页确认后发布。
 
 on:
@@ -17,6 +17,17 @@ jobs:
     outputs:
       version: ${{ steps.validate.outputs.version }}
     steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          fetch-depth: 0
+      # 发布门禁：tag 必须指向 main 分支历史中的提交，防止绕过 PR 把未审查的本地 commit 直接发布
+      - name: 校验 tag 指向 main 分支历史
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "错误：tag 必须指向 main 分支上的提交（经过 PR 合入）" >&2
+            exit 1
+          fi
       - name: 校验 tag 格式并提取版本号
         id: validate
         run: |
