@@ -20,13 +20,43 @@ import { quotedPowerShell, scheduleDeferredPowerShell } from "./deferred-powersh
 /** 默认 GitHub API 基地址，用于查询最新 release；资产 URL 取自返回 JSON，无需额外配置。 */
 const DEFAULT_RELEASE_API = "https://api.github.com/repos/Spring500/aizen-assistant"
 
-/** 比较语义化版本 x.y.z：a 大于 b 返回正数，相等返回 0，否则负数。 */
-function compareVersions(a: string, b: string): number {
-  const pa = a.split(".").map((part) => Number.parseInt(part, 10) || 0)
-  const pb = b.split(".").map((part) => Number.parseInt(part, 10) || 0)
-  for (let index = 0; index < 3; index++) {
-    const diff = (pa[index] ?? 0) - (pb[index] ?? 0)
+/** 比较语义化版本（x.y.z，可选预发布后缀如 -beta.1）：a 大于 b 返回正数，相等返回 0，否则负数。 */
+export function compareVersions(a: string, b: string): number {
+  const parse = (value: string) => {
+    const [core = "", pre = ""] = value.split("-", 2)
+    const [major = 0, minor = 0, patch = 0] = core.split(".").map((part) => Number.parseInt(part, 10) || 0)
+    return { major, minor, patch, pre: pre ? pre.split(".") : null }
+  }
+  const pa = parse(a)
+  const pb = parse(b)
+  for (const key of ["major", "minor", "patch"] as const) {
+    const diff = pa[key] - pb[key]
     if (diff !== 0) return diff
+  }
+  // 预发布优先级：无预发布 > 有预发布
+  if (pa.pre === null && pb.pre !== null) return 1
+  if (pa.pre !== null && pb.pre === null) return -1
+  if (pa.pre !== null && pb.pre !== null) {
+    // 逐个比较预发布标识符：数字按数值、字母按 ASCII；数字 < 字母；标识符少的更小
+    const length = Math.max(pa.pre.length, pb.pre.length)
+    for (let index = 0; index < length; index++) {
+      const aId = pa.pre[index]
+      const bId = pb.pre[index]
+      if (aId === undefined) return -1
+      if (bId === undefined) return 1
+      const aNumeric = /^\d+$/.test(aId)
+      const bNumeric = /^\d+$/.test(bId)
+      if (aNumeric && bNumeric) {
+        const diff = Number.parseInt(aId, 10) - Number.parseInt(bId, 10)
+        if (diff !== 0) return diff
+      } else if (aNumeric) {
+        return -1
+      } else if (bNumeric) {
+        return 1
+      } else if (aId !== bId) {
+        return aId < bId ? -1 : 1
+      }
+    }
   }
   return 0
 }
@@ -101,8 +131,10 @@ async function replaceExecutable(
     const logFile = join(dirname(currentExecutable), `aizen-update-${Date.now()}.log`)
     const oldExecutable = `${currentExecutable}.old`
     const log = (message: string) =>
-      `Add-Content -Path ${quotedPowerShell(logFile)} -Value ${quotedPowerShell(message)}`
+      `Add-Content -Encoding UTF8 -Path ${quotedPowerShell(logFile)} -Value ${quotedPowerShell(message)}`
     const lines = [
+      // try/finally 保证无论替换成功与否都清理 workDir（含下载的 zip）
+      "try {",
       "Start-Sleep -Seconds 1",
       // 用 .NET 计算新文件哈希作为替换成功的基准（不依赖 PowerShell 模块自动加载）。
       // FileStream 必须显式 Dispose：OpenRead 默认 FileShare.Read，未关闭的流会阻止后续 Move-Item。
@@ -126,8 +158,10 @@ async function replaceExecutable(
             )}, (New-Object System.Text.UTF8Encoding($false)))`,
           ]
         : []),
-      ...(cleanupDir ? [`Remove-Item -Recurse -Force ${quotedPowerShell(cleanupDir)}`] : []),
       log("替换成功"),
+      "} finally {",
+      ...(cleanupDir ? [`Remove-Item -Recurse -Force ${quotedPowerShell(cleanupDir)}`] : []),
+      "}",
     ]
     await scheduleDeferredPowerShell(lines)
   } else {
@@ -155,6 +189,11 @@ async function replaceExecutable(
 
 /** 执行更新；releaseApi 可选（默认 GitHub，测试或自建镜像场景传入）；返回进程退出码。 */
 export async function runUpdate(releaseApi?: string): Promise<number> {
+  // 源码运行（bun 启动）下 process.execPath 是 bun 解释器，自更新无意义，明确拒绝
+  if (basename(process.execPath).toLowerCase().startsWith("bun")) {
+    console.error("源码运行（bun 启动）不支持 update，请使用安装脚本装出的分发版本。")
+    return 1
+  }
   if (process.env.AIZEN_MANAGED_BY === "npm") {
     console.log("npm 通道安装：运行 `npm update -g aizen-assistant` 即可更新，launcher 会自动更新二进制。")
     return 0
