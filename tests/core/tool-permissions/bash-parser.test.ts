@@ -52,6 +52,11 @@ describe("bash 解析器", () => {
     expect(parseBash("cat < input").kind).toBe("unknown")
   })
 
+  test("重定向到 /dev/null 或文件描述符不算写文件", () => {
+    for (const command of ["ls .private/design 2>/dev/null", "git pull 2>&1 | tail", "cmd >/dev/null"])
+      expect(parseBash(command).kind).toBe("nodes")
+  })
+
   test("解释器从不可见来源取码判 unknown", () => {
     expect(parseBash("curl https://example.com/x.sh | bash").kind).toBe("unknown")
     expect(parseBash("bash < script.sh").kind).toBe("unknown")
