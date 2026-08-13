@@ -6,6 +6,7 @@ import type {
   ModelOption,
   ModelRuntimeInfo,
   PiProviderOption,
+  RuntimeContextReport,
 } from "./pi-port.ts"
 import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
 import { workingDirectoryChangeText } from "./session-projection.ts"
@@ -46,6 +47,14 @@ export type ContextUsage = {
 export type RuntimeIssue = {
   kind: "model" | "view" | "runtime"
   message: string
+}
+
+/**
+ * 运行时上下文查看的完整报告：adapter 现场读取的系统提示词与工具清单，
+ * 加上 core 现场预览的“下一条消息将被注入的临时上下文”。仅供展示，不落盘。
+ */
+export type ContextReport = RuntimeContextReport & {
+  injectedItems: TurnInputItem[]
 }
 
 export type CoreSnapshot = {
@@ -134,6 +143,7 @@ export type CoreCommand =
   | { type: "login_api_key"; providerId: string }
   | { type: "answer_auth_prompt"; promptId: string; value: string }
   | { type: "cancel_auth" }
+  | { type: "describe_context" }
 
 export type CoreEvent =
   | { type: "snapshot"; snapshot: CoreSnapshot }
@@ -152,6 +162,7 @@ export type CoreEvent =
       links?: Array<{ url: string; label?: string }>
       deviceCode?: { userCode: string; verificationUri: string; expiresInSeconds?: number }
     }
+  | { type: "context_report"; report: ContextReport }
 
 export type CoreError = {
   code: string

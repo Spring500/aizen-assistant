@@ -13,6 +13,7 @@ import {
   type PiRestoreInput,
   type PiSessionTitleInput,
   type ResolvedViewResources,
+  type RuntimeContextReport,
 } from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
@@ -46,6 +47,9 @@ class FakePi implements PiPort {
   loginApiKey = async () => {}
   answerAuthPrompt = () => {}
   cancelAuth = () => {}
+  describeRuntime = async (): Promise<RuntimeContextReport> => {
+    throw new Error("describeRuntime 未实现")
+  }
   dispose = async () => {}
   subscribe(listener: (event: PiPortEvent) => void) {
     this.listeners.add(listener)

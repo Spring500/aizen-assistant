@@ -1,7 +1,7 @@
 import { expect } from "bun:test"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
-import type { PiPort, PiPortEvent } from "../../packages/core/pi-port.ts"
+import type { PiPort, PiPortEvent, RuntimeContextReport } from "../../packages/core/pi-port.ts"
 import type { ModelReference, SessionRecord } from "../../packages/core/session-format.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { mkdtemp, rm } from "node:fs/promises"
@@ -27,6 +27,9 @@ class RestorePi implements PiPort {
   loginApiKey = async () => {}
   answerAuthPrompt = () => {}
   cancelAuth = () => {}
+  describeRuntime = async (): Promise<RuntimeContextReport> => {
+    throw new Error("describeRuntime 未实现")
+  }
   subscribe(_listener: (event: PiPortEvent) => void) {
     return () => {}
   }
