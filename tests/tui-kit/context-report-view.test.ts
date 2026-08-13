@@ -10,10 +10,16 @@ test("报告分章节展示系统提示词、注入上下文与激活工具 Sche
     systemPrompt: "完整系统提示词",
     activeToolNames: ["read"],
     tools: [
-      { name: "read", description: "读取文件", parameters: { type: "object", properties: { path: { type: "string" } } } },
+      {
+        name: "read",
+        description: "读取文件",
+        parameters: { type: "object", properties: { path: { type: "string" } } },
+      },
       { name: "write", description: "写入文件", parameters: { type: "object", properties: {} } },
     ],
-    injectedItems: [{ source: "clock", role: "developer", useLater: false, parts: [{ kind: "text", text: "临时上下文" }] }],
+    injectedItems: [
+      { source: "clock", role: "developer", useLater: false, parts: [{ kind: "text", text: "临时上下文" }] },
+    ],
   }
   const text = contextReportText(report)
   expect(text).toContain("【系统提示词】")
