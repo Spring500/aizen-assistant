@@ -642,24 +642,34 @@ describe("核心编排", () => {
     await core.dispose()
   })
 
-  test("配置命名模型后异步使用第一条消息且每次加载只尝试一次", async () => {
+  test("配置命名模型后异步使用第一条消息且每次加载只尝试一次", async (context) => {
+    context.checkpoint("start")
     const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
     directories.push(root)
     const pi = new NamingFakePi()
+    context.checkpoint("configuredCore")
     const { core, store } = await configuredCore(root, pi)
+    context.checkpoint("create_session")
     await core.dispatch({ type: "create_session", model, viewId: null })
     const sessionId = core.getSnapshot().currentSessionId ?? ""
+    context.checkpoint("send_prompt#1")
     await core.dispatch({ type: "send_prompt", text: "第一条用户消息" })
+    context.checkpoint("send_prompt#2")
     await core.dispatch({ type: "send_prompt", text: "第二条用户消息" })
     expect(pi.titleCalls).toEqual([{ firstUserMessage: "第一条用户消息" }])
     expect(core.getSnapshot().currentSessionName).toBe("自动标题")
+    context.checkpoint("store.read")
     expect((await store.read(sessionId)).records.filter((record) => record.kind === "session_renamed")).toHaveLength(1)
 
     const restoredPi = new NamingFakePi()
+    context.checkpoint("configuredCore(restore)")
     const restored = (await configuredCore(root, restoredPi, store)).core
+    context.checkpoint("open_session")
     await restored.dispatch({ type: "open_session", sessionId })
+    context.checkpoint("send_prompt#3")
     await restored.dispatch({ type: "send_prompt", text: "第三条用户消息" })
     expect(restoredPi.titleCalls).toHaveLength(0)
+    context.checkpoint("dispose")
     await core.dispose()
     await restored.dispose()
   })
