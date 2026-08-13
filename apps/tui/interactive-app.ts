@@ -13,7 +13,6 @@ import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { type DiscoveredSkill, type InstalledSkill, SkillStore } from "../../packages/core/skill-store.ts"
-import { JsonlPermissionGapRecorder } from "../../packages/core/tool-permissions/gap-recorder.ts"
 import { JsonlPermissionAuditRecorder } from "../../packages/core/tool-permissions/permission-audit.ts"
 import type { CorePort } from "../../packages/core/types.ts"
 import { type ProjectSources, readViewConfig, writeViewConfig } from "../../packages/core/view-config.ts"
@@ -62,7 +61,6 @@ const manageViewsValue = ":manage-views"
 export type InteractiveAppOptions = {
   cwd: string
   dataDirectory: string
-  collectPermissionGaps?: boolean
   testing?: {
     renderer: TuiRenderer
     core: CorePort
@@ -116,13 +114,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       preferencesStore: new AppPreferencesStore(join(options.dataDirectory, "preferences.json")),
       views: new ViewStore(join(options.dataDirectory, "views.json")),
       skills,
-      ...(options.collectPermissionGaps
-        ? {
-            permissionGapRecorder: new JsonlPermissionGapRecorder(
-              join(options.dataDirectory, "local-observations", "permission-gaps.jsonl"),
-            ),
-          }
-        : {}),
       permissionAuditRecorder: new JsonlPermissionAuditRecorder(join(options.dataDirectory, "permission-audit.jsonl")),
     })
   const view = createChatView(renderer)
