@@ -92,6 +92,33 @@ describe("pi 内存会话", () => {
     await runtime.dispose()
   })
 
+  test("describeRuntime 返回拼装后的系统提示词与激活工具 Schema", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } }).then((mock) => {
+      mock.handle(() => ({ type: "text", text: "完成" }))
+      return mock
+    })
+    try {
+      runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+      await runtime.create({ cwd: directory, model, view: emptyView })
+      const report = await runtime.describeRuntime()
+      expect(report.systemPrompt.length).toBeGreaterThan(0)
+      expect(report.systemPrompt).toContain("read")
+      expect(report.activeToolNames).toContain("read")
+      const read = report.tools.find((tool) => tool.name === "read")
+      expect(read).toBeDefined()
+      expect(read?.description.length).toBeGreaterThan(0)
+      expect(read?.parameters).toMatchObject({ type: "object" })
+    } finally {
+      mock.stop()
+      await runtime.dispose()
+    }
+  })
+
   test("审计工具向模型发送根级对象参数", async () => {
     const { directory, runtime } = await makeRuntime()
     const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
