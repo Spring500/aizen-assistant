@@ -29,7 +29,6 @@ const safeGitCommands = new Set(["status", "diff", "log", "show"])
 const systemChangeCommands = new Set([
   "chmod",
   "chown",
-  "dd",
   "fdisk",
   "mkfs",
   "mount",
@@ -43,6 +42,9 @@ const networkCommands = new Set(["curl", "wget"])
 const remoteFetchCommands = new Set(["fetch", "pull", "clone"])
 const packageCommands = new Set(["bun", "pnpm", "yarn", "cargo", "pip", "pip3"])
 const filesystemCommands = new Set(["rm", "mv", "cp", "mkdir"])
+
+/** 就地改写文件的内容编辑命令：绕过 write/edit 工具的精确路径判定，固定拒绝。 */
+const inlineEditCommands = new Set(["sed", "tee", "dd"])
 
 /** 明确的全系统破坏模式：递归删除系统根或盘符根。 */
 const destructiveRoot =
@@ -183,6 +185,22 @@ function classifyNode(
     return "abstain"
   }
   if (systemChangeCommands.has(executable)) return [claim("system-change", `${executable} 会改变系统状态`)]
+  if (inlineEditCommands.has(executable)) {
+    if (executable === "sed") {
+      const inPlace = tokens.some((token) => token === "-i" || token.startsWith("-i.") || token === "--in-place")
+      if (inPlace)
+        return [claim("violation", "sed -i edits the file in place; use the write or edit tool to modify files")]
+      return "abstain"
+    }
+    if (executable === "tee") {
+      const hasFile = tokens.slice(1).some((token) => token && !token.startsWith("-"))
+      if (hasFile) return [claim("violation", "tee writes content to a file; use the write tool instead")]
+      return "abstain"
+    }
+    const writesOutput = tokens.some((token) => token.startsWith("of=") || token === "of")
+    if (writesOutput) return [claim("violation", "dd writes to the output file; use the write tool instead")]
+    return "abstain"
+  }
   if (filesystemCommands.has(executable)) {
     const targets = tokens
       .slice(1)

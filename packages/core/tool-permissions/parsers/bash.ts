@@ -118,7 +118,7 @@ function splitNodes(command: string): Array<{ text: string; fromPipe: boolean }>
   return result
 }
 
-/** 单字符控制语法（<、>、裸 &、(、)）超出首期可靠子集。 */
+/** 单字符控制语法（<、裸 &、(、)）超出首期可靠子集。 */
 function hasUnsupportedControlSyntax(command: string): boolean {
   let quote: "'" | '"' | undefined
   let escaped = false
@@ -141,9 +141,36 @@ function hasUnsupportedControlSyntax(command: string): boolean {
       quote = character
       continue
     }
-    if (character === ">" || character === "<") return true
+    if (character === "<") return true
     if (character === "&" && next !== "&" && command[index - 1] !== "&") return true
     if (character === "(" || character === ")") return true
+  }
+  return false
+}
+
+/** 输出重定向（>、>>，含 2>、2>> 等）会把命令输出写入文件，属于绕过 write 工具的编辑行为。 */
+function hasOutputRedirection(command: string): boolean {
+  let quote: "'" | '"' | undefined
+  let escaped = false
+  for (let index = 0; index < command.length; index++) {
+    const character = command[index] ?? ""
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (character === quote) quote = undefined
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+    if (character === ">") return true
   }
   return false
 }
@@ -167,6 +194,8 @@ export function parseBash(command: string): BashParseResult {
   const structural = structuralDenyPatterns.find((item) => item.pattern.test(command))
   if (structural) return { kind: "structural-deny", reason: structural.reason }
   if (!command.trim()) return { kind: "unknown" }
+  if (hasOutputRedirection(command))
+    return { kind: "structural-deny", reason: "output redirection writes command output to a file; use the write tool instead" }
   if (unsupportedSyntax.test(command) || hasUnsupportedControlSyntax(command)) return { kind: "unknown" }
   const nodes = splitNodes(command)
   if (!nodes || nodes.length === 0) return { kind: "unknown" }
