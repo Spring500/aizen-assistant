@@ -27,6 +27,14 @@ export const sidebar: DefaultTheme.Sidebar = {
           link: "/zh/core/skills"
         },
         {
+          text: "会话管理",
+          link: "/zh/core/session"
+        },
+        {
+          text: "后续计划",
+          link: "/zh/core/roadmap"
+        },
+        {
           text: "权限系统使用说明",
           link: "/zh/permission/usage"
         },
@@ -48,6 +56,10 @@ export const sidebar: DefaultTheme.Sidebar = {
     {
       text: "开发者文档",
       items: [
+        {
+          text: "会话文件错误隔离",
+          link: "/zh/core/storage-isolation"
+        },
         {
           text: "权限系统实现规格",
           link: "/zh/permission/spec"

@@ -136,6 +136,66 @@ class RecoverableViewPromptCore extends RecoverablePromptCore {
   }
 }
 
+class IncompatibleSessionCore implements CorePort {
+  readonly commands: CoreCommand[] = []
+  readonly listeners = new Set<(event: CoreEvent) => void>()
+  readonly snapshot: CoreSnapshot = {
+    cwd: "E:\\fixture",
+    status: "idle",
+    sessions: [
+      {
+        sessionId: "incompatible",
+        name: "旧会话",
+        cwd: "E:\\fixture",
+        createdAt: "2026-07-23T10:00:00.000Z",
+        updatedAt: "2026-07-23T10:00:00.000Z",
+        preview: "保留内容",
+        issues: [{ code: "session.incompatible_record", label: "不兼容", message: "存在不兼容记录" }],
+        capabilities: { canOpen: true, canForceOpen: true },
+        lockState: "available",
+      },
+      {
+        sessionId: "damaged",
+        name: "损坏会话",
+        cwd: "E:\\fixture",
+        createdAt: "2026-07-23T10:00:00.000Z",
+        updatedAt: "2026-07-23T10:00:00.000Z",
+        preview: "无法读取会话摘要",
+        issues: [{ code: "session.invalid_json", label: "内容损坏", message: "存在无效 JSON" }],
+        capabilities: { canOpen: false, canForceOpen: false },
+        lockState: "available",
+      },
+    ],
+    models: [model],
+    preferences: structuredClone(defaultAppPreferences),
+    views: [],
+    authProviders: [],
+    transcript: [],
+    activeTools: [],
+    streamingText: "",
+    streamingThinking: "",
+  }
+
+  async dispatch(command: CoreCommand) {
+    this.commands.push(command)
+    if (command.type === "open_session" && command.sessionId === "incompatible")
+      this.snapshot.currentSessionId = "incompatible"
+    for (const listener of this.listeners) listener({ type: "snapshot", snapshot: this.getSnapshot() })
+    return { ok: true as const }
+  }
+
+  subscribe(listener: (event: CoreEvent) => void) {
+    this.listeners.add(listener)
+    return () => this.listeners.delete(listener)
+  }
+
+  getSnapshot() {
+    return structuredClone(this.snapshot)
+  }
+
+  dispose = async () => {}
+}
+
 function assertIncludes(frame: string, value: string): void {
   if (!frame.includes(value)) throw new Error(`界面不包含 ${JSON.stringify(value)}：\n${frame}`)
 }
@@ -365,10 +425,38 @@ async function recoverViewPrompt(): Promise<void> {
   }
 }
 
+async function openIncompatibleSession(): Promise<void> {
+  const setup = await setupRenderer()
+  const core = new IncompatibleSessionCore()
+  const running = runInteractiveApp({
+    cwd: core.snapshot.cwd,
+    dataDirectory: "unused",
+    testing: { renderer: setup.renderer, core },
+  })
+  try {
+    const sessions = await waitForText(setup, "选择会话")
+    assertIncludes(sessions, "[不兼容]")
+    assertIncludes(sessions, "[内容损坏]")
+    await pressDown(setup, 2)
+    await pressEnter(setup)
+    await waitForCondition(
+      () => core.commands.some((command) => command.type === "open_session" && command.sessionId === "incompatible"),
+      "打开不兼容会话",
+    )
+    const opened = core.commands.find((command) => command.type === "open_session")
+    if (opened?.type !== "open_session" || opened.sessionId !== "incompatible") throw new Error("打开没有使用会话 ID")
+  } finally {
+    setup.renderer.keyInput.emit("keypress", key("\x03"))
+    await running
+    setup.renderer.destroy()
+  }
+}
+
 const scenario = process.argv[2]
 if (scenario === "invalid-model") await invalidModel()
 else if (scenario === "no-views") await noViews()
 else if (scenario === "throwing-create") await throwingCreate()
 else if (scenario === "recover-prompt") await recoverPrompt()
 else if (scenario === "recover-view-prompt") await recoverViewPrompt()
+else if (scenario === "open-incompatible") await openIncompatibleSession()
 else throw new Error(`未知场景：${scenario}`)

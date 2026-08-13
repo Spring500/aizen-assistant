@@ -25,4 +25,5 @@ test("真实完整 TUI 交互场景", async () => {
   await runScenario("throwing-create")
   await runScenario("recover-prompt")
   await runScenario("recover-view-prompt")
+  await runScenario("open-incompatible")
 })

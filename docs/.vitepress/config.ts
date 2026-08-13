@@ -8,6 +8,7 @@ import { defineConfig } from "vitepress"
 import { sidebar } from "./sidebar.generated"
 
 export default defineConfig({
+  base: "/aizen-assistant/",
   lang: "zh-CN",
   title: "AizenAssistant",
   description: "面向重度 Coding Agent 用户的本地 Coding Agent 应用",

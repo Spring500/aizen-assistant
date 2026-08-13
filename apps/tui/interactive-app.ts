@@ -13,7 +13,6 @@ import { ModelConfigStore } from "../../packages/core/model-config-store.ts"
 import { projectDirectoryName } from "../../packages/core/paths.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import { type DiscoveredSkill, type InstalledSkill, SkillStore } from "../../packages/core/skill-store.ts"
-import { JsonlPermissionGapRecorder } from "../../packages/core/tool-permissions/gap-recorder.ts"
 import { JsonlPermissionAuditRecorder } from "../../packages/core/tool-permissions/permission-audit.ts"
 import type { CorePort } from "../../packages/core/types.ts"
 import { type ProjectSources, readViewConfig, writeViewConfig } from "../../packages/core/view-config.ts"
@@ -62,7 +61,6 @@ const manageViewsValue = ":manage-views"
 export type InteractiveAppOptions = {
   cwd: string
   dataDirectory: string
-  collectPermissionGaps?: boolean
   testing?: {
     renderer: TuiRenderer
     core: CorePort
@@ -116,13 +114,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       preferencesStore: new AppPreferencesStore(join(options.dataDirectory, "preferences.json")),
       views: new ViewStore(join(options.dataDirectory, "views.json")),
       skills,
-      ...(options.collectPermissionGaps
-        ? {
-            permissionGapRecorder: new JsonlPermissionGapRecorder(
-              join(options.dataDirectory, "local-observations", "permission-gaps.jsonl"),
-            ),
-          }
-        : {}),
       permissionAuditRecorder: new JsonlPermissionAuditRecorder(join(options.dataDirectory, "permission-audit.jsonl")),
     })
   const view = createChatView(renderer)
@@ -1900,20 +1891,27 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       overlays,
       "session-action",
       () => [
-        { name: "打开会话", description: "切换到该会话", value: "open" as const },
-        {
-          name: `会话名称  ${session.name || "当前未命名"}`,
-          description: "在当前选项内重命名；可留空",
-          value: "renamed" as const,
-          edit: {
-            label: "会话名称  ",
-            value: session.name,
-            save: async (name: string) => {
-              const result = await dispatchWithError({ type: "rename_session", sessionId, name }, "重命名会话失败")
-              if (result.ok) session.name = name
-            },
-          },
-        },
+        ...(session.capabilities.canOpen
+          ? [
+              { name: "打开会话", description: "切换到该会话", value: "open" as const },
+              {
+                name: `会话名称  ${session.name || "当前未命名"}`,
+                description: "在当前选项内重命名；可留空",
+                value: "renamed" as const,
+                edit: {
+                  label: "会话名称  ",
+                  value: session.name,
+                  save: async (name: string) => {
+                    const result = await dispatchWithError(
+                      { type: "rename_session", sessionId, name },
+                      "重命名会话失败",
+                    )
+                    if (result.ok) session.name = name
+                  },
+                },
+              },
+            ]
+          : []),
       ],
       { title: `管理会话 · ${session.name || session.sessionId}`, signal: interactionController.signal },
     )
@@ -1962,7 +1960,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       )
       if (selected === "__new__") await createSession()
       else if (selected === "__manage__") await manageSessions()
-      else if (selected) await dispatchWithError({ type: "open_session", sessionId: selected }, "打开会话失败")
+      else if (selected) {
+        const session = sessions.find((item) => item.sessionId === selected)
+        if (session?.capabilities.canOpen)
+          await dispatchWithError({ type: "open_session", sessionId: session.sessionId }, "打开会话失败")
+        else await manageSession(selected)
+      }
     } finally {
       endInteraction()
     }

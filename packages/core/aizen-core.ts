@@ -38,7 +38,6 @@ import type {
   HumanReviewBatchDecision,
   HumanReviewBatchRequest,
   PermissionAuditEvent,
-  PermissionGapRecorder,
 } from "./tool-permissions/types.ts"
 import { type AizenToolRegistration, validateToolRegistrations } from "./tool-registry.ts"
 import {
@@ -70,7 +69,6 @@ export type AizenCoreOptions = {
   modelConfigStore?: ModelConfigStore
   preferencesStore?: AppPreferencesStore
   toolRegistrations?: AizenToolRegistration[]
-  permissionGapRecorder?: PermissionGapRecorder
   /** 权限判定审计的本地 JSONL 落盘器（含轮转）；不提供时只写会话记录。 */
   permissionAuditRecorder?: PermissionAuditRecorder
 }
@@ -103,7 +101,6 @@ export class AizenCore implements CorePort {
   readonly #modelConfigStore: ModelConfigStore | undefined
   readonly #preferencesStore: AppPreferencesStore | undefined
   readonly #toolRegistrations: AizenToolRegistration[]
-  readonly #permissionGapRecorder: PermissionGapRecorder | undefined
   readonly #permissionAuditRecorder: PermissionAuditRecorder | undefined
   readonly #listeners = new Set<(event: CoreEvent) => void>()
   readonly #unsubscribePi: () => void
@@ -155,7 +152,6 @@ export class AizenCore implements CorePort {
     this.#modelConfigStore = options.modelConfigStore
     this.#preferencesStore = options.preferencesStore
     this.#toolRegistrations = options.toolRegistrations ?? []
-    this.#permissionGapRecorder = options.permissionGapRecorder
     this.#permissionAuditRecorder = options.permissionAuditRecorder
     validateToolRegistrations(this.#toolRegistrations)
     this.#unsubscribePi = this.#pi.subscribe((event) => this.#handlePiEvent(event))
@@ -504,7 +500,6 @@ export class AizenCore implements CorePort {
         this.#unsubscribePi()
         try {
           await this.#pi.dispose()
-          await this.#permissionGapRecorder?.close?.()
           await this.#permissionAuditRecorder?.close?.()
         } catch (error) {
           failure ??= error

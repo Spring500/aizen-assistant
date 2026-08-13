@@ -29,7 +29,6 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<numb
     await runInteractiveApp({
       cwd: process.cwd(),
       dataDirectory,
-      collectPermissionGaps: parsed.collectPermissionGaps,
     })
     return 0
   } catch (error) {
