@@ -99,14 +99,17 @@ async function replaceExecutable(
   if (process.platform === "win32") {
     const lines = [
       "Start-Sleep -Seconds 1",
-      // 用 .NET 计算新文件哈希作为替换成功的基准（不依赖 PowerShell 模块自动加载）
+      // 用 .NET 计算新文件哈希作为替换成功的基准（不依赖 PowerShell 模块自动加载）。
+      // FileStream 必须显式 Dispose：OpenRead 默认 FileShare.Read，未关闭的流会阻止后续 Move-Item。
       "$sha = [System.Security.Cryptography.SHA256]::Create()",
-      `$newHash = [System.BitConverter]::ToString($sha.ComputeHash([System.IO.File]::OpenRead(${quotedPowerShell(newExecutable)}))).Replace('-','').ToLower()`,
+      `$newStream = [System.IO.File]::OpenRead(${quotedPowerShell(newExecutable)})`,
+      "try { $newHash = [System.BitConverter]::ToString($sha.ComputeHash($newStream)).Replace('-','').ToLower() } finally { $newStream.Dispose() }",
       `Remove-Item -Force ${quotedPowerShell(currentExecutable)}`,
       `Move-Item -Force ${quotedPowerShell(newExecutable)} ${quotedPowerShell(currentExecutable)}`,
       // Test-Path 无法区分目标处是新 exe 还是被锁残留的旧 exe，必须比较内容哈希一致才认为替换成功
       `if (-not [System.IO.File]::Exists(${quotedPowerShell(currentExecutable)})) { exit 1 }`,
-      `$currentHash = [System.BitConverter]::ToString($sha.ComputeHash([System.IO.File]::OpenRead(${quotedPowerShell(currentExecutable)}))).Replace('-','').ToLower()`,
+      `$currentStream = [System.IO.File]::OpenRead(${quotedPowerShell(currentExecutable)})`,
+      "try { $currentHash = [System.BitConverter]::ToString($sha.ComputeHash($currentStream)).Replace('-','').ToLower() } finally { $currentStream.Dispose() }",
       `if ($currentHash -ne $newHash) { exit 1 }`,
       ...(successRecord
         ? [
