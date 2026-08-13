@@ -22,9 +22,7 @@ describe("数据路径", () => {
     expect(() => resolveDataDirectory(undefined, "C:\\Bun\\bun.exe", "E:\\Project", true)).toThrow(
       "必须传入 --data-dir",
     )
-    expect(resolveDataDirectory(".aizen", "C:\\Bun\\bun.exe", "E:\\Project", true)).toBe(
-      "E:\\Project\\.aizen",
-    )
+    expect(resolveDataDirectory(".aizen", "C:\\Bun\\bun.exe", "E:\\Project", true)).toBe("E:\\Project\\.aizen")
     expect(() => resolveDataDirectory(".", "C:\\Bun\\bun.exe", "E:\\Project", true)).toThrow(
       "数据目录不能是当前工作目录",
     )
