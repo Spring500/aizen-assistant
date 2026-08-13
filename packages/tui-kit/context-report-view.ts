@@ -10,8 +10,7 @@ import {
 import type { RuntimeToolInfo } from "../core/pi-port.ts"
 import type { TurnInputItem } from "../core/session-format.ts"
 import type { ContextReport } from "../core/types.ts"
-import { blockColors } from "./markdown-renderer.ts"
-import { prepareMarkdownForTerminal } from "./markdown.ts"
+import { createAssistantMarkdownRenderer, createAssistantMarkdownStyles } from "./markdown-renderer.ts"
 import type { OverlayManager } from "./overlay-manager.ts"
 import { systemColors } from "./theme.ts"
 
@@ -178,6 +177,7 @@ export async function showContextReport(
       onCancel: () => finish(),
     })
     const renderer = overlays.renderer
+    const styles = createAssistantMarkdownStyles()
     const scrollBox = new ScrollBoxRenderable(renderer, {
       scrollY: true,
       width: "100%",
@@ -207,16 +207,8 @@ export async function showContextReport(
         }),
       )
     }
-    const addMarkdownText = (content: string) => {
-      scrollBox.content.add(
-        new TextRenderable(renderer, {
-          content: prepareMarkdownForTerminal(content),
-          width: "100%",
-          height: "auto",
-          wrapMode: "word",
-          fg: "#f3f4f6",
-        }),
-      )
+    const addMarkdown = (id: string, content: string) => {
+      scrollBox.content.add(createAssistantMarkdownRenderer(renderer, id, content, styles, true))
     }
     const addToolBlock = (tool: RuntimeToolInfo) => {
       const block = new BoxRenderable(renderer, {
@@ -225,7 +217,6 @@ export async function showContextReport(
         flexDirection: "column",
         paddingTop: 1,
         paddingBottom: 1,
-        backgroundColor: blockColors.tool,
       })
       for (const line of toolLines(tool)) {
         block.add(
@@ -242,15 +233,15 @@ export async function showContextReport(
     }
 
     addSectionHeader("系统提示词")
-    if (report.systemPrompt) addMarkdownText(report.systemPrompt)
+    if (report.systemPrompt) addMarkdown("context-report-system", report.systemPrompt)
     else addPlainText("（无）")
 
     addSectionHeader("下一条消息注入的上下文")
     if (report.injectedItems.length === 0) addPlainText("（无）")
     else {
-      for (const item of report.injectedItems) {
+      for (const [index, item] of report.injectedItems.entries()) {
         addPlainText(`[${item.source}]`)
-        addMarkdownText(injectedItemText(item))
+        addMarkdown(`context-report-injected-${index}`, injectedItemText(item))
       }
     }
 

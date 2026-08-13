@@ -131,11 +131,15 @@ test("运行时上下文浮窗分章节渲染系统提示词、注入上下文�
   const frame = setup.captureCharFrame()
   expect(frame).toContain("运行时上下文")
   expect(frame).toContain("系统提示词")
-  expect(frame).toContain("# 标题")
+  expect(frame).toContain("标题")
   expect(frame).toContain("下一条消息注入的上下文")
   expect(frame).toContain("工具 Schema")
   expect(frame).toContain("[read]")
   expect(frame).toContain("path")
+  // 异步树解析完成后隐藏标题标记，与聊天转录的最终样式一致。
+  await Bun.sleep(200)
+  await setup.renderOnce()
+  expect(setup.captureCharFrame()).not.toContain("# 标题")
   setup.renderer.keyInput.emit("keypress", key("\x1b"))
   await showing
   expect(closed).toBe(true)

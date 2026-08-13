@@ -74,12 +74,17 @@ export function createAssistantMarkdownStyles(): AssistantMarkdownStyles {
   }
 }
 
-/** 构造与聊天转录一致的 markdown 渲染器；代码块支持语法高亮，公式块单独渲染。 */
+/**
+ * 构造与聊天转录一致的 markdown 渲染器；代码块支持语法高亮，公式块单独渲染。
+ * streaming 为 true 时先绘制未经树解析的预着色文本，避免等待异步高亮前出现空白；
+ * 聊天转录走滚动回表面（自带 settle），保持默认 false 即可。
+ */
 export function createAssistantMarkdownRenderer(
   context: RenderContext,
   id: string,
   content: string,
   styles: AssistantMarkdownStyles,
+  streaming = false,
 ): MarkdownRenderable {
   const renderNode: NonNullable<MarkdownOptions["renderNode"]> & { codeBlockOnly?: boolean } = (token) => {
     if (token.type !== "code") return undefined
@@ -120,7 +125,7 @@ export function createAssistantMarkdownRenderer(
     width: "100%",
     fg: "#f3f4f6",
     bg: blockColors.assistant,
-    streaming: false,
+    streaming,
     tableOptions: { widthMode: "content" },
     renderNode,
   })
