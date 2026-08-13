@@ -41,7 +41,7 @@ const systemChangeCommands = new Set([
 const networkCommands = new Set(["curl", "wget"])
 const remoteFetchCommands = new Set(["fetch", "pull", "clone"])
 const packageCommands = new Set(["bun", "pnpm", "yarn", "cargo", "pip", "pip3"])
-const filesystemCommands = new Set(["rm", "mv", "cp", "mkdir"])
+const filesystemCommands = new Set(["rm", "mv", "cp", "mkdir", "touch", "install"])
 
 /** 就地改写文件的内容编辑命令：绕过 write/edit 工具的精确路径判定，固定拒绝。 */
 const inlineEditCommands = new Set(["sed", "tee", "dd"])
@@ -216,7 +216,16 @@ function classifyNode(
           `this command recursively deletes the system root and would make the system unusable; delete a specific path inside the workspace instead (e.g. rm -rf ./dist): ${text}`,
         ),
       ]
-    return targets.map((target) => claim(editTag(target, context), `${executable} 会修改目标：${target}`))
+    return targets.map((target) => {
+      // 目标位于应用数据目录内时固定拒绝，与 write/edit 工具的数据目录保护对齐。
+      const dataDirectory = context.dataDirectory ? resolve(context.dataDirectory) : undefined
+      if (dataDirectory && inside(dataDirectory, target))
+        return claim(
+          "violation",
+          `target path ${target} is inside the application data directory, which the permission system manages and the agent must not modify; operate on a path inside the workspace instead`,
+        )
+      return claim(editTag(target, context), `${executable} 会修改目标：${target}`)
+    })
   }
   if (safeReadCommands.has(executable)) {
     // 仅将明显是路径的参数（含分隔符或以 . 开头）当作目标，避免 echo/pwd 等输出命令误判。

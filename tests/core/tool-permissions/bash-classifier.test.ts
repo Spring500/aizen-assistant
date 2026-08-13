@@ -90,4 +90,15 @@ describe("内置 Bash 分类器", () => {
     expect(await classify("sed 's/a/b/' file.txt")).toEqual({ kind: "abstain" })
     expect(await classify("dd if=/dev/zero")).toEqual({ kind: "abstain" })
   })
+
+  test("文件操作目标位于应用数据目录时声称 violation", async () => {
+    const dataContext = { ...context, dataDirectory: "/project/.aizen" }
+    const classifyData = (command: string) =>
+      classifier.classify({ toolName: "bash", command, arguments: { command }, cwd: "/project" }, dataContext)
+    expect(tags(await classifyData("rm -rf .aizen/views/demo"))).toEqual(["violation"])
+    expect(tags(await classifyData("mkdir .aizen/x"))).toEqual(["violation"])
+    expect(tags(await classifyData("touch .aizen/foo"))).toEqual(["violation"])
+    expect(tags(await classifyData("install .aizen/a .aizen/b"))).toEqual(["violation", "violation"])
+    expect(tags(await classifyData("rm -rf ./dist"))).toEqual(["edit-workspace"])
+  })
 })
