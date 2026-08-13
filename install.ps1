@@ -1,7 +1,7 @@
 ﻿# AizenAssistant 安装脚本（Windows）
 #
 # 用法：
-#   irm https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.ps1 | iex
+#   iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.ps1'))
 #   powershell -ExecutionPolicy Bypass -File install.ps1 0.1.0   # 指定历史版本（默认最新）
 #
 # 行为：检测架构 → 下载压缩包 → SHA256 校验 → 解压到 %USERPROFILE%\.aizen\bin →
@@ -45,13 +45,18 @@ function Get-Platform {
   }
 }
 
-# 查询最新发布版本号（去掉 v 前缀）；失败时给出与 install.sh 一致的友好提示。
+# 查询最新发布版本号（去掉 v 前缀）；404 表示仓库尚无发布，其它失败保留原始异常信息便于诊断。
 function Get-LatestVersion {
   try {
     $release = Invoke-RestMethod -Uri "$ReleaseApi/releases/latest" -Headers @{ "User-Agent" = "aizen-assistant" }
     return $release.tag_name.TrimStart("v")
   } catch {
-    throw "无法获取最新版本，请检查网络或指定历史版本重试"
+    $status = 0
+    if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
+    if ($status -eq 404) {
+      throw "仓库尚无正式发布（releases/latest 返回 404），请稍后重试或指定历史版本"
+    }
+    throw "无法获取最新版本：$($_.Exception.Message)"
   }
 }
 
