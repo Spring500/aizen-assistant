@@ -80,6 +80,16 @@ describe("策略权限管理器", () => {
     ).toMatchObject({ type: "deny", source: "policy" })
   })
 
+  test("策略拒绝消息以句子形式携带命中理由", async () => {
+    const { manager } = setup(["violation"])
+    const result = await manager.authorize(request, context, builtinPermissionPolicies["all-right"], "autoApprove")
+    expect(result).toMatchObject({
+      type: "deny",
+      source: "policy",
+      reason: 'Operation denied: rule "Unsafe operation" is not allowed. This call matched it because: 命中 violation',
+    })
+  })
+
   test("同一批次的人工项统一展示和提交", async () => {
     const registry = new PermissionClassifierRegistry()
     registry.registerBuiltin({

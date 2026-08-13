@@ -159,13 +159,18 @@ export class PolicyPermissionManager {
         assessment: analyzed,
         source: evaluation.disposition === "allow" ? "policy" : "reviewMode",
       } as ToolAuthorization
-    if (route === "deny")
+    if (route === "deny") {
+      // 决定拒绝的那条声称的理由，用句子形式衔接进拒绝消息，让 Agent 知晓命中原因与引导。
+      const evidence = evaluation.claims.find((claim) => claim.tag === evaluation.decisiveKey)?.reason
       return {
         type: "deny",
-        reason: `Operation denied: rule "${permissionRuleName(evaluation.decisiveKey) ?? "permission policy"}" is not allowed.`,
+        reason: `Operation denied: rule "${permissionRuleName(evaluation.decisiveKey) ?? "permission policy"}" is not allowed.${
+          evidence ? ` This call matched it because: ${evidence}` : ""
+        }`,
         assessment: analyzed,
         source: "policy",
       } as ToolAuthorization
+    }
     if (route === "ai" || route === "aiWithAbstain") {
       const result = await this.#aiReviewer.review(
         {
