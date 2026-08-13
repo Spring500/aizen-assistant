@@ -23,14 +23,22 @@ REQUESTED_VERSION=""
 SKIP_PATH=0
 CUSTOM_INSTALL_DIR=0
 
+# 校验选项值存在且非另一选项（避免 --version --skip-path 把 --skip-path 误当版本号）。
+require_value() {
+  if [ -z "$2" ] || [ "${2#--}" != "$2" ]; then
+    echo "错误：$1 必须提供值" >&2
+    exit 1
+  fi
+}
+
 # 解析参数：--version / --install-dir / --api-url / --download-url / --skip-path；兼容位置参数形式传入版本号。
 parse_arguments() {
   while [ $# -gt 0 ]; do
     case "$1" in
-      --version) REQUESTED_VERSION="${2:-}"; shift 2 ;;
-      --install-dir) INSTALL_DIR="${2:-}"; CONFIG_DIR="$(dirname "$INSTALL_DIR")"; CUSTOM_INSTALL_DIR=1; shift 2 ;;
-      --api-url) RELEASE_API="${2:-}"; shift 2 ;;
-      --download-url) RELEASE_DOWNLOAD="${2:-}"; shift 2 ;;
+      --version) require_value "$1" "${2:-}"; REQUESTED_VERSION="$2"; shift 2 ;;
+      --install-dir) require_value "$1" "${2:-}"; INSTALL_DIR="$2"; CONFIG_DIR="$(dirname "$INSTALL_DIR")"; CUSTOM_INSTALL_DIR=1; shift 2 ;;
+      --api-url) require_value "$1" "${2:-}"; RELEASE_API="$2"; shift 2 ;;
+      --download-url) require_value "$1" "${2:-}"; RELEASE_DOWNLOAD="$2"; shift 2 ;;
       --skip-path) SKIP_PATH=1; shift ;;
       -h | --help) echo "用法：install.sh [版本号] [--version <v>] [--install-dir <目录>] [--api-url <url>] [--download-url <url>] [--skip-path]"; exit 0 ;;
       *) if [ -z "$REQUESTED_VERSION" ]; then REQUESTED_VERSION="$1"; shift; else echo "未知参数：$1" >&2; exit 1; fi ;;
@@ -96,6 +104,8 @@ download_and_install() {
   local zip_name="aizen-assistant-${version}-${platform}.zip"
   local tmp_dir extracted_dir expected actual installed_version
   tmp_dir="$(mktemp -d)"
+  # 无论成功失败都清理临时目录（覆盖中途 exit 的情况）。
+  trap "rm -rf '$tmp_dir'" EXIT
 
   echo "下载 ${zip_name} ..."
   curl -fL "${base_url}/${zip_name}" -o "$tmp_dir/$zip_name"
@@ -126,7 +136,6 @@ download_and_install() {
     installed_version="$(tr -d '[:space:]' < "$extracted_dir/version")"
   fi
   [ -n "$installed_version" ] || installed_version="$version"
-  rm -rf "$tmp_dir"
   echo "$installed_version"
 }
 
@@ -143,35 +152,49 @@ write_install_record() {
 EOF
 }
 
-# 向指定 shell 配置文件幂等追加 PATH（pattern 用于检测该条目是否已存在）。
+# 向指定 shell 配置文件幂等追加 PATH；剩余参数为需检测的已存在形式（默认安装的字面、~ 与绝对路径三种写法）。
 append_path_line() {
-  local file="$1" line="$2" pattern="$3"
-  if [ -f "$file" ] && grep -qF "$pattern" "$file"; then
-    echo "PATH 已配置：$file"
-    return
+  local file="$1" line="$2"
+  shift 2
+  if [ -f "$file" ]; then
+    local p
+    for p in "$@"; do
+      if grep -qF "$p" "$file"; then
+        echo "PATH 已配置：$file"
+        return
+      fi
+    done
   fi
   printf '\n# AizenAssistant\n%s\n' "$line" >> "$file"
   echo "已追加 PATH 到 $file"
 }
 
 # 按当前 shell 配置 PATH（bash/zsh/fish），幂等。
-# 默认安装写 $HOME/.aizen/bin 字面（用户目录迁移后 PATH 仍有效）；自定义安装目录写绝对路径（与 install.ps1 一致）。
+# 默认安装写 $HOME/.aizen/bin 字面（由 shell 在 source 时展开，用户目录迁移后 PATH 仍有效）；
+# 幂等检测同时匹配字面、~ 与绝对路径三种写法。bash 同时写 .bashrc 与 .bash_profile，
+# 覆盖 macOS 登录 shell 不读 .bashrc 的场景。
 configure_path() {
   local shell_name path_entry
+  local -a patterns
   shell_name="$(basename "${SHELL:-}")"
   if [ "$CUSTOM_INSTALL_DIR" -eq 1 ]; then
     path_entry="$INSTALL_DIR"
+    patterns=("$INSTALL_DIR")
   else
     path_entry='$HOME/.aizen/bin'
+    patterns=('$HOME/.aizen/bin' '~/.aizen/bin' "$CONFIG_DIR/bin")
   fi
   case "$shell_name" in
-    zsh) append_path_line "$HOME_DIR/.zshrc" "export PATH=\"$path_entry:\$PATH\"" "$path_entry" ;;
+    zsh) append_path_line "$HOME_DIR/.zshrc" "export PATH=\"$path_entry:\$PATH\"" "${patterns[@]}" ;;
     fish)
       local fish_file="$HOME_DIR/.config/fish/config.fish"
       mkdir -p "$(dirname "$fish_file")"
-      append_path_line "$fish_file" "fish_add_path $path_entry" "$path_entry"
+      append_path_line "$fish_file" "fish_add_path $path_entry" "${patterns[@]}"
       ;;
-    *) append_path_line "$HOME_DIR/.bashrc" "export PATH=\"$path_entry:\$PATH\"" "$path_entry" ;;
+    *)
+      append_path_line "$HOME_DIR/.bashrc" "export PATH=\"$path_entry:\$PATH\"" "${patterns[@]}"
+      append_path_line "$HOME_DIR/.bash_profile" "export PATH=\"$path_entry:\$PATH\"" "${patterns[@]}"
+      ;;
   esac
 }
 
@@ -212,8 +235,8 @@ main() {
 
 请重新打开终端后运行：
   aizen-assistant
-更新：aizen-assistant update
-卸载：aizen-assistant uninstall
+更新：aizen-assistant update（即将支持）
+卸载：aizen-assistant uninstall（即将支持）
 EOF
 }
 
