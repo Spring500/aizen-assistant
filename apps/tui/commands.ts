@@ -13,6 +13,7 @@ export type TuiCommandName =
   | "/skills"
   | "/toggle-think"
   | "/toggle-tool"
+  | "/context"
 
 export type TuiCommand = {
   name: TuiCommandName
@@ -33,6 +34,7 @@ export const tuiCommands: readonly TuiCommand[] = [
   { name: "/skills", description: "管理全局技能" },
   { name: "/toggle-think", description: "切换思考过程展开/折叠" },
   { name: "/toggle-tool", description: "切换工具区展开/折叠" },
+  { name: "/context", description: "查看当前运行时上下文：系统提示词、注入上下文与工具 Schema" },
   { name: "/quit", description: "退出应用" },
 ]
 

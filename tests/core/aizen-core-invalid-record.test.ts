@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
-import type { PiPort, PiPortEvent } from "../../packages/core/pi-port.ts"
+import type { PiPort, PiPortEvent, RuntimeContextReport } from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
 import { InvalidSessionRecordError, SessionStore } from "../../packages/core/session-store.ts"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
@@ -36,6 +36,9 @@ class FakePi implements PiPort {
   loginApiKey = async () => {}
   answerAuthPrompt = () => {}
   cancelAuth = () => {}
+  describeRuntime = async (): Promise<RuntimeContextReport> => {
+    throw new Error("describeRuntime 未实现")
+  }
   dispose = async () => {}
   subscribe(listener: (event: PiPortEvent) => void) {
     this.listeners.add(listener)

@@ -13,6 +13,7 @@ import {
   type PiRestoreInput,
   type PiSessionTitleInput,
   type ResolvedViewResources,
+  type RuntimeContextReport,
 } from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
@@ -46,6 +47,9 @@ class FakePi implements PiPort {
   loginApiKey = async () => {}
   answerAuthPrompt = () => {}
   cancelAuth = () => {}
+  describeRuntime = async (): Promise<RuntimeContextReport> => {
+    throw new Error("describeRuntime 未实现")
+  }
   dispose = async () => {}
   subscribe(listener: (event: PiPortEvent) => void) {
     this.listeners.add(listener)
@@ -1221,6 +1225,45 @@ describe("核心编排", () => {
       { source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "用户消息" }] },
     ])
     expect(pi.prompts[0]).toMatchObject({ items: started?.kind === "turn_started" ? started.items : [] })
+    await core.dispose()
+  })
+
+  test("describe_context 现场组装系统提示词、工具与注入上下文报告", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const pi = new (class extends FakePi {
+      override describeRuntime = async (): Promise<RuntimeContextReport> => ({
+        systemPrompt: "完整系统提示词",
+        activeToolNames: ["read"],
+        tools: [{ name: "read", description: "读取文件", parameters: { type: "object", properties: {} } }],
+      })
+    })()
+    const core = new AizenCore({
+      cwd: "E:\\project",
+      store: new SessionStore(root),
+      pi,
+      extraMessages: async () => [
+        { source: "clock", role: "developer", useLater: false, parts: [{ kind: "text", text: "临时上下文" }] },
+      ],
+    })
+    const events: unknown[] = []
+    core.subscribe((event) => events.push(event))
+
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    events.length = 0
+    const result = await core.dispatch({ type: "describe_context" })
+    expect(result).toEqual({ ok: true })
+    expect(events).toContainEqual({
+      type: "context_report",
+      report: {
+        systemPrompt: "完整系统提示词",
+        activeToolNames: ["read"],
+        tools: [{ name: "read", description: "读取文件", parameters: { type: "object", properties: {} } }],
+        injectedItems: [
+          { source: "clock", role: "developer", useLater: false, parts: [{ kind: "text", text: "临时上下文" }] },
+        ],
+      },
+    })
     await core.dispose()
   })
 

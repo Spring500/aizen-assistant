@@ -15,5 +15,6 @@ test("重命名命令支持行内名称和无参数编辑", () => {
   expect(parseTuiCommand("/skills")).toEqual({ name: "/skills" })
   expect(parseTuiCommand("/toggle-think")).toEqual({ name: "/toggle-think" })
   expect(parseTuiCommand("/toggle-tool")).toEqual({ name: "/toggle-tool" })
+  expect(parseTuiCommand("/context")).toEqual({ name: "/context" })
   expect(parseTuiCommand("/unknown")).toBeUndefined()
 })

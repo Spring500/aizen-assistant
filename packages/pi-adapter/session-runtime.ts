@@ -49,6 +49,7 @@ import type {
   PiSessionTitleInput,
   ProviderAuthType,
   ResolvedViewResources,
+  RuntimeContextReport,
 } from "../core/pi-port.ts"
 import { PiModelRuntimeError } from "../core/pi-port.ts"
 import { PiProviderStore } from "../core/pi-provider-store.ts"
@@ -693,6 +694,28 @@ export class PiSessionRuntime implements PiPort {
     const model = session.model
     if (!model) throw new Error("当前会话没有模型")
     return modelReference(model, session.thinkingLevel, this.#thinkingConfigs.get(`${model.provider}\0${model.id}`))
+  }
+
+  /**
+   * 现场读取当前内存会话拼装出的系统提示词与激活工具清单，转换为 core 自有类型。
+   * 只读、不触发任何请求；参数 Schema 统一序列化为纯 JSON，禁止 pi 类型越过 PiPort 边界。
+   */
+  async describeRuntime(): Promise<RuntimeContextReport> {
+    const session = this.#requireSession()
+    const active = new Set(session.getActiveToolNames())
+    return {
+      systemPrompt: session.systemPrompt,
+      activeToolNames: [...active],
+      tools: session.getAllTools().map((tool) => ({
+        name: tool.name,
+        description: tool.description,
+        parameters: jsonValue(tool.parameters),
+        ...(tool.promptGuidelines && tool.promptGuidelines.length > 0
+          ? { promptGuidelines: [...tool.promptGuidelines] }
+          : {}),
+        source: tool.sourceInfo.source,
+      })),
+    }
   }
 
   /**

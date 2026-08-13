@@ -1,4 +1,11 @@
-import type { MessageRecord, ModelReference, SessionRecord, TurnInputItem, ViewId } from "./session-format.ts"
+import type {
+  JsonValue,
+  MessageRecord,
+  ModelReference,
+  SessionRecord,
+  TurnInputItem,
+  ViewId,
+} from "./session-format.ts"
 import type { PermissionPresetId, PermissionReviewMode } from "./tool-permissions/policy-types.ts"
 import type {
   AiPermissionReviewer,
@@ -30,6 +37,28 @@ export type ResolvedViewResources = {
   systemPrompt?: string
   agentsFiles: ResolvedAgentsFile[]
   skillPaths: string[]
+}
+
+/** 单个激活工具的只读描述，全部字段为 core 自有类型，禁止 pi 类型越过 PiPort 边界。 */
+export type RuntimeToolInfo = {
+  name: string
+  description: string
+  /** 与 JSON Schema 兼容的参数定义。 */
+  parameters: JsonValue
+  promptGuidelines?: string[]
+  source?: string
+}
+
+/**
+ * 当前内存会话拼装出的运行时上下文的只读报告，由 adapter 现场读取并转换。
+ * 供“运行时上下文查看”这类纯展示功能使用，不触发任何模型请求。
+ */
+export type RuntimeContextReport = {
+  /** 完整拼装后的系统提示词（含内建模板、视图覆盖、AGENTS、Skill 与工具片段）。 */
+  systemPrompt: string
+  /** 当前激活的工具名称，顺序与系统提示词中的工具片段一致。 */
+  activeToolNames: string[]
+  tools: RuntimeToolInfo[]
 }
 
 export type ModelRuntimeInfo = ModelReference & {
@@ -179,6 +208,8 @@ export interface PiPort {
   loginProvider?(providerId: string, authType: ProviderAuthType): Promise<void>
   answerAuthPrompt(promptId: string, value: string): void
   cancelAuth(): void
+  /** 返回当前内存会话拼装出的系统提示词与激活工具清单（只读，不触发请求）。 */
+  describeRuntime(): Promise<RuntimeContextReport>
   subscribe(listener: (event: PiPortEvent) => void): () => void
   dispose(): Promise<void>
 }

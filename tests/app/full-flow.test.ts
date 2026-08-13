@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { ActionQueue, dispatchOrPresent, sendPromptWithRecovery } from "../../apps/tui/action-runner.ts"
 import { viewSelectionItems } from "../../apps/tui/view-flow.ts"
 import { AizenCore } from "../../packages/core/aizen-core.ts"
-import type { PiPort, PiPortEvent } from "../../packages/core/pi-port.ts"
+import type { PiPort, PiPortEvent, RuntimeContextReport } from "../../packages/core/pi-port.ts"
 import type { ModelReference } from "../../packages/core/session-format.ts"
 import { SessionStore } from "../../packages/core/session-store.ts"
 import type { CoreCommand, CoreEvent, CorePort, CoreSnapshot } from "../../packages/core/types.ts"
@@ -37,6 +37,9 @@ class FixturePi implements PiPort {
   loginApiKey = async () => {}
   answerAuthPrompt = () => {}
   cancelAuth = () => {}
+  describeRuntime = async (): Promise<RuntimeContextReport> => {
+    throw new Error("describeRuntime 未实现")
+  }
   subscribe(_listener: (event: PiPortEvent) => void) {
     return () => {}
   }
