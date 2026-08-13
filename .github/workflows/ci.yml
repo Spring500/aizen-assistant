@@ -9,6 +9,23 @@ permissions:
   contents: read
 
 jobs:
+  # POSIX 打包自检：release 的 linux/darwin 打包分支只在 tag 触发时执行，PR 阶段零覆盖，
+  # 这里在 ubuntu 上原生构建并打包一次，把 POSIX 的 zip 分支纳入每次 PR 检查。
+  package-posix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: POSIX 构建与打包自检
+        run: |
+          bun run build:tui --target bun-linux-x64
+          bun run scripts/repo/package-release.ts --version 0.0.0-test --platform linux-x64
+          test -f dist/aizen-assistant-0.0.0-test-linux-x64.zip
+
   verify:
     runs-on: windows-latest
     timeout-minutes: 5
