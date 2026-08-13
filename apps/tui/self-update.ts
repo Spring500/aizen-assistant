@@ -97,6 +97,11 @@ async function replaceExecutable(
   successRecord?: InstallRecord,
 ): Promise<void> {
   if (process.platform === "win32") {
+    // 延迟脚本独立进程执行，结果无法回传主进程，落盘日志供排查（成功/失败都写一行）。
+    const logFile = join(dirname(currentExecutable), `aizen-update-${Date.now()}.log`)
+    const oldExecutable = `${currentExecutable}.old`
+    const log = (message: string) =>
+      `Add-Content -Path ${quotedPowerShell(logFile)} -Value ${quotedPowerShell(message)}`
     const lines = [
       "Start-Sleep -Seconds 1",
       // 用 .NET 计算新文件哈希作为替换成功的基准（不依赖 PowerShell 模块自动加载）。
@@ -104,13 +109,16 @@ async function replaceExecutable(
       "$sha = [System.Security.Cryptography.SHA256]::Create()",
       `$newStream = [System.IO.File]::OpenRead(${quotedPowerShell(newExecutable)})`,
       "try { $newHash = [System.BitConverter]::ToString($sha.ComputeHash($newStream)).Replace('-','').ToLower() } finally { $newStream.Dispose() }",
-      `Remove-Item -Force ${quotedPowerShell(currentExecutable)}`,
+      // 运行中的 exe 不可删除但可重命名：先改名旧 exe，再落位新 exe，规避删除被锁文件的竞态
+      `Rename-Item -Force ${quotedPowerShell(currentExecutable)} ${quotedPowerShell(oldExecutable)}`,
       `Move-Item -Force ${quotedPowerShell(newExecutable)} ${quotedPowerShell(currentExecutable)}`,
       // Test-Path 无法区分目标处是新 exe 还是被锁残留的旧 exe，必须比较内容哈希一致才认为替换成功
-      `if (-not [System.IO.File]::Exists(${quotedPowerShell(currentExecutable)})) { exit 1 }`,
+      `if (-not [System.IO.File]::Exists(${quotedPowerShell(currentExecutable)})) { ${log("替换失败：新可执行文件未落位")}; exit 1 }`,
       `$currentStream = [System.IO.File]::OpenRead(${quotedPowerShell(currentExecutable)})`,
       "try { $currentHash = [System.BitConverter]::ToString($sha.ComputeHash($currentStream)).Replace('-','').ToLower() } finally { $currentStream.Dispose() }",
-      `if ($currentHash -ne $newHash) { exit 1 }`,
+      `if ($currentHash -ne $newHash) { ${log("替换失败：落位后哈希不一致")}; exit 1 }`,
+      // 旧 exe 可能仍被进程占用，退避重试删除；失败则残留 .old（下次更新可清理）
+      `for ($retry = 0; $retry -lt 5; $retry++) { try { Remove-Item -Force ${quotedPowerShell(oldExecutable)} -ErrorAction Stop; break } catch { Start-Sleep -Seconds 1 } }`,
       ...(successRecord
         ? [
             `[System.IO.File]::WriteAllText(${quotedPowerShell(installRecordPath())}, ${quotedPowerShell(
@@ -119,6 +127,7 @@ async function replaceExecutable(
           ]
         : []),
       ...(cleanupDir ? [`Remove-Item -Recurse -Force ${quotedPowerShell(cleanupDir)}`] : []),
+      log("替换成功"),
     ]
     await scheduleDeferredPowerShell(lines)
   } else {
@@ -192,7 +201,12 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
       console.error("发布缺少 SHA256SUMS 资产，无法校验，已中止更新")
       return 1
     }
-    const sumsText = await (await fetch(sumsAsset.url, { signal: AbortSignal.timeout(30_000) })).text()
+    const sumsResponse = await fetch(sumsAsset.url, { signal: AbortSignal.timeout(30_000) })
+    if (!sumsResponse.ok) {
+      console.error(`下载 SHA256SUMS 失败：HTTP ${sumsResponse.status}`)
+      return 1
+    }
+    const sumsText = await sumsResponse.text()
     const line = sumsText.split(/\r?\n/).find((item) => item.trimEnd().endsWith(assetName))
     if (!line) {
       console.error(`SHA256SUMS 中找不到 ${assetName} 的校验和，已中止更新`)
@@ -211,10 +225,10 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
 
     const successRecord: InstallRecord = { channel: "github", version: release.version, platform: record.platform }
     await replaceExecutable(newExecutable, process.execPath, workDir, successRecord)
-    delayReplaceScheduled = true
-    // Windows 下 install.json 由延迟脚本在替换成功后写入（避免版本记录与实际 exe 不一致）；
-    // POSIX 下 rename 已同步完成，这里直接写入。
-    if (process.platform !== "win32") {
+    // Windows 下延迟替换尚未完成，workDir 由延迟脚本清理；POSIX 下替换同步完成，由 finally 清理。
+    if (process.platform === "win32") {
+      delayReplaceScheduled = true
+    } else {
       await writeInstallRecord(successRecord)
     }
     console.log(`更新完成：${record.version} → ${release.version}`)

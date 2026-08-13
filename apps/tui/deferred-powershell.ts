@@ -20,7 +20,17 @@ export function quotedPowerShell(value: string): string {
  */
 export async function scheduleDeferredPowerShell(scriptLines: string[]): Promise<void> {
   const script = join(tmpdir(), `aizen-deferred-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.ps1`)
-  await writeFile(script, [...scriptLines, `Remove-Item -Force ${quotedPowerShell(script)}`, ""].join("\n"))
+  // 写 UTF-8 BOM（Windows PowerShell 5.1 无 BOM 会按 ANSI 解码导致中文乱码）；
+  // try/finally 保证脚本即使中途 exit 1 也能删除自身临时文件。
+  const content = [
+    "try {",
+    ...scriptLines,
+    "} finally {",
+    `  Remove-Item -Force ${quotedPowerShell(script)} -ErrorAction SilentlyContinue`,
+    "}",
+    "",
+  ].join("\n")
+  await writeFile(script, `\uFEFF${content}`)
   const launch = `Start-Process -WindowStyle Hidden powershell -ArgumentList ${[
     "-NoProfile",
     "-ExecutionPolicy",
