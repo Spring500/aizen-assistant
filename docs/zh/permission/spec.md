@@ -235,7 +235,7 @@ classify(input: ClassifyInput, ctx: ClassifyContext): ClassifyResult
 
 这是"一切声称必经策略表"这一规则的唯一明文例外。策略表中不含 `violation` 条目，UI 中不提供其配置入口。
 
-它是任何分类器（含 AI 审核员）都可声称的口袋标签，用于将"难以归入其他标签、但必须严格拒绝"的行为纳入统一出口。
+它是任何分类器都可声称的口袋标签，用于将"难以归入其他标签、但必须严格拒绝"的行为纳入统一出口。
 
 **适用判据：在任何场景下都不应发生的行为。** 而非"危险的行为"。
 
@@ -244,6 +244,7 @@ classify(input: ClassifyInput, ctx: ClassifyContext): ClassifyResult
 | `rm -rf /`、`rm -rf ~` | `rm -rf ./dist` |
 | 篡改权限系统自身配置 | 修改工作区内的普通文件 |
 | 将私钥内容发送至网络 | 其他网络上传 |
+| 用 bash 就地编辑文件（`sed -i`、重定向写入）绕过 write/edit 工具 | 用 write/edit 工具编辑工作区文件 |
 
 声称 `violation` 时必须附人类可读理由。
 

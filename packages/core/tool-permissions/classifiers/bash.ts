@@ -29,7 +29,6 @@ const safeGitCommands = new Set(["status", "diff", "log", "show"])
 const systemChangeCommands = new Set([
   "chmod",
   "chown",
-  "dd",
   "fdisk",
   "mkfs",
   "mount",
@@ -42,7 +41,10 @@ const systemChangeCommands = new Set([
 const networkCommands = new Set(["curl", "wget"])
 const remoteFetchCommands = new Set(["fetch", "pull", "clone"])
 const packageCommands = new Set(["bun", "pnpm", "yarn", "cargo", "pip", "pip3"])
-const filesystemCommands = new Set(["rm", "mv", "cp", "mkdir"])
+const filesystemCommands = new Set(["rm", "mv", "cp", "mkdir", "touch", "install"])
+
+/** 就地改写文件的内容编辑命令：绕过 write/edit 工具的精确路径判定，固定拒绝。 */
+const inlineEditCommands = new Set(["sed", "tee", "dd"])
 
 /** 明确的全系统破坏模式：递归删除系统根或盘符根。 */
 const destructiveRoot =
@@ -183,6 +185,22 @@ function classifyNode(
     return "abstain"
   }
   if (systemChangeCommands.has(executable)) return [claim("system-change", `${executable} 会改变系统状态`)]
+  if (inlineEditCommands.has(executable)) {
+    if (executable === "sed") {
+      const inPlace = tokens.some((token) => token === "-i" || token.startsWith("-i.") || token === "--in-place")
+      if (inPlace)
+        return [claim("violation", "sed -i edits the file in place; use the write or edit tool to modify files")]
+      return "abstain"
+    }
+    if (executable === "tee") {
+      const hasFile = tokens.slice(1).some((token) => token && !token.startsWith("-"))
+      if (hasFile) return [claim("violation", "tee writes content to a file; use the write tool instead")]
+      return "abstain"
+    }
+    const writesOutput = tokens.some((token) => token.startsWith("of=") || token === "of")
+    if (writesOutput) return [claim("violation", "dd writes to the output file; use the write tool instead")]
+    return "abstain"
+  }
   if (filesystemCommands.has(executable)) {
     const targets = tokens
       .slice(1)
@@ -191,8 +209,23 @@ function classifyNode(
       .map((path) => resolve(input.cwd, path))
     if (targets.length === 0) return "abstain"
     // 递归删除系统根或盘符根属于任何场景都不应发生的行为。
-    if (destructiveRoot.test(text)) return [claim("violation", `递归删除系统根或盘符根：${text}`)]
-    return targets.map((target) => claim(editTag(target, context), `${executable} 会修改目标：${target}`))
+    if (destructiveRoot.test(text))
+      return [
+        claim(
+          "violation",
+          `this command recursively deletes the system root and would make the system unusable; delete a specific path inside the workspace instead (e.g. rm -rf ./dist): ${text}`,
+        ),
+      ]
+    return targets.map((target) => {
+      // 目标位于应用数据目录内时固定拒绝，与 write/edit 工具的数据目录保护对齐。
+      const dataDirectory = context.dataDirectory ? resolve(context.dataDirectory) : undefined
+      if (dataDirectory && inside(dataDirectory, target))
+        return claim(
+          "violation",
+          `target path ${target} is inside the application data directory, which the permission system manages and the agent must not modify; operate on a path inside the workspace instead`,
+        )
+      return claim(editTag(target, context), `${executable} 会修改目标：${target}`)
+    })
   }
   if (safeReadCommands.has(executable)) {
     // 仅将明显是路径的参数（含分隔符或以 . 开头）当作目标，避免 echo/pwd 等输出命令误判。

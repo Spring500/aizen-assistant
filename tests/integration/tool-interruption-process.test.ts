@@ -56,7 +56,7 @@ const cases: Case[] = [
   },
   {
     checkpoint: "authorizedDenied",
-    expected: `Operation denied: rule "Unsafe operation" is not allowed.\n\nThe tool did not run.`,
+    expected: `Operation denied: rule "Unsafe operation" is not allowed. This call matched it because: 测试拒绝执行\n\nThe tool did not run.`,
     sideEffect: false,
     isError: true,
   },

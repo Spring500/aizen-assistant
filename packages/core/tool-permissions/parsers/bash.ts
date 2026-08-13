@@ -18,14 +18,30 @@ const unsupportedSyntax =
 
 /** 结构性拒绝：函数/alias 定义、eval、source。破坏系统判断能力本身，直接拒绝无放行入口。 */
 const structuralDenyPatterns: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /\beval\b/, reason: "eval 将数据当代码执行，审核对象在执行前不存在" },
-  { pattern: /(?:^|[\s;&|])(?:source|\.)\s+\S+/, reason: "source 将外部文件内容并入当前环境执行，内容不可见" },
+  {
+    pattern: /\beval\b/,
+    reason:
+      "eval executes data as code, so its behavior cannot be reviewed before it runs; write the command directly instead of wrapping it in eval",
+  },
+  {
+    pattern: /(?:^|[\s;&|])(?:source|\.)\s+\S+/,
+    reason:
+      "source executes the contents of an external file, which is invisible at review time; write the commands to run directly",
+  },
   {
     pattern: /(?:^|\n)\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{/,
-    reason: "函数定义可使后续同名命令被系统误分类",
+    reason:
+      "defining a shell function would make later commands with the same name misclassified; run the command directly instead of defining a function",
   },
-  { pattern: /(?:^|\n)\s*alias\s+[A-Za-z_][A-Za-z0-9_]*\s*=/, reason: "alias 定义可使后续同名命令被系统误分类" },
-  { pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, reason: "fork bomb 会耗尽系统资源" },
+  {
+    pattern: /(?:^|\n)\s*alias\s+[A-Za-z_][A-Za-z0-9_]*\s*=/,
+    reason:
+      "defining an alias would make later commands with the same name misclassified; run the command directly instead of defining an alias",
+  },
+  {
+    pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,
+    reason: "this command spawns infinitely many copies of itself and exhausts system resources; do not run it",
+  },
 ]
 
 /** 将命令 token 化；引号或转义未闭合时返回 undefined。 */
@@ -104,7 +120,7 @@ function splitNodes(command: string): Array<{ text: string; fromPipe: boolean }>
   return result
 }
 
-/** 单字符控制语法（<、>、裸 &、(、)）超出首期可靠子集。 */
+/** 单字符控制语法（<、裸 &、(、)）超出首期可靠子集。 */
 function hasUnsupportedControlSyntax(command: string): boolean {
   let quote: "'" | '"' | undefined
   let escaped = false
@@ -127,9 +143,36 @@ function hasUnsupportedControlSyntax(command: string): boolean {
       quote = character
       continue
     }
-    if (character === ">" || character === "<") return true
+    if (character === "<") return true
     if (character === "&" && next !== "&" && command[index - 1] !== "&") return true
     if (character === "(" || character === ")") return true
+  }
+  return false
+}
+
+/** 输出重定向（>、>>，含 2>、2>> 等）会把命令输出写入文件，属于绕过 write 工具的编辑行为。 */
+function hasOutputRedirection(command: string): boolean {
+  let quote: "'" | '"' | undefined
+  let escaped = false
+  for (let index = 0; index < command.length; index++) {
+    const character = command[index] ?? ""
+    if (escaped) {
+      escaped = false
+      continue
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote) {
+      if (character === quote) quote = undefined
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+    if (character === ">") return true
   }
   return false
 }
@@ -153,6 +196,11 @@ export function parseBash(command: string): BashParseResult {
   const structural = structuralDenyPatterns.find((item) => item.pattern.test(command))
   if (structural) return { kind: "structural-deny", reason: structural.reason }
   if (!command.trim()) return { kind: "unknown" }
+  if (hasOutputRedirection(command))
+    return {
+      kind: "structural-deny",
+      reason: "output redirection writes command output to a file; use the write tool instead",
+    }
   if (unsupportedSyntax.test(command) || hasUnsupportedControlSyntax(command)) return { kind: "unknown" }
   const nodes = splitNodes(command)
   if (!nodes || nodes.length === 0) return { kind: "unknown" }
