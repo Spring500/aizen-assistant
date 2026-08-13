@@ -85,7 +85,12 @@ export function createBuiltinFileClassifier(): PermissionClassifier {
       if (sensitive(target, context, dataDirectory))
         claims.push(claim(`${operation}-sensitive`, `目标路径命中敏感路径：${target}`))
       if (operation === "edit" && protectedPermissionPath(target, dataDirectory))
-        claims.push(claim("violation", `目标路径属于应用数据目录：${target}`))
+        claims.push(
+          claim(
+            "violation",
+            `target path ${target} is inside the application data directory, which the permission system manages and the agent must not modify; write to a path inside the workspace instead`,
+          ),
+        )
       return { kind: "claims", claims }
     },
   }

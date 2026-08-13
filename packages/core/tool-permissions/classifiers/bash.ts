@@ -191,7 +191,13 @@ function classifyNode(
       .map((path) => resolve(input.cwd, path))
     if (targets.length === 0) return "abstain"
     // 递归删除系统根或盘符根属于任何场景都不应发生的行为。
-    if (destructiveRoot.test(text)) return [claim("violation", `递归删除系统根或盘符根：${text}`)]
+    if (destructiveRoot.test(text))
+      return [
+        claim(
+          "violation",
+          `this command recursively deletes the system root and would make the system unusable; delete a specific path inside the workspace instead (e.g. rm -rf ./dist): ${text}`,
+        ),
+      ]
     return targets.map((target) => claim(editTag(target, context), `${executable} 会修改目标：${target}`))
   }
   if (safeReadCommands.has(executable)) {

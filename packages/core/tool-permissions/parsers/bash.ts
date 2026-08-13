@@ -18,14 +18,28 @@ const unsupportedSyntax =
 
 /** 结构性拒绝：函数/alias 定义、eval、source。破坏系统判断能力本身，直接拒绝无放行入口。 */
 const structuralDenyPatterns: Array<{ pattern: RegExp; reason: string }> = [
-  { pattern: /\beval\b/, reason: "eval 将数据当代码执行，审核对象在执行前不存在" },
-  { pattern: /(?:^|[\s;&|])(?:source|\.)\s+\S+/, reason: "source 将外部文件内容并入当前环境执行，内容不可见" },
+  {
+    pattern: /\beval\b/,
+    reason: "eval executes data as code, so its behavior cannot be reviewed before it runs; write the command directly instead of wrapping it in eval",
+  },
+  {
+    pattern: /(?:^|[\s;&|])(?:source|\.)\s+\S+/,
+    reason: "source executes the contents of an external file, which is invisible at review time; write the commands to run directly",
+  },
   {
     pattern: /(?:^|\n)\s*(?:function\s+)?[A-Za-z_][A-Za-z0-9_]*\s*\(\s*\)\s*\{/,
-    reason: "函数定义可使后续同名命令被系统误分类",
+    reason:
+      "defining a shell function would make later commands with the same name misclassified; run the command directly instead of defining a function",
   },
-  { pattern: /(?:^|\n)\s*alias\s+[A-Za-z_][A-Za-z0-9_]*\s*=/, reason: "alias 定义可使后续同名命令被系统误分类" },
-  { pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/, reason: "fork bomb 会耗尽系统资源" },
+  {
+    pattern: /(?:^|\n)\s*alias\s+[A-Za-z_][A-Za-z0-9_]*\s*=/,
+    reason:
+      "defining an alias would make later commands with the same name misclassified; run the command directly instead of defining an alias",
+  },
+  {
+    pattern: /:\s*\(\s*\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;\s*:/,
+    reason: "this command spawns infinitely many copies of itself and exhausts system resources; do not run it",
+  },
 ]
 
 /** 将命令 token 化；引号或转义未闭合时返回 undefined。 */
