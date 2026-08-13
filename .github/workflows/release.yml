@@ -33,7 +33,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # 首版 4 平台全部原生构建（交叉编译受 @opentui 原生绑定限制不可行）
+          # 首版 3 平台全部原生构建（交叉编译受 @opentui 原生绑定限制不可行）。
+          # 不含 darwin-x64：Intel Mac 的标准免费 runner（macos-13）已退役，暂不支持存量 Intel Mac。
           - os: windows-latest
             platform: windows-x64
             target: bun-windows-x64
@@ -43,9 +44,6 @@ jobs:
           - os: macos-latest
             platform: darwin-arm64
             target: bun-darwin-arm64
-          - os: macos-13
-            platform: darwin-x64
-            target: bun-darwin-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5

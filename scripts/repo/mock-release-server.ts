@@ -8,7 +8,7 @@
  *   GET /releases/latest             返回 { tag_name: "v<version>", assets: [...] }（与 GitHub API 形状一致）
  *   GET /download/<version>/<文件>    返回资产目录中的静态文件
  *
- * 配合 AIZEN_RELEASE_API / AIZEN_RELEASE_DOWNLOAD 环境变量即可让 install 脚本与 update 命令脱离 GitHub 运行。
+ * 配合 install 脚本的 --api-url / --download-url 参数与 update 的 --release-api 参数即可脱离 GitHub 运行。
  */
 
 import { readdir } from "node:fs/promises"

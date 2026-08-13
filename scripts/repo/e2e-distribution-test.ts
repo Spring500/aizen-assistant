@@ -1,13 +1,14 @@
 /**
  * 发布链路端到端自检（Windows）：install.ps1 → update → uninstall 全流程。
  *
- * 用法：bun run scripts/repo/e2e-distribution-test.ts
+ * 用法：bun run scripts/repo/e2e-distribution-test.ts [--with-path]
  *
  * 流程：构建产物 → 打包 v0.1.0 / v0.2.0 → 本地 mock release 服务器 →
- * 以 --install-dir / --skip-path 安装到临时目录（查 latest=v0.1.0）→ 断言安装 →
+ * 以 --install-dir 安装到临时目录（查 latest=v0.1.0）→ 断言安装 →
  * 切到 latest=v0.2.0 后执行 update --release-api → 断言升级 → 执行 uninstall --yes → 断言卸载。
  *
- * 全部通过显式参数指定安装目录与发布地址，不写真实用户目录、不碰注册表、不依赖环境变量。
+ * 默认 --skip-path（不写真实注册表、不依赖环境变量）；--with-path 时真实执行用户 PATH 写入与回滚
+ * （用于 CI 临时 runner，覆盖 PATH 回归；本地运行请勿开启以免改动真实 PATH）。
  */
 
 import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
@@ -17,6 +18,9 @@ import { randomUUID } from "node:crypto"
 
 const MOCK_PORT_V1 = 18081
 const MOCK_PORT_V2 = 18082
+
+/** 是否真实执行用户 PATH 写入与回滚（CI 专用，本地默认关闭）。 */
+const withPath = process.argv.includes("--with-path")
 
 /** 简易断言：失败抛出并终止。 */
 function assert(condition: boolean, message: string): void {
@@ -121,25 +125,28 @@ async function main(): Promise<void> {
       await writeFile(join(assetsDir, "SHA256SUMS"), `${await sha256File(zipPath)}  ${zipName}\n`)
     }
 
-    // 2. 起 mock 服务器（v0.1.0）并执行安装（--install-dir 指定临时安装目录，--skip-path 不写真实注册表）
-    console.log("[2/6] 启动 mock release（v0.1.0）并执行 install.ps1")
+    // 2. 起 mock 服务器（v0.1.0）并执行安装（--install-dir 指定临时安装目录；默认 --skip-path，--with-path 时真实写 PATH）
+    console.log(
+      `[2/6] 启动 mock release（v0.1.0）并执行 install.ps1${withPath ? "（含真实 PATH 写入）" : "（--skip-path）"}`,
+    )
     servers.push(await startMockServer(assetsV1, "0.1.0", MOCK_PORT_V1))
+    const installCmd = [
+      "powershell",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-File",
+      "install.ps1",
+      "--install-dir",
+      join(tempHome, ".aizen", "bin"),
+      ...(withPath ? [] : ["--skip-path"]),
+      "--api-url",
+      `http://localhost:${MOCK_PORT_V1}`,
+      "--download-url",
+      `http://localhost:${MOCK_PORT_V1}/download`,
+    ]
     const installProc = Bun.spawn({
-      cmd: [
-        "powershell",
-        "-NoProfile",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-File",
-        "install.ps1",
-        "--install-dir",
-        join(tempHome, ".aizen", "bin"),
-        "--skip-path",
-        "--api-url",
-        `http://localhost:${MOCK_PORT_V1}`,
-        "--download-url",
-        `http://localhost:${MOCK_PORT_V1}/download`,
-      ],
+      cmd: installCmd,
       stdout: "pipe",
       stderr: "pipe",
     })
@@ -187,10 +194,11 @@ async function main(): Promise<void> {
       console.log(`残留内容：\n${leftover.stdout.toString()}`)
     }
     assert(!(await pathExists(join(tempHome, ".aizen"))), "卸载后 ~/.aizen 仍存在")
+    // PATH 断言仅对 --with-path 场景有效（真实写入过才能验证回滚）；--skip-path 时该断言恒真但无害。
     const pathProbe = await Bun.$`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path','User')"`
     const userPath = pathProbe.stdout.toString() ?? ""
     assert(!userPath.includes(".aizen"), "用户 PATH 中仍残留安装目录条目")
-    console.log("卸载断言通过：~/.aizen 已删除，PATH 已回滚")
+    console.log(`卸载断言通过：~/.aizen 已删除${withPath ? "，PATH 已写入并回滚" : "（--skip-path，未触碰 PATH）"}`)
 
     console.log("\n端到端测试全部通过")
   } finally {

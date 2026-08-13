@@ -29,7 +29,7 @@ curl -fsSL https://cdn.jsdelivr.net/gh/Spring500/aizen-assistant@main/install.sh
 
 安装到 `~/.aizen/bin/`（Windows 为 `%USERPROFILE%\.aizen\bin`），只修改用户级环境（`~/.aizen`、shell 配置、用户 PATH），全程无需管理员权限；重复执行安全。需要指定历史版本时：`bash install.sh 0.1.0`。
 
-当前提供官方安装包的平台：**Windows x64、Linux x64、macOS（Intel 与 Apple Silicon）**。Windows ARM64 与 Linux ARM64 尚在验证中，安装脚本检测到这些平台时会明确提示，不会返回 404。
+当前提供官方安装包的平台：**Windows x64、Linux x64、macOS（Apple Silicon）**。Windows ARM64、Linux ARM64 与 Intel Mac（darwin-x64）暂不支持，安装脚本检测到这些平台时会明确提示，不会返回 404。
 
 **更新**：运行 `aizen-assistant update`，自动从 GitHub Releases 下载最新版并原子替换自身。
 

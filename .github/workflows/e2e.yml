@@ -35,5 +35,6 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
+      # --with-path：临时 runner 上真实执行用户 PATH 写入与回滚，覆盖 PATH 回归（本地默认 --skip-path）
       - name: 发布链路端到端自检
-        run: bun run scripts/repo/e2e-distribution-test.ts
+        run: bun run scripts/repo/e2e-distribution-test.ts --with-path

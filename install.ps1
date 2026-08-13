@@ -14,8 +14,8 @@ $Repository = "Spring500/aizen-assistant"
 # 发布 API 与下载基地址；可通过 --api-url / --download-url 覆盖（自建镜像或测试场景）。
 $ReleaseApi = "https://api.github.com/repos/$Repository"
 $ReleaseDownload = "https://github.com/$Repository/releases/download"
-# 首版已发布平台（与 release 矩阵保持一致；win/linux arm64 待验证后增补）。
-$SupportedPlatforms = @("windows-x64", "linux-x64", "darwin-x64", "darwin-arm64")
+# 首版已发布平台（与 release 矩阵保持一致；win/linux arm64 待验证后增补，Intel Mac 暂不支持）。
+$SupportedPlatforms = @("windows-x64", "linux-x64", "darwin-arm64")
 $ConfigDir = Join-Path $env:USERPROFILE ".aizen"
 $InstallDir = Join-Path $ConfigDir "bin"
 $PathEntry = '%USERPROFILE%\.aizen\bin'
@@ -27,10 +27,10 @@ $CustomInstallDir = $false
 # 解析参数：--version / --install-dir / --api-url / --download-url / --skip-path；兼容位置参数形式传入版本号。
 for ($i = 0; $i -lt $args.Count; $i++) {
   switch ($args[$i]) {
-    "--version" { $RequestedVersion = $args[++$i]; break }
-    "--install-dir" { $InstallDir = $args[++$i]; $ConfigDir = Split-Path $InstallDir -Parent; $CustomInstallDir = $true; break }
-    "--api-url" { $ReleaseApi = $args[++$i]; break }
-    "--download-url" { $ReleaseDownload = $args[++$i]; break }
+    "--version" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--version 必须提供值" }; $RequestedVersion = $args[$i]; break }
+    "--install-dir" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--install-dir 必须提供值" }; $InstallDir = $args[$i]; $ConfigDir = Split-Path $InstallDir -Parent; $CustomInstallDir = $true; break }
+    "--api-url" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--api-url 必须提供值" }; $ReleaseApi = $args[$i]; break }
+    "--download-url" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--download-url 必须提供值" }; $ReleaseDownload = $args[$i]; break }
     "--skip-path" { $SkipPath = $true; break }
     "-h" { Write-Host "用法：install.ps1 [版本号] [--version <v>] [--install-dir <目录>] [--api-url <url>] [--download-url <url>] [--skip-path]"; exit 0 }
     default { if ($RequestedVersion -eq "") { $RequestedVersion = $args[$i] } else { throw "未知参数：$($args[$i])" } }

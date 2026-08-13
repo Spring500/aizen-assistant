@@ -61,11 +61,15 @@ async function removeShellPathEntries(home: string): Promise<void> {
 
 /** 从用户级 PATH 移除安装目录条目（经 PowerShell 操作 HKCU\Environment，免管理员）。 */
 async function removeWindowsPathEntry(): Promise<void> {
+  const binDir = dirname(process.execPath)
+  const quotedBinDir = binDir.replaceAll("'", "''")
   const script = [
     "$entry2 = Join-Path $HOME '.aizen\\bin'",
+    // 当前安装目录的绝对路径（覆盖 --install-dir 自定义安装场景写入的条目）
+    `$entry3 = '${quotedBinDir}'`,
     "$current = [Environment]::GetEnvironmentVariable('Path','User')",
     "if ($null -eq $current) { exit 0 }",
-    `$parts = $current -split ';' | Where-Object { $_.Trim() -ne '' -and $_.Trim() -ne '${WINDOWS_PATH_ENTRY}' -and $_.Trim() -ne $entry2 }`,
+    `$parts = $current -split ';' | Where-Object { $_.Trim() -ne '' -and $_.Trim() -ne '${WINDOWS_PATH_ENTRY}' -and $_.Trim() -ne $entry2 -and $_.Trim() -ne $entry3 }`,
     "$new = $parts -join ';'",
     "[Environment]::SetEnvironmentVariable('Path',$new,'User')",
   ].join("; ")

@@ -48,6 +48,7 @@ type LatestRelease = {
 async function fetchLatestRelease(releaseApi: string): Promise<LatestRelease> {
   const response = await fetch(`${releaseApi}/releases/latest`, {
     headers: { Accept: "application/vnd.github+json", "User-Agent": "aizen-assistant" },
+    signal: AbortSignal.timeout(30_000),
   })
   if (!response.ok) throw new Error(`查询最新版本失败：HTTP ${response.status}`)
   const payload = (await response.json()) as {
@@ -62,9 +63,9 @@ async function fetchLatestRelease(releaseApi: string): Promise<LatestRelease> {
   }
 }
 
-/** 下载远程文件到本地路径。 */
+/** 下载远程文件到本地路径（大文件给更长超时）。 */
 async function download(url: string, dest: string): Promise<void> {
-  const response = await fetch(url)
+  const response = await fetch(url, { signal: AbortSignal.timeout(120_000) })
   if (!response.ok) throw new Error(`下载失败：HTTP ${response.status}`)
   await Bun.write(dest, response)
 }
@@ -98,9 +99,15 @@ async function replaceExecutable(
   if (process.platform === "win32") {
     const lines = [
       "Start-Sleep -Seconds 1",
+      // 用 .NET 计算新文件哈希作为替换成功的基准（不依赖 PowerShell 模块自动加载）
+      "$sha = [System.Security.Cryptography.SHA256]::Create()",
+      `$newHash = [System.BitConverter]::ToString($sha.ComputeHash([System.IO.File]::OpenRead(${quotedPowerShell(newExecutable)}))).Replace('-','').ToLower()`,
       `Remove-Item -Force ${quotedPowerShell(currentExecutable)}`,
       `Move-Item -Force ${quotedPowerShell(newExecutable)} ${quotedPowerShell(currentExecutable)}`,
-      `if (-not (Test-Path ${quotedPowerShell(currentExecutable)})) { exit 1 }`,
+      // Test-Path 无法区分目标处是新 exe 还是被锁残留的旧 exe，必须比较内容哈希一致才认为替换成功
+      `if (-not [System.IO.File]::Exists(${quotedPowerShell(currentExecutable)})) { exit 1 }`,
+      `$currentHash = [System.BitConverter]::ToString($sha.ComputeHash([System.IO.File]::OpenRead(${quotedPowerShell(currentExecutable)}))).Replace('-','').ToLower()`,
+      `if ($currentHash -ne $newHash) { exit 1 }`,
       ...(successRecord
         ? [
             `[System.IO.File]::WriteAllText(${quotedPowerShell(installRecordPath())}, ${quotedPowerShell(
@@ -182,7 +189,7 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
       console.error("发布缺少 SHA256SUMS 资产，无法校验，已中止更新")
       return 1
     }
-    const sumsText = await (await fetch(sumsAsset.url)).text()
+    const sumsText = await (await fetch(sumsAsset.url, { signal: AbortSignal.timeout(30_000) })).text()
     const line = sumsText.split(/\r?\n/).find((item) => item.trimEnd().endsWith(assetName))
     if (!line) {
       console.error(`SHA256SUMS 中找不到 ${assetName} 的校验和，已中止更新`)

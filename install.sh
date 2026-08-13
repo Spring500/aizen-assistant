@@ -13,21 +13,22 @@ REPOSITORY="Spring500/aizen-assistant"
 # 发布 API 与下载基地址；可通过 --api-url / --download-url 覆盖（自建镜像或测试场景）。
 RELEASE_API="https://api.github.com/repos/${REPOSITORY}"
 RELEASE_DOWNLOAD="https://github.com/${REPOSITORY}/releases/download"
-# 首版已发布平台（与 release 矩阵保持一致；win/linux arm64 待验证后增补）。
-SUPPORTED_PLATFORMS="linux-x64 darwin-x64 darwin-arm64 windows-x64"
+# 首版已发布平台（与 release 矩阵保持一致；win/linux arm64 待验证后增补，Intel Mac 暂不支持）。
+SUPPORTED_PLATFORMS="linux-x64 darwin-arm64 windows-x64"
 HOME_DIR="${HOME:-}"
 CONFIG_DIR="$HOME_DIR/.aizen"
 INSTALL_DIR="$CONFIG_DIR/bin"
 
 REQUESTED_VERSION=""
 SKIP_PATH=0
+CUSTOM_INSTALL_DIR=0
 
 # 解析参数：--version / --install-dir / --api-url / --download-url / --skip-path；兼容位置参数形式传入版本号。
 parse_arguments() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --version) REQUESTED_VERSION="${2:-}"; shift 2 ;;
-      --install-dir) INSTALL_DIR="${2:-}"; CONFIG_DIR="$(dirname "$INSTALL_DIR")"; shift 2 ;;
+      --install-dir) INSTALL_DIR="${2:-}"; CONFIG_DIR="$(dirname "$INSTALL_DIR")"; CUSTOM_INSTALL_DIR=1; shift 2 ;;
       --api-url) RELEASE_API="${2:-}"; shift 2 ;;
       --download-url) RELEASE_DOWNLOAD="${2:-}"; shift 2 ;;
       --skip-path) SKIP_PATH=1; shift ;;
@@ -140,10 +141,10 @@ write_install_record() {
 EOF
 }
 
-# 向指定 shell 配置文件幂等追加 PATH。
+# 向指定 shell 配置文件幂等追加 PATH（pattern 用于检测该条目是否已存在）。
 append_path_line() {
-  local file="$1" line="$2"
-  if [ -f "$file" ] && grep -qF '.aizen/bin' "$file"; then
+  local file="$1" line="$2" pattern="$3"
+  if [ -f "$file" ] && grep -qF "$pattern" "$file"; then
     echo "PATH 已配置：$file"
     return
   fi
@@ -152,17 +153,23 @@ append_path_line() {
 }
 
 # 按当前 shell 配置 PATH（bash/zsh/fish），幂等。
+# 默认安装写 $HOME/.aizen/bin 字面（用户目录迁移后 PATH 仍有效）；自定义安装目录写绝对路径（与 install.ps1 一致）。
 configure_path() {
-  local shell_name
+  local shell_name path_entry
   shell_name="$(basename "${SHELL:-}")"
+  if [ "$CUSTOM_INSTALL_DIR" -eq 1 ]; then
+    path_entry="$INSTALL_DIR"
+  else
+    path_entry='$HOME/.aizen/bin'
+  fi
   case "$shell_name" in
-    zsh) append_path_line "$HOME_DIR/.zshrc" 'export PATH="$HOME/.aizen/bin:$PATH"' ;;
+    zsh) append_path_line "$HOME_DIR/.zshrc" "export PATH=\"$path_entry:\$PATH\"" "$path_entry" ;;
     fish)
       local fish_file="$HOME_DIR/.config/fish/config.fish"
       mkdir -p "$(dirname "$fish_file")"
-      append_path_line "$fish_file" 'fish_add_path $HOME/.aizen/bin'
+      append_path_line "$fish_file" "fish_add_path $path_entry" "$path_entry"
       ;;
-    *) append_path_line "$HOME_DIR/.bashrc" 'export PATH="$HOME/.aizen/bin:$PATH"' ;;
+    *) append_path_line "$HOME_DIR/.bashrc" "export PATH=\"$path_entry:\$PATH\"" "$path_entry" ;;
   esac
 }
 
