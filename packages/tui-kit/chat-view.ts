@@ -25,6 +25,8 @@ export type ChatView = {
   getFoldPreferences(): FoldPreferences
   /** 应用折叠设置并全量回放；message 保留以兼容旧调用，footer 不再展示该提示文案。 */
   setFoldPreferences(fold: FoldPreferences, message?: string): Promise<void>
+  /** 终端配色切换后的全量重放：重建 markdown 样式并重绘历史。 */
+  refreshTheme(): Promise<void>
 }
 
 type ToolDisplay = {
@@ -441,7 +443,7 @@ function createHistoryBlock(
 }
 
 export function createChatView(renderer: CliRenderer): ChatView {
-  const assistantMarkdownStyles = createAssistantMarkdownStyles()
+  let assistantMarkdownStyles = createAssistantMarkdownStyles()
   let blocks: DisplayBlock[] = []
   let fold: FoldPreferences = {
     thinkingExpanded: false,
@@ -564,6 +566,17 @@ export function createChatView(renderer: CliRenderer): ChatView {
     setFoldPreferences(next, _message) {
       return queueOperation(async () => {
         fold = { ...next }
+        await syncHistory(true)
+      })
+    },
+    /** 重建 markdown 样式（颜色在创建时烘焙进 OpenTUI 对象）并全量重放历史。 */
+    refreshTheme() {
+      return queueOperation(async () => {
+        // 先创建新样式再销毁旧样式：即使重放失败也保持可用状态。
+        const nextStyles = createAssistantMarkdownStyles()
+        assistantMarkdownStyles.markdown.destroy()
+        assistantMarkdownStyles.code.destroy()
+        assistantMarkdownStyles = nextStyles
         await syncHistory(true)
       })
     },

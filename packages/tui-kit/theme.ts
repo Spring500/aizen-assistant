@@ -2,12 +2,13 @@
  * AizenAssistant TUI 统一颜色表。
  *
  * 所有 TUI 渲染颜色必须从本表取色，禁止在组件内硬编码十六进制色值。
- * 当前仅提供一套（深色终端）取值；后续支持终端深浅配色时，
- * 在此扩展为 { dark, light } 两套取值并增加切换逻辑，组件侧无需改动。
+ * 提供深色/浅色两套取值，按终端配色（OpenTUI themeMode）自动切换：
+ * - 组件渲染时通过 systemColors 取色，切换色板后重新渲染即用新值；
+ * - 聊天转录、footer 等已渲染内容的刷新由调用方（interactive-app）触发全量重放。
  */
 
-/** 统一颜色表：文字色、背景色与语法高亮色。 */
-export const systemColors = {
+/** 深色终端色板。 */
+export const darkThemeColors = {
   // ── 文字色 ─────────────────────────────────────────
   /** 主文字：正文、代码默认文字、编辑器输入。 */
   text: "#f3f4f6",
@@ -33,7 +34,7 @@ export const systemColors = {
   bgTool: "#292c31",
   /** 浮层背景：选择器、输入框、overlay。 */
   bgOverlay: "#111827",
-  /** 黯淡背景：弱化场景（禁用态、遮罩）；当前暂无消费者，为深浅切换预留。 */
+  /** 黯淡背景：弱化场景（禁用态、遮罩）。 */
   bgDim: "#1b1f2b",
   /** 成功态背景：diff 新增行。 */
   successBg: "#123524",
@@ -59,12 +60,102 @@ export const systemColors = {
   syntaxOperator: "#f9a8d4",
 } as const
 
-/** 聊天转录各块背景色；markdown 渲染沿用 assistant/tool 两种底色以保持一致。 */
-export const blockColors = {
-  plain: systemColors.bgDefault,
-  user: systemColors.bgUser,
-  assistant: systemColors.bgAssistant,
-  thinking: systemColors.bgDefault,
-  tool: systemColors.bgTool,
-  toolGroup: systemColors.bgTool,
+/** 浅色终端色板。 */
+export const lightThemeColors = {
+  // ── 文字色 ─────────────────────────────────────────
+  /** 主文字：正文、代码默认文字、编辑器输入。 */
+  text: "#1f2937",
+  /** 强调：标题、链接、内联代码、选中项、会话名、模型名等。 */
+  accent: "#7c3aed",
+  /** 成功/空闲状态。 */
+  success: "#15803d",
+  /** 警告/运行中状态。 */
+  warning: "#a16207",
+  /** 错误状态。 */
+  error: "#b91c1c",
+  /** 黯淡文字：次级信息、快捷键、描述、注释、禁用项、占位符。 */
+  dim: "#6b7280",
+
+  // ── 背景色 ─────────────────────────────────────────
+  /** 默认背景：普通消息、思考块、diff 上下文行。 */
+  bgDefault: "#f3f4f6",
+  /** 用户消息背景。 */
+  bgUser: "#fef3c7",
+  /** 助手消息背景。 */
+  bgAssistant: "#f9fafb",
+  /** 工具块与代码块背景。 */
+  bgTool: "#e5e7eb",
+  /** 浮层背景：选择器、输入框、overlay。 */
+  bgOverlay: "#ffffff",
+  /** 黯淡背景：弱化场景（禁用态、遮罩）。 */
+  bgDim: "#e5e7eb",
+  /** 成功态背景：diff 新增行。 */
+  successBg: "#dcfce7",
+  /** 错误态背景：diff 删除行。 */
+  errorBg: "#fee2e2",
+
+  // ── 语法高亮 ───────────────────────────────────────
+  /** 关键字。 */
+  syntaxKeyword: "#be185d",
+  /** 字符串。 */
+  syntaxString: "#047857",
+  /** 数字与布尔值。 */
+  syntaxNumber: "#b45309",
+  /** 类型。 */
+  syntaxType: "#1d4ed8",
+  /** 函数。 */
+  syntaxFunction: "#9333ea",
+  /** 属性与成员。 */
+  syntaxProperty: "#0e7490",
+  /** 内建变量。 */
+  syntaxVariable: "#c2410c",
+  /** 运算符。 */
+  syntaxOperator: "#9d174d",
 } as const
+
+/** 终端配色模式：深色或浅色。 */
+export type ColorMode = "dark" | "light"
+
+/** 当前生效的色板（按终端配色由 setSystemColors 切换，默认深色）。 */
+export let systemColors: typeof darkThemeColors | typeof lightThemeColors = darkThemeColors
+
+/**
+ * 按终端配色模式切换当前色板。
+ * 返回是否发生了切换；模式与当前色板一致时返回 false。
+ */
+export function setSystemColors(mode: ColorMode): boolean {
+  const next = mode === "light" ? lightThemeColors : darkThemeColors
+  if (next === systemColors) return false
+  systemColors = next
+  return true
+}
+
+/** 当前生效色板（供需要显式取值的场景）。 */
+export function getSystemColors(): typeof darkThemeColors | typeof lightThemeColors {
+  return systemColors
+}
+
+/**
+ * 聊天转录各块背景色；markdown 渲染沿用 assistant/tool 两种底色以保持一致。
+ * 使用 getter 渲染时求值，切换色板后无需重建本对象即跟随新色板。
+ */
+export const blockColors = {
+  get plain() {
+    return systemColors.bgDefault
+  },
+  get user() {
+    return systemColors.bgUser
+  },
+  get assistant() {
+    return systemColors.bgAssistant
+  },
+  get thinking() {
+    return systemColors.bgDefault
+  },
+  get tool() {
+    return systemColors.bgTool
+  },
+  get toolGroup() {
+    return systemColors.bgTool
+  },
+}
