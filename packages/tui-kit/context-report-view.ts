@@ -36,18 +36,18 @@ const toolSpanColors: Record<
   ToolSpanStyle,
   { color: string; attributes: { bold?: boolean; italic?: boolean; dim?: boolean } }
 > = {
-  name: { color: "#a78bfa", attributes: { bold: true } },
-  description: { color: systemColors.secondary, attributes: { italic: true } },
-  paramName: { color: "#22d3ee", attributes: {} },
-  type: { color: "#e5e7eb", attributes: {} },
-  typeString: { color: "#86efac", attributes: {} },
-  typeNumber: { color: "#facc15", attributes: {} },
-  typeBoolean: { color: "#fb923c", attributes: {} },
-  typeObject: { color: "#60a5fa", attributes: {} },
-  typeArray: { color: "#67e8f9", attributes: {} },
-  separator: { color: "#6b7280", attributes: { dim: true } },
-  required: { color: "#fb923c", attributes: { bold: true } },
-  paramDescription: { color: systemColors.secondary, attributes: { italic: true } },
+  name: { color: systemColors.accent, attributes: { bold: true } },
+  description: { color: systemColors.dim, attributes: { italic: true } },
+  paramName: { color: systemColors.syntaxProperty, attributes: {} },
+  type: { color: systemColors.text, attributes: {} },
+  typeString: { color: systemColors.syntaxString, attributes: {} },
+  typeNumber: { color: systemColors.syntaxNumber, attributes: {} },
+  typeBoolean: { color: systemColors.syntaxVariable, attributes: {} },
+  typeObject: { color: systemColors.syntaxType, attributes: {} },
+  typeArray: { color: systemColors.syntaxProperty, attributes: {} },
+  separator: { color: systemColors.dim, attributes: { dim: true } },
+  required: { color: systemColors.warning, attributes: { bold: true } },
+  paramDescription: { color: systemColors.dim, attributes: { italic: true } },
 }
 
 function schemaObject(value: unknown): Record<string, unknown> | undefined {
@@ -149,7 +149,7 @@ function sectionHeader(text: string): StyledText {
     {
       __isChunk: true,
       text,
-      fg: parseColor(systemColors.header),
+      fg: parseColor(systemColors.accent),
       attributes: createTextAttributes({ bold: true }),
     },
   ])
@@ -203,7 +203,7 @@ export async function showContextReport(
           width: "100%",
           height: "auto",
           wrapMode: "word",
-          fg: systemColors.secondary,
+          fg: systemColors.dim,
         }),
       )
     }

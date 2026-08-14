@@ -33,7 +33,7 @@ export function showPermissionDiff(overlays: OverlayManager, options: Permission
           width: "100%",
           height: "100%",
           wrapMode: "word",
-          fg: systemColors.statusError,
+          fg: systemColors.error,
           content: options.error,
         })
       : new DiffRenderable(overlays.renderer, {
@@ -45,11 +45,11 @@ export function showPermissionDiff(overlays: OverlayManager, options: Permission
           view: "unified",
           wrapMode: "none",
           showLineNumbers: true,
-          addedBg: "#123524",
-          removedBg: "#3f1d24",
-          contextBg: "#111827",
-          addedSignColor: systemColors.statusIdle,
-          removedSignColor: systemColors.statusError,
+          addedBg: systemColors.successBg,
+          removedBg: systemColors.errorBg,
+          contextBg: systemColors.bgOverlay,
+          addedSignColor: systemColors.success,
+          removedSignColor: systemColors.error,
         })
     handle.content.add(content)
     const render = () => {

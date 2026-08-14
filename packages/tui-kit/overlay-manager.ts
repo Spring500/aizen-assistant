@@ -148,11 +148,11 @@ function shortcutContent(actions: OverlayAction[], fallback: string): string | S
   if (visible.length === 0) return fallback
   const chunks: TextChunk[] = []
   for (const [index, action] of visible.entries()) {
-    if (index > 0) chunks.push({ __isChunk: true, text: " | ", fg: parseColor(systemColors.shortcuts) })
+    if (index > 0) chunks.push({ __isChunk: true, text: " | ", fg: parseColor(systemColors.dim) })
     chunks.push({
       __isChunk: true,
       text: action.label,
-      fg: parseColor(action.enabled === false ? systemColors.disabled : systemColors.shortcuts),
+      fg: parseColor(action.enabled === false ? systemColors.dim : systemColors.dim),
       attributes: createTextAttributes({ dim: action.enabled === false }),
     })
   }
@@ -215,7 +215,7 @@ export class OverlayManager {
       id: `${options.id}-overlay`,
       position: "absolute",
       overflow: "hidden",
-      backgroundColor: "#111827",
+      backgroundColor: systemColors.bgOverlay,
       shouldFill: true,
       zIndex: 1000 + this.stack.length,
     })
@@ -225,7 +225,7 @@ export class OverlayManager {
       height: 1,
       wrapMode: "none",
       truncate: true,
-      fg: systemColors.header,
+      fg: systemColors.accent,
       content: options.title,
     })
     const content = new BoxRenderable(this.renderer, {
@@ -233,7 +233,7 @@ export class OverlayManager {
       position: "absolute",
       overflow: "hidden",
       shouldFill: true,
-      backgroundColor: "#111827",
+      backgroundColor: systemColors.bgOverlay,
     })
     const description = new TextRenderable(this.renderer, {
       id: `${options.id}-description`,
@@ -241,7 +241,7 @@ export class OverlayManager {
       height: 1,
       wrapMode: "none",
       truncate: true,
-      fg: systemColors.secondary,
+      fg: systemColors.dim,
       content: options.description ?? "",
     })
     const shortcuts = new TextRenderable(this.renderer, {
@@ -250,7 +250,7 @@ export class OverlayManager {
       height: 1,
       wrapMode: "none",
       truncate: true,
-      fg: systemColors.shortcuts,
+      fg: systemColors.dim,
       content: shortcutContent(options.actions ?? [], options.help ?? ""),
     })
     const error = new TextRenderable(this.renderer, {
@@ -259,7 +259,7 @@ export class OverlayManager {
       height: 1,
       wrapMode: "none",
       truncate: true,
-      fg: systemColors.statusError,
+      fg: systemColors.error,
       content: options.error ?? this.pendingError,
     })
     container.add(title)

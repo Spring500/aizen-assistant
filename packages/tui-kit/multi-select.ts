@@ -41,7 +41,7 @@ export function selectMultiple<T extends string>(
       left: 0,
       wrapMode: "none",
       truncate: true,
-      fg: systemColors.secondary,
+      fg: systemColors.dim,
       content: "",
     })
     handle.content.add(view)
