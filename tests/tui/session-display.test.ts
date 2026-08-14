@@ -1,6 +1,7 @@
 import { expect } from "bun:test"
 import { sessionDisplay } from "../../apps/tui/session-display.ts"
 import type { SessionSummary } from "../../packages/core/session-store.ts"
+import { systemColors } from "../../packages/tui-kit/theme.ts"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
@@ -19,7 +20,7 @@ const base: SessionSummary = {
 test("当前会话显示当前标识和独立颜色", async () => {
   const item = sessionDisplay({ ...base, lockState: "current" }, "session-1")
   expect(item.segments.map((segment) => segment.text).join("")).toContain("[当前]")
-  expect(item.segments.some((segment) => segment.color === "#38bdf8")).toBe(true)
+  expect(item.segments.some((segment) => segment.color === systemColors.accent)).toBe(true)
   expect(item.disabled).toBeUndefined()
 })
 
@@ -34,7 +35,7 @@ test("其他实例占用会话显示使用中标识、特殊颜色并禁用", as
     "other",
   )
   expect(item.segments.map((segment) => segment.text).join("")).toContain("[使用中]")
-  expect(item.segments.some((segment) => segment.color === "#f97316")).toBe(true)
+  expect(item.segments.some((segment) => segment.color === systemColors.warning)).toBe(true)
   expect(item.disabled).toBe(true)
   expect(item.disabledReason).toBe("会话正在使用")
 })

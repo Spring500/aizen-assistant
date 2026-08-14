@@ -1,11 +1,12 @@
 import { expect } from "bun:test"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
-import { TextAttributes, type CliRenderer, type OptimizedBuffer } from "@opentui/core"
+import { parseColor, TextAttributes, type CliRenderer, type OptimizedBuffer } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { defaultAppPreferences } from "../../packages/core/app-preferences-store.ts"
 import type { CoreSnapshot } from "../../packages/core/types.ts"
 import { createChatView, formatDurationText } from "../../packages/tui-kit/chat-view.ts"
 import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
+import { blockColors, systemColors } from "../../packages/tui-kit/theme.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
@@ -219,13 +220,14 @@ test("完成的助手正文按 Markdown 格式写入历史", async () => {
     )
     const spans = takeScrollbackSpans(setup.renderer)
     const history = spans.map((span) => span.text).join("")
+    const rgba = (hex: string) => [...parseColor(hex).toInts()] as [number, number, number, number]
     const headingExpectations = [
-      ["一级标题", [244, 114, 182, 255]],
-      ["二级标题", [34, 211, 238, 255]],
-      ["三级标题", [167, 139, 250, 255]],
-      ["四级标题", [196, 181, 253, 255]],
-      ["五级标题", [216, 180, 254, 255]],
-      ["六级标题", [233, 213, 255, 255]],
+      ["一级标题", rgba(systemColors.accent)],
+      ["二级标题", rgba(systemColors.accent)],
+      ["三级标题", rgba(systemColors.accent)],
+      ["四级标题", rgba(systemColors.accent)],
+      ["五级标题", rgba(systemColors.accent)],
+      ["六级标题", rgba(systemColors.accent)],
     ] as const
     const strong = spanByText(spans, "重点")
     const keyword = spanByText(spans, "const")
@@ -240,14 +242,14 @@ test("完成的助手正文按 Markdown 格式写入历史", async () => {
       expect(heading.attributes & TextAttributes.BOLD).toBe(TextAttributes.BOLD)
     }
     expect(strong.attributes & TextAttributes.BOLD).toBe(TextAttributes.BOLD)
-    expect(keyword.fg.toInts()).toEqual([244, 114, 182, 255])
+    expect(keyword.fg.toInts()).toEqual(rgba(systemColors.syntaxKeyword))
     expect(keyword.attributes & TextAttributes.BOLD).toBe(TextAttributes.BOLD)
-    expect(codeType.fg.toInts()).toEqual([96, 165, 250, 255])
-    expect(codeNumber.fg.toInts()).toEqual([250, 204, 21, 255])
-    expect(keyword.bg.toInts()).toEqual([41, 44, 49, 255])
-    expect(inlineFormula.fg.toInts()).toEqual([251, 146, 60, 255])
-    expect(blockFormula.fg.toInts()).toEqual([250, 204, 21, 255])
-    expect(blockFormula.bg.toInts()).toEqual([41, 44, 49, 255])
+    expect(codeType.fg.toInts()).toEqual(rgba(systemColors.syntaxType))
+    expect(codeNumber.fg.toInts()).toEqual(rgba(systemColors.syntaxNumber))
+    expect(keyword.bg.toInts()).toEqual(rgba(blockColors.tool))
+    expect(inlineFormula.fg.toInts()).toEqual(rgba(systemColors.accent))
+    expect(blockFormula.fg.toInts()).toEqual(rgba(systemColors.syntaxNumber))
+    expect(blockFormula.bg.toInts()).toEqual(rgba(blockColors.tool))
     expect(history).not.toContain("#一级标题")
     expect(history).not.toContain("**重点**")
     expect(history).not.toContain("`行内代码`")

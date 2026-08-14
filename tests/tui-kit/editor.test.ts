@@ -4,6 +4,7 @@ import { KeyEvent, parseKeypress, rgbToHex } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { createChatEditor } from "../../packages/tui-kit/editor.ts"
 import { shortcutText } from "../../packages/tui-kit/status-bar.ts"
+import { systemColors } from "../../packages/tui-kit/theme.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
@@ -86,14 +87,14 @@ test("忙碌状态输入区保持可见且文字变暗淡，仍可输入但不�
     editor.setInputVisible(true)
     editor.setBusy(true)
     expect(editor.input.visible).toBe(true)
-    expect(rgbToHex(editor.input.textColor as never)).toBe("#9ca3af")
+    expect(rgbToHex(editor.input.textColor as never)).toBe(systemColors.dim)
     editor.input.setText("运行中打字")
     editor.input.submit()
     expect(submitted).toEqual([])
     expect(editor.input.plainText).toBe("运行中打字")
     // 恢复空闲：颜色还原为默认亮色，提交恢复。
     editor.setBusy(false)
-    expect(rgbToHex(editor.input.textColor as never)).toBe("#ffffff")
+    expect(rgbToHex(editor.input.textColor as never)).toBe(systemColors.text)
     editor.input.submit()
     expect(submitted).toEqual(["运行中打字"])
     editor.destroy()
