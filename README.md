@@ -19,7 +19,19 @@ bun run dev:tui
 
 ### 安装启动
 
-安装包形式的启动方式尚未提供，将在后续版本补充。
+安装到 `~/.aizen/bin/`，只修改用户级环境，无需管理员权限；支持 Windows x64、Linux x64、macOS（Apple Silicon）。
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.sh | bash
+```
+
+```powershell
+# Windows（PowerShell）
+iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.ps1'))
+```
+
+安装后可直接运行 `aizen-assistant`，通过 `aizen-assistant update` 更新、`aizen-assistant uninstall` 卸载。详细说明见[安装文档](https://spring500.github.io/aizen-assistant/zh/core/installation.html)。
 
 ## 项目状态
 

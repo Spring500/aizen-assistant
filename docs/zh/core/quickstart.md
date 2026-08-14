@@ -7,7 +7,7 @@ sort: 1
 
 # 快速开始
 
-AizenAssistant 提供两种启动方式：**从源码启动**（面向开发与体验最新功能）与**安装启动**（面向普通用户，尚未提供）。
+AizenAssistant 提供两种启动方式：**从源码启动**（面向开发与体验最新功能）与**安装启动**（面向普通用户）。
 
 ## 从源码启动
 
@@ -24,6 +24,16 @@ bun run dev:tui
 
 ## 安装启动
 
-::: warning 尚未提供
-安装包形式的启动方式仍在开发中，本节内容将在完成后补充。当前请使用[从源码启动](#从源码启动)。
-:::
+安装到 `~/.aizen/bin/`，只修改用户级环境，无需管理员权限；支持 Windows x64、Linux x64、macOS（Apple Silicon）。
+
+```bash
+# macOS / Linux
+curl -fsSL https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.sh | bash
+```
+
+```powershell
+# Windows（PowerShell）
+iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.ps1'))
+```
+
+安装后直接运行 `aizen-assistant` 启动；`aizen-assistant update` 更新到最新版本，`aizen-assistant uninstall` 卸载并回滚 PATH。
