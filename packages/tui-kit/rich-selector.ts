@@ -35,14 +35,14 @@ function content(item: RichSelectorItem<unknown>, selected: boolean, details = f
     {
       __isChunk: true,
       text: details ? "  " : selected ? "▶ " : "  ",
-      fg: parseColor(selected ? systemColors.header : systemColors.secondary),
+      fg: parseColor(selected ? systemColors.accent : systemColors.dim),
     },
   ]
   for (const segment of details ? (item.details ?? []) : item.segments) {
     chunks.push({
       __isChunk: true,
       text: segment.text,
-      fg: parseColor(segment.color ?? (selected ? systemColors.header : systemColors.secondary)),
+      fg: parseColor(segment.color ?? (selected ? systemColors.accent : systemColors.dim)),
       attributes: createTextAttributes({
         ...(segment.bold === undefined ? {} : { bold: segment.bold }),
         ...(segment.italic === undefined ? {} : { italic: segment.italic }),

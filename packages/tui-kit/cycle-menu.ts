@@ -67,7 +67,7 @@ export function cycleMenu(manager: OverlayManager | CliRenderer, id: string, opt
           height: 1,
           wrapMode: "none",
           truncate: true,
-          fg: systemColors.secondary,
+          fg: systemColors.dim,
           content: "",
         }),
     )
@@ -86,7 +86,7 @@ export function cycleMenu(manager: OverlayManager | CliRenderer, id: string, opt
         const item = options.rows[itemIndex]
         renderable.visible = rowIndex < visible && item !== undefined
         if (!item) continue
-        renderable.fg = itemIndex === selected ? systemColors.header : systemColors.secondary
+        renderable.fg = itemIndex === selected ? systemColors.accent : systemColors.dim
         renderable.content = `${itemIndex === selected ? "▶ " : "  "}${item.label()}`
       }
       const current = options.rows[selected]

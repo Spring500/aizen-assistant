@@ -75,12 +75,12 @@ function itemRows(items: EditableSelectorItem<unknown>[]): number {
 }
 
 const toneColors: Record<MenuTone, string> = {
-  normal: systemColors.secondary,
-  primary: systemColors.header,
-  success: systemColors.statusIdle,
-  warning: systemColors.statusRunning,
-  danger: systemColors.statusError,
-  muted: systemColors.disabled,
+  normal: systemColors.dim,
+  primary: systemColors.accent,
+  success: systemColors.success,
+  warning: systemColors.warning,
+  danger: systemColors.error,
+  muted: systemColors.dim,
 }
 
 function cursor(selected: boolean): string {
@@ -93,7 +93,7 @@ function headerContent(segments: EditableHeaderSegment[]): StyledText {
       (segment): TextChunk => ({
         __isChunk: true,
         text: segment.text,
-        fg: parseColor(segment.color ?? systemColors.secondary),
+        fg: parseColor(segment.color ?? systemColors.dim),
         attributes: createTextAttributes({
           ...(segment.bold === undefined ? {} : { bold: segment.bold }),
           ...(segment.dim === undefined ? {} : { dim: segment.dim }),
@@ -165,7 +165,7 @@ export function selectEditableItem<T>(
         height: 1,
         wrapMode: "none",
         truncate: true,
-        fg: systemColors.secondary,
+        fg: systemColors.dim,
         content: dynamicHeaderContent(headerLines[index] ?? ""),
       })
       handle.content.add(line)
@@ -183,7 +183,7 @@ export function selectEditableItem<T>(
           height: 1,
           wrapMode: "none",
           truncate: true,
-          fg: systemColors.secondary,
+          fg: systemColors.dim,
           content: "",
         }),
     )
@@ -209,11 +209,7 @@ export function selectEditableItem<T>(
         if (!item) continue
         const isSelected = itemIndex === selected
         const isEditing = editing?.index === itemIndex
-        row.fg = item.disabled
-          ? systemColors.disabled
-          : isSelected
-            ? systemColors.header
-            : toneColors[item.tone ?? "normal"]
+        row.fg = item.disabled ? systemColors.dim : isSelected ? systemColors.accent : toneColors[item.tone ?? "normal"]
         row.content = `${cursor(isSelected)}${isEditing ? item.edit?.label : item.name}`
       }
       layoutInput()
@@ -341,11 +337,11 @@ export function selectEditableItem<T>(
         zIndex: 10,
         value: item.edit.mask ? "•".repeat(Array.from(secretValue).length) : initialValue,
         placeholder: item.edit.placeholder ?? "",
-        backgroundColor: "#111827",
-        focusedBackgroundColor: "#111827",
-        textColor: systemColors.secondary,
-        focusedTextColor: systemColors.secondary,
-        cursorColor: systemColors.header,
+        backgroundColor: systemColors.bgOverlay,
+        focusedBackgroundColor: systemColors.bgOverlay,
+        textColor: systemColors.dim,
+        focusedTextColor: systemColors.dim,
+        cursorColor: systemColors.accent,
       })
       handle.content.add(input)
       editing = { item, index, input, secretValue }

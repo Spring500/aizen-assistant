@@ -49,20 +49,20 @@ export function sessionStatusText(snapshot: CoreSnapshot, modelLabel?: string): 
   const view = snapshot.currentViewId ?? "未选择视图"
   const permission = `${presetLabels[snapshot.currentPermissionPreset ?? "edit"]}·${reviewModeLabels[snapshot.currentPermissionReviewMode ?? "manual"]}`
   const chunks: TextChunk[] = [
-    { __isChunk: true, text: `模型：${model} | 视图：${view} | 权限：`, fg: parseColor(systemColors.secondary) },
+    { __isChunk: true, text: `模型：${model} | 视图：${view} | 权限：`, fg: parseColor(systemColors.dim) },
     {
       __isChunk: true,
       text: permission,
-      fg: parseColor(systemColors.sessionStatus),
+      fg: parseColor(systemColors.accent),
       attributes: createTextAttributes({ bold: true }),
     },
-    { __isChunk: true, text: ` | 上下文：${contextText(snapshot)}`, fg: parseColor(systemColors.secondary) },
+    { __isChunk: true, text: ` | 上下文：${contextText(snapshot)}`, fg: parseColor(systemColors.dim) },
   ]
   if (snapshot.permissionReviewError)
     chunks.push({
       __isChunk: true,
       text: " | 工具审核模型：异常",
-      fg: parseColor(systemColors.statusError),
+      fg: parseColor(systemColors.error),
       attributes: createTextAttributes({ bold: true }),
     })
   return new StyledText(chunks)

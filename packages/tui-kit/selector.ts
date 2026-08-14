@@ -51,8 +51,8 @@ export function selectItem<T>(
       bottom: 0,
       left: 0,
       showDescription: false,
-      textColor: systemColors.secondary,
-      descriptionColor: systemColors.shortcuts,
+      textColor: systemColors.dim,
+      descriptionColor: systemColors.dim,
     })
     const selectedItem = () => items[selector.getSelectedIndex()]
     const updateState = () => {

@@ -26,16 +26,8 @@ export function viewSettingItem<T extends string>(options: ViewSettingItemOption
   return {
     value: options.value,
     segments: view
-      ? [
-          { text: `${options.label}  [ ` },
-          { text: view.name, color: systemColors.sessionStatus, bold: true },
-          { text: " ]" },
-        ]
-      : [
-          { text: `${options.label}  [ ` },
-          { text: options.placeholder, color: systemColors.shortcuts },
-          { text: " ]" },
-        ],
+      ? [{ text: `${options.label}  [ ` }, { text: view.name, color: systemColors.accent, bold: true }, { text: " ]" }]
+      : [{ text: `${options.label}  [ ` }, { text: options.placeholder, color: systemColors.dim }, { text: " ]" }],
     ...(options.description ? { details: [{ text: options.description, dim: true }] } : {}),
   }
 }

@@ -34,7 +34,7 @@ export function editInline(
       height: 1,
       wrapMode: "none",
       truncate: true,
-      fg: systemColors.secondary,
+      fg: systemColors.dim,
       content: options.label,
     })
     const input = new InputRenderable(overlays.renderer, {
@@ -45,11 +45,11 @@ export function editInline(
       right: 0,
       value: options.mask ? "•".repeat(Array.from(secretValue).length) : secretValue,
       placeholder: options.placeholder ?? "",
-      backgroundColor: "#111827",
-      focusedBackgroundColor: "#111827",
-      textColor: options.mask ? "#111827" : systemColors.secondary,
-      focusedTextColor: options.mask ? "#111827" : systemColors.secondary,
-      cursorColor: systemColors.header,
+      backgroundColor: systemColors.bgOverlay,
+      focusedBackgroundColor: systemColors.bgOverlay,
+      textColor: options.mask ? systemColors.bgOverlay : systemColors.dim,
+      focusedTextColor: options.mask ? systemColors.bgOverlay : systemColors.dim,
+      cursorColor: systemColors.accent,
     })
     handle.content.add(label)
     handle.content.add(input)

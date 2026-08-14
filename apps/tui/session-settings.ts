@@ -86,7 +86,7 @@ export function sessionSettingsItems(
         { text: "权限预设  [ " },
         {
           text: permissionPresetLabels[draft.permissionPreset ?? "edit"],
-          color: systemColors.sessionStatus,
+          color: systemColors.accent,
           bold: true,
         },
         { text: " ]" },
@@ -98,20 +98,20 @@ export function sessionSettingsItems(
         { text: "审核方式  [ " },
         {
           text: permissionReviewModeLabels[draft.permissionReviewMode ?? "manual"],
-          color: systemColors.sessionStatus,
+          color: systemColors.accent,
           bold: true,
         },
         { text: " ]" },
       ],
     },
-    { value: "manage-models", segments: [{ text: "管理模型", color: systemColors.secondary }] },
-    { value: "manage-views", segments: [{ text: "管理视图", color: systemColors.secondary }] },
+    { value: "manage-models", segments: [{ text: "管理模型", color: systemColors.dim }] },
+    { value: "manage-views", segments: [{ text: "管理视图", color: systemColors.dim }] },
     {
       value: "apply",
       segments: [
         {
           text: mode === "new" ? "应用并开始对话" : "应用并退出设置",
-          color: systemColors.statusIdle,
+          color: systemColors.success,
           bold: true,
         },
       ],

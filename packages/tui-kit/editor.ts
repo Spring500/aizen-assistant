@@ -94,22 +94,22 @@ function titledSeparator(width: number, session: { name: string; sessionId: stri
   const separator = "─".repeat(
     Math.max(0, safeWidth - Bun.stringWidth(suffix) - Bun.stringWidth(id) - (name ? Bun.stringWidth(name) + 2 : 0)),
   )
-  const chunks: TextChunk[] = [{ __isChunk: true, text: separator, fg: parseColor(systemColors.shortcuts) }]
+  const chunks: TextChunk[] = [{ __isChunk: true, text: separator, fg: parseColor(systemColors.dim) }]
   if (name) {
     chunks.push({
       __isChunk: true,
       text: `${name}  `,
-      fg: parseColor(systemColors.header),
+      fg: parseColor(systemColors.accent),
       attributes: createTextAttributes({ bold: true }),
     })
   }
   chunks.push({
     __isChunk: true,
     text: id,
-    fg: parseColor(systemColors.shortcuts),
+    fg: parseColor(systemColors.dim),
     attributes: createTextAttributes({ italic: true, dim: true }),
   })
-  chunks.push({ __isChunk: true, text: suffix, fg: parseColor(systemColors.shortcuts) })
+  chunks.push({ __isChunk: true, text: suffix, fg: parseColor(systemColors.dim) })
   return new StyledText(chunks)
 }
 
@@ -131,10 +131,10 @@ function sessionStatusSeparator(width: number, status: SessionStatus): StyledTex
     : ""
   const color =
     status.tone === "error"
-      ? systemColors.statusError
+      ? systemColors.error
       : status.tone === "running"
-        ? systemColors.statusRunning
-        : systemColors.statusIdle
+        ? systemColors.warning
+        : systemColors.success
   // 右侧信息区：状态 + 指标。空间不足时优先保留状态文本，指标从右向左截断。
   const contentWidth = Math.max(0, safeWidth - 2)
   const statusWidth = Bun.stringWidth(label)
@@ -142,7 +142,7 @@ function sessionStatusSeparator(width: number, status: SessionStatus): StyledTex
   const metricsShown = metricsBudget > 0 ? truncateToCells(metricsLabel, metricsBudget) : ""
   const shownWidth = statusWidth + Bun.stringWidth(metricsShown)
   const leading = Math.max(0, contentWidth - shownWidth)
-  const chunks: TextChunk[] = [{ __isChunk: true, text: "─".repeat(leading), fg: parseColor(systemColors.shortcuts) }]
+  const chunks: TextChunk[] = [{ __isChunk: true, text: "─".repeat(leading), fg: parseColor(systemColors.dim) }]
   if (status.text)
     chunks.push({
       __isChunk: true,
@@ -150,8 +150,8 @@ function sessionStatusSeparator(width: number, status: SessionStatus): StyledTex
       fg: parseColor(color),
       attributes: createTextAttributes({ bold: true }),
     })
-  if (metricsShown) chunks.push({ __isChunk: true, text: metricsShown, fg: parseColor(systemColors.secondary) })
-  chunks.push({ __isChunk: true, text: "──", fg: parseColor(systemColors.shortcuts) })
+  if (metricsShown) chunks.push({ __isChunk: true, text: metricsShown, fg: parseColor(systemColors.dim) })
+  chunks.push({ __isChunk: true, text: "──", fg: parseColor(systemColors.dim) })
   return new StyledText(chunks)
 }
 
@@ -180,7 +180,7 @@ export function createChatEditor(
     height: 0,
     wrapMode: "none",
     truncate: true,
-    fg: systemColors.secondary,
+    fg: systemColors.dim,
     content: "",
     visible: false,
   })
@@ -190,7 +190,7 @@ export function createChatEditor(
     height: 1,
     wrapMode: "none",
     truncate: true,
-    fg: systemColors.shortcuts,
+    fg: systemColors.dim,
     content: "",
   })
   let input!: TextareaRenderable
@@ -288,7 +288,7 @@ export function createChatEditor(
     height: 1,
     wrapMode: "none",
     truncate: true,
-    fg: systemColors.shortcuts,
+    fg: systemColors.dim,
     content: "",
   })
   const status = new TextRenderable(renderer, {
@@ -297,7 +297,7 @@ export function createChatEditor(
     height: 1,
     wrapMode: "none",
     truncate: true,
-    fg: systemColors.sessionStatus,
+    fg: systemColors.accent,
     content: "模型：未选择模型 | 上下文：0/未知",
   })
   const shortcuts = new TextRenderable(renderer, {
@@ -306,7 +306,7 @@ export function createChatEditor(
     height: 1,
     wrapMode: "none",
     truncate: true,
-    fg: systemColors.shortcuts,
+    fg: systemColors.dim,
     content: shortcutText({ status: "idle", hasSession: false }),
   })
   renderer.root.add(commandList)
@@ -320,7 +320,7 @@ export function createChatEditor(
     height: 1,
     wrapMode: "none",
     truncate: true,
-    fg: systemColors.statusError,
+    fg: systemColors.error,
     content: "",
   })
   renderer.root.add(shortcuts)
@@ -390,8 +390,8 @@ export function createChatEditor(
       busy = value
       if (destroyed || input.isDestroyed) return
       // 运行中输入区保持可见可输入，仅将输入文字切换为暗淡主题色表达“不可发送”。
-      // 恢复时还原 Textarea 默认亮色（#ffffff）。
-      const dimColor = value ? systemColors.secondary : "#ffffff"
+      // 恢复时还原输入区默认主文字色。
+      const dimColor = value ? systemColors.dim : systemColors.text
       input.textColor = dimColor
       input.focusedTextColor = dimColor
     },

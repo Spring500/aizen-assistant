@@ -61,7 +61,7 @@ async function showEvidence(
       parent: handle.content,
       content: full.content,
       wrapMode: "word",
-      fg: systemColors.secondary,
+      fg: systemColors.dim,
       onStateChange: (state) =>
         handle.setDescription(`视觉行 ${state.firstLine}-${state.lastLine} / ${state.totalLines}`),
     })
@@ -146,7 +146,7 @@ async function showPermissionSummary(
       height: "100%",
       wrapMode: "none",
       truncate: true,
-      fg: systemColors.secondary,
+      fg: systemColors.dim,
       content: "",
     })
     handle.content.add(content)

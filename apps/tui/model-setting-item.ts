@@ -55,17 +55,13 @@ export function modelSettingItem<T extends string>(
           { text: `${options.label}  [ ` },
           { text: providerName ?? "", italic: true, dim: true },
           { text: " · " },
-          { text: resolvedName ?? model.modelId, color: systemColors.sessionStatus, bold: true },
+          { text: resolvedName ?? model.modelId, color: systemColors.accent, bold: true },
           ...(model.thinkingLevel
-            ? [{ text: " · " }, { text: model.thinkingLevel, color: systemColors.sessionStatus, bold: true }]
+            ? [{ text: " · " }, { text: model.thinkingLevel, color: systemColors.accent, bold: true }]
             : []),
           { text: " ]" },
         ]
-      : [
-          { text: `${options.label}  [ ` },
-          { text: options.placeholder, color: systemColors.shortcuts },
-          { text: " ]" },
-        ],
+      : [{ text: `${options.label}  [ ` }, { text: options.placeholder, color: systemColors.dim }, { text: " ]" }],
     ...(options.description ? { details: [{ text: options.description, dim: true }] } : {}),
   }
 }

@@ -16,25 +16,21 @@ export function sessionDisplay(
     .join("")
   // canForceOpen 仅为风险标记（含不兼容记录），不代表可打开；可操作性只看 canOpen。
   const hasAction = session.capabilities.canOpen
-  const color = isCurrent
-    ? systemColors.sessionCurrent
-    : isOccupied
-      ? systemColors.sessionOccupied
-      : systemColors.header
+  const color = isCurrent ? systemColors.accent : isOccupied ? systemColors.warning : systemColors.accent
   return {
     segments: [
       ...(session.name ? [{ text: session.name, color, bold: true }, { text: "  " }] : []),
       {
         text: session.sessionId,
-        color: isCurrent || isOccupied ? color : systemColors.shortcuts,
+        color: isCurrent || isOccupied ? color : systemColors.dim,
         italic: true,
         dim: !isCurrent && !isOccupied,
       },
       ...(marker ? [{ text: marker, color, bold: true }] : []),
     ],
     details: [
-      { text: `${session.updatedAt} · ${session.preview}`, color: systemColors.shortcuts, dim: true },
-      ...session.issues.map((issue) => ({ text: ` · ${issue.message}`, color: systemColors.sessionOccupied })),
+      { text: `${session.updatedAt} · ${session.preview}`, color: systemColors.dim, dim: true },
+      ...session.issues.map((issue) => ({ text: ` · ${issue.message}`, color: systemColors.warning })),
     ],
     ...(!hasAction ? { disabled: true, disabledReason: session.issues[0]?.message ?? "当前条目不可操作" } : {}),
   }

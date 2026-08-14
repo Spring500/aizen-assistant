@@ -68,14 +68,14 @@ export function createOutputPanel(renderer: CliRenderer): OutputPanel {
     height: 0,
     wrapMode: "none",
     truncate: true,
-    fg: systemColors.live,
+    fg: systemColors.accent,
   })
   const streamText = new TextRenderable(renderer, {
     id: "footer-output-stream",
     width: "100%",
     height: 1,
     wrapMode: "word",
-    fg: systemColors.live,
+    fg: systemColors.accent,
   })
   root.add(toolsText)
   root.add(streamText)
