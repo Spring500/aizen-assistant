@@ -13,12 +13,11 @@ import type { FoldPreferences } from "../core/app-preferences-store.ts"
 import type { Timing, ToolCallPart, ToolMessage } from "../core/session-format.ts"
 import type { CoreSnapshot } from "../core/types.ts"
 import {
-  blockColors,
   type AssistantMarkdownStyles,
   createAssistantMarkdownRenderer,
   createAssistantMarkdownStyles,
 } from "./markdown-renderer.ts"
-import { systemColors } from "./theme.ts"
+import { blockColors, systemColors } from "./theme.ts"
 
 export type ChatView = {
   destroy(): Promise<void>
@@ -344,26 +343,26 @@ function styledToolText(tool: ToolDisplay, detailsExpanded: boolean): StyledText
       attributes: createTextAttributes(attributes),
     })
   }
-  push(`[${tool.name}]`, systemColors.secondary, { bold: true })
-  push(tool.intent ? `  ${tool.intent}` : "  未提供调用目的", systemColors.header, { bold: !!tool.intent })
+  push(`[${tool.name}]`, systemColors.dim, { bold: true })
+  push(tool.intent ? `  ${tool.intent}` : "  未提供调用目的", systemColors.accent, { bold: !!tool.intent })
   const metadata = [
     tool.timeoutSeconds === undefined ? "" : `限时 ${formatDurationText(tool.timeoutSeconds * 1000)}`,
     tool.timing ? timingText(tool.timing) : "",
   ].filter(Boolean)
-  if (metadata.length > 0) push(`  ·  ${metadata.join(" · ")}`, systemColors.secondary, { dim: true })
+  if (metadata.length > 0) push(`  ·  ${metadata.join(" · ")}`, systemColors.dim, { dim: true })
   // 详情折叠时也要让失败可见：行尾追加失败标记，避免失败被隐藏成“无结果”。
-  if (!detailsExpanded && tool.isError) push("  ×", systemColors.statusError, { bold: true })
+  if (!detailsExpanded && tool.isError) push("  ×", systemColors.error, { bold: true })
   if (detailsExpanded) {
-    push("\n  › ", systemColors.secondary, { dim: true })
-    push(tool.input, systemColors.secondary, { dim: true, italic: true })
+    push("\n  › ", systemColors.dim, { dim: true })
+    push(tool.input, systemColors.dim, { dim: true, italic: true })
     push(
       `\n  ${tool.waiting ? "…" : tool.isError ? "×" : "✓"} `,
-      tool.isError ? systemColors.statusError : systemColors.secondary,
+      tool.isError ? systemColors.error : systemColors.dim,
       {
         dim: !tool.isError,
       },
     )
-    push(tool.output, tool.isError ? systemColors.statusError : systemColors.secondary, {
+    push(tool.output, tool.isError ? systemColors.error : systemColors.dim, {
       dim: !tool.isError,
       italic: true,
     })
