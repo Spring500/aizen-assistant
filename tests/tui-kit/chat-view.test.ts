@@ -6,7 +6,13 @@ import { defaultAppPreferences } from "../../packages/core/app-preferences-store
 import type { CoreSnapshot } from "../../packages/core/types.ts"
 import { createChatView, formatDurationText } from "../../packages/tui-kit/chat-view.ts"
 import { statusBarView } from "../../packages/tui-kit/status-bar.ts"
-import { blockColors, systemColors } from "../../packages/tui-kit/theme.ts"
+import {
+  blockColors,
+  darkThemeColors,
+  lightThemeColors,
+  setSystemColors,
+  systemColors,
+} from "../../packages/tui-kit/theme.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
@@ -318,6 +324,67 @@ test("resize 会按新宽度全量回放历史", async () => {
     await Bun.sleep(100)
     await setup.renderOnce()
     expect(setup.externalOutput.takeText()).toContain("resize 内容")
+    await view.destroy()
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("终端配色切换后全量重放使用新色板", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    await view.update(
+      snapshot({
+        transcript: [
+          {
+            type: "message",
+            turnId: "theme-turn",
+            message: {
+              role: "assistant",
+              parts: [
+                {
+                  kind: "text",
+                  text: [
+                    "# 一级标题",
+                    "",
+                    "## 二级标题",
+                    "",
+                    "### 三级标题",
+                    "",
+                    "#### 四级标题",
+                    "",
+                    "##### 五级标题",
+                    "",
+                    "###### 六级标题",
+                    "",
+                    "这是 **重点**。",
+                  ].join("\n"),
+                },
+              ],
+              source: { providerId: "test", modelId: "model", api: "a" },
+              stopReason: "stop",
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            },
+          },
+        ],
+      }),
+    )
+    // update 与 refreshTheme 的提交入队即完成，无需 renderOnce（其会 flush 并丢弃队列中的 commit）。
+    const darkSpans = takeScrollbackSpans(setup.renderer)
+    expect(spanByText(darkSpans, "一级标题").fg.toInts()).toEqual([...parseColor(darkThemeColors.accent).toInts()])
+    expect(spanByText(darkSpans, "一级标题").bg.toInts()).toEqual([...parseColor(darkThemeColors.bgAssistant).toInts()])
+    setSystemColors("light")
+    try {
+      await view.refreshTheme()
+      const lightSpans = takeScrollbackSpans(setup.renderer)
+      expect(spanByText(lightSpans, "一级标题").fg.toInts()).toEqual([...parseColor(lightThemeColors.accent).toInts()])
+      expect(spanByText(lightSpans, "一级标题").bg.toInts()).toEqual([
+        ...parseColor(lightThemeColors.bgAssistant).toInts(),
+      ])
+    } finally {
+      setSystemColors("dark")
+    }
     await view.destroy()
   } finally {
     setup.renderer.destroy()

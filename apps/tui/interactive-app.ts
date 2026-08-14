@@ -37,6 +37,7 @@ import { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
 import {
   createAizenRenderer,
   destroyRenderer,
+  initThemeSync,
   setAizenTerminalTitle,
   type TuiRenderer,
 } from "../../packages/tui-kit/renderer.ts"
@@ -315,6 +316,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
 
   const updateStatusBar = () => applySnapshotToFooter(core.getSnapshot())
   updateStatusBar()
+
+  // 终端配色同步：亮暗切换时先由 initThemeSync 更新色板，再刷新 footer 与历史。
+  const unsubscribeThemeSync = initThemeSync(renderer, (mode) => {
+    applySnapshotToFooter(core.getSnapshot())
+    void view.refreshTheme().catch((error) => console.error("主题切换历史重放失败", error))
+  })
 
   const beginInteraction = () => {
     interactionDepth += 1
@@ -2009,6 +2016,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
     }
   } finally {
     unsubscribe()
+    unsubscribeThemeSync()
     try {
       await actions.flush()
       await core.dispose()

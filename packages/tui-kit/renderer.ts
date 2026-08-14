@@ -1,5 +1,6 @@
-import { type CliRenderer, CliRenderEvents, createCliRenderer } from "@opentui/core"
+import { type CliRenderer, CliRenderEvents, createCliRenderer, type ThemeMode } from "@opentui/core"
 import { MIN_FOOTER_HEIGHT } from "./footer-layout.ts"
+import { setSystemColors, type ColorMode } from "./theme.ts"
 
 /** tui-kit 对业务层暴露的渲染器类型，避免业务代码直接依赖 OpenTUI。 */
 export type TuiRenderer = CliRenderer
@@ -63,4 +64,29 @@ export function setAizenTerminalTitle(renderer: CliRenderer, title: string): voi
 
 export function destroyRenderer(renderer: CliRenderer): void {
   renderer.destroy()
+}
+
+/**
+ * 同步 TUI 色板与终端配色：应用初始 themeMode，并订阅运行中切换。
+ *
+ * 切换发生（亮暗翻转）时先更新 systemColors，再回调 onThemeChanged，
+ * 由调用方负责刷新已渲染内容（历史全量重放与 footer）。
+ * 终端不支持配色检测或测试渲染器下 themeMode 为 null，保持默认深色色板。
+ * 返回取消订阅函数，供销毁时调用。
+ */
+export function initThemeSync(renderer: CliRenderer, onThemeChanged: (mode: ColorMode) => void): () => void {
+  const apply = (mode: ThemeMode | null) => {
+    if (!mode) return
+    if (setSystemColors(mode)) onThemeChanged(mode)
+  }
+  // 初始 themeMode 可能因异步查询尚未就绪，等待一次结果；此后由事件驱动。
+  if (renderer.themeMode) apply(renderer.themeMode)
+  else
+    void renderer
+      .waitForThemeMode(300)
+      .then((mode) => apply(mode))
+      .catch(() => {})
+  const listener = (mode: ThemeMode) => apply(mode)
+  renderer.on(CliRenderEvents.THEME_MODE, listener)
+  return () => renderer.off(CliRenderEvents.THEME_MODE, listener)
 }
