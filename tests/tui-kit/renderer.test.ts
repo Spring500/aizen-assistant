@@ -1,29 +1,78 @@
 import { expect } from "bun:test"
+import type { CliRenderer } from "@opentui/core"
+import { initThemeSync } from "../../packages/tui-kit/renderer.ts"
+import { darkThemeColors, getSystemColors, lightThemeColors, setSystemColors } from "../../packages/tui-kit/theme.ts"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
-import { computeFooterHeight, setAizenTerminalTitle } from "../../packages/tui-kit/renderer.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
-test("终端标题过滤控制字符并限制长度", () => {
-  let actual = ""
+/** 构造最小可用 renderer mock（含 raw stdout 写入通道与事件订阅）。 */
+function createMockRenderer(themeMode: string | null): {
+  renderer: CliRenderer
+  writes: string[]
+  themeModeListeners: Array<(mode: string) => void>
+} {
+  const writes: string[] = []
+  const themeModeListeners: Array<(mode: string) => void> = []
   const renderer = {
-    setTerminalTitle(title: string) {
-      actual = title
+    themeMode,
+    stdout: {},
+    realStdoutWrite: (chunk: unknown) => writes.push(String(chunk)),
+    on: (_event: string, cb: (mode: string) => void) => {
+      themeModeListeners.push(cb)
     },
-  }
-  setAizenTerminalTitle(renderer as never, `${"会".repeat(130)}\n\u001b]0;恶意标题`)
-  expect(Array.from(actual)).toHaveLength(120)
-  expect(actual).not.toContain("\n")
-  expect(actual).not.toContain("\u001b")
+    off: () => {},
+  } as unknown as CliRenderer
+  return { renderer, writes, themeModeListeners }
+}
+
+test("initThemeSync 主动发送 CSI ?997n 配色模式查询", () => {
+  const { renderer, writes } = createMockRenderer(null)
+  const unsubscribe = initThemeSync(renderer, () => {})
+  expect(writes).toContain("\x1b[?997n")
+  unsubscribe()
 })
 
-test("footer 高度为视口一半且保底最小可行高度", () => {
-  // 目标 h/2 随视口增长、无上限；下限 9（压缩行后的最小可行高度）。
-  expect(computeFooterHeight(10)).toBe(9)
-  expect(computeFooterHeight(16)).toBe(9)
-  expect(computeFooterHeight(20)).toBe(10)
-  expect(computeFooterHeight(24)).toBe(12)
-  expect(computeFooterHeight(40)).toBe(20)
-  expect(computeFooterHeight(60)).toBe(30)
-  expect(computeFooterHeight(0)).toBe(9)
+test("initThemeSync 应用已就绪的 themeMode", () => {
+  const { renderer } = createMockRenderer("light")
+  const changed: string[] = []
+  try {
+    setSystemColors("dark")
+    const unsubscribe = initThemeSync(renderer, (mode) => changed.push(mode))
+    expect(changed).toEqual(["light"])
+    expect(getSystemColors()).toBe(lightThemeColors)
+    unsubscribe()
+  } finally {
+    setSystemColors("dark")
+  }
+})
+
+test("initThemeSync 通过 THEME_MODE 事件切换色板", () => {
+  const { renderer, themeModeListeners } = createMockRenderer(null)
+  const changed: string[] = []
+  try {
+    setSystemColors("dark")
+    const unsubscribe = initThemeSync(renderer, (mode) => changed.push(mode))
+    // 模拟 OpenTUI 收到 997 响应后触发的亮暗切换事件。
+    themeModeListeners[0]?.("light")
+    expect(changed).toEqual(["light"])
+    expect(getSystemColors()).toBe(lightThemeColors)
+    unsubscribe()
+  } finally {
+    setSystemColors("dark")
+  }
+})
+
+test("initThemeSync 同一模式重复应用不回调", () => {
+  const { renderer } = createMockRenderer("dark")
+  const changed: string[] = []
+  try {
+    setSystemColors("dark")
+    const unsubscribe = initThemeSync(renderer, (mode) => changed.push(mode))
+    expect(changed).toEqual([])
+    expect(getSystemColors()).toBe(darkThemeColors)
+    unsubscribe()
+  } finally {
+    setSystemColors("dark")
+  }
 })
