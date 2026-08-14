@@ -67,25 +67,49 @@ export function destroyRenderer(renderer: CliRenderer): void {
 }
 
 /**
- * 同步 TUI 色板与终端配色：应用初始 themeMode，并订阅运行中切换。
+ * 向终端发送原始查询序列（如 CSI ?997n 配色模式查询）。
+ *
+ * capture-stdout 模式下 process.stdout.write 会被 OpenTUI 拦截并渲染到输出区，
+ * 必须使用 renderer 持有的原始 stdout 引用直达终端；发送失败（如测试渲染器）
+ * 时静默忽略，交由调用方兜底。
+ */
+function sendTerminalQuery(renderer: CliRenderer, sequence: string): void {
+  const self = renderer as unknown as {
+    stdout?: NodeJS.WriteStream
+    realStdoutWrite?: (chunk: unknown, encoding?: unknown, callback?: unknown) => void
+  }
+  try {
+    if (typeof self.realStdoutWrite === "function" && self.stdout) {
+      self.realStdoutWrite.call(self.stdout, sequence)
+    } else {
+      process.stdout.write(sequence)
+    }
+  } catch {
+    // 发送失败（如测试渲染器的 stdout 引用失效）时静默忽略。
+  }
+}
+
+/**
+ * 同步 TUI 色板与终端配色，并在运行中跟随切换。
+ *
+ * 主动发送 Kitty CSI ?997n 配色模式查询，让 OpenTUI 内部链路（收到 997 响应后
+ * 查询 OSC 10/11 背景色）激活并更新 themeMode；亮暗翻转经 THEME_MODE 事件
+ * 驱动切换。终端不支持该查询时保持默认深色色板。
  *
  * 切换发生（亮暗翻转）时先更新 systemColors，再回调 onThemeChanged，
  * 由调用方负责刷新已渲染内容（历史全量重放与 footer）。
- * 终端不支持配色检测或测试渲染器下 themeMode 为 null，保持默认深色色板。
  * 返回取消订阅函数，供销毁时调用。
  */
 export function initThemeSync(renderer: CliRenderer, onThemeChanged: (mode: ColorMode) => void): () => void {
-  const apply = (mode: ThemeMode | null) => {
+  const apply = (mode: ThemeMode | null | undefined) => {
     if (!mode) return
     if (setSystemColors(mode)) onThemeChanged(mode)
   }
-  // 初始 themeMode 可能因异步查询尚未就绪，等待一次结果；此后由事件驱动。
-  if (renderer.themeMode) apply(renderer.themeMode)
-  else
-    void renderer
-      .waitForThemeMode(300)
-      .then((mode) => apply(mode))
-      .catch(() => {})
+  // 立即应用已就绪的 themeMode（终端支持时启动即可得）。
+  apply(renderer.themeMode)
+  // 主动查询终端配色模式，激活 OpenTUI 的 themeMode 链路。
+  sendTerminalQuery(renderer, "\x1b[?997n")
+  // 运行中亮暗翻转由事件驱动切换。
   const listener = (mode: ThemeMode) => apply(mode)
   renderer.on(CliRenderEvents.THEME_MODE, listener)
   return () => renderer.off(CliRenderEvents.THEME_MODE, listener)

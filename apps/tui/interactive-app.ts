@@ -317,10 +317,15 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const updateStatusBar = () => applySnapshotToFooter(core.getSnapshot())
   updateStatusBar()
 
-  // 终端配色同步：亮暗切换时先由 initThemeSync 更新色板，再刷新 footer 与历史。
-  const unsubscribeThemeSync = initThemeSync(renderer, (mode) => {
-    applySnapshotToFooter(core.getSnapshot())
-    void view.refreshTheme().catch((error) => console.error("主题切换历史重放失败", error))
+  // 终端配色同步：主动查询终端配色模式激活 OpenTUI 检测，亮暗切换时
+  // 更新色板并刷新 footer 与历史；回调仅在真实切换发生时执行。
+  const unsubscribeThemeSync = initThemeSync(renderer, () => {
+    try {
+      applySnapshotToFooter(core.getSnapshot())
+      void view.refreshTheme().catch((error) => console.error("主题切换历史重放失败", error))
+    } catch (error) {
+      console.error("主题切换刷新失败", error)
+    }
   })
 
   const beginInteraction = () => {
