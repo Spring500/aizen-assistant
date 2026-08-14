@@ -1967,7 +1967,7 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
         "session-selector",
         [
           {
-            segments: [{ text: "新建会话", color: systemColors.header, bold: true }],
+            segments: [{ text: "新建会话", color: systemColors.accent, bold: true }],
             details: [{ text: "使用所选模型开始空白会话", dim: true }],
             value: "__new__",
           },

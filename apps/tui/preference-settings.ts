@@ -37,7 +37,7 @@ export function preferenceSettingsItems(
       value: "permission-review",
       description: "AI 权限模式使用的 App 级审核模型",
     }),
-    { value: "apply", segments: [{ text: "保存并返回", color: systemColors.statusIdle, bold: true }] },
+    { value: "apply", segments: [{ text: "保存并返回", color: systemColors.success, bold: true }] },
     { value: "cancel", segments: [{ text: "取消", dim: true }] },
   ]
 }
