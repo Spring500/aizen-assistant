@@ -228,12 +228,12 @@ test("完成的助手正文按 Markdown 格式写入历史", async () => {
     const history = spans.map((span) => span.text).join("")
     const rgba = (hex: string) => [...parseColor(hex).toInts()] as [number, number, number, number]
     const headingExpectations = [
-      ["一级标题", rgba(systemColors.accent)],
-      ["二级标题", rgba(systemColors.accent)],
-      ["三级标题", rgba(systemColors.accent)],
-      ["四级标题", rgba(systemColors.accent)],
-      ["五级标题", rgba(systemColors.accent)],
-      ["六级标题", rgba(systemColors.accent)],
+      ["一级标题", rgba(systemColors.mdHeading1)],
+      ["二级标题", rgba(systemColors.mdHeading2)],
+      ["三级标题", rgba(systemColors.mdHeading3)],
+      ["四级标题", rgba(systemColors.mdHeading4)],
+      ["五级标题", rgba(systemColors.mdHeading5)],
+      ["六级标题", rgba(systemColors.mdHeading6)],
     ] as const
     const strong = spanByText(spans, "重点")
     const keyword = spanByText(spans, "const")
@@ -253,8 +253,8 @@ test("完成的助手正文按 Markdown 格式写入历史", async () => {
     expect(codeType.fg.toInts()).toEqual(rgba(systemColors.syntaxType))
     expect(codeNumber.fg.toInts()).toEqual(rgba(systemColors.syntaxNumber))
     expect(keyword.bg.toInts()).toEqual(rgba(blockColors.tool))
-    expect(inlineFormula.fg.toInts()).toEqual(rgba(systemColors.accent))
-    expect(blockFormula.fg.toInts()).toEqual(rgba(systemColors.syntaxNumber))
+    expect(inlineFormula.fg.toInts()).toEqual(rgba(systemColors.mdInlineCode))
+    expect(blockFormula.fg.toInts()).toEqual(rgba(systemColors.mdFormula))
     expect(blockFormula.bg.toInts()).toEqual(rgba(blockColors.tool))
     expect(history).not.toContain("#一级标题")
     expect(history).not.toContain("**重点**")
@@ -372,13 +372,15 @@ test("终端配色切换后全量重放使用新色板", async () => {
     )
     // update 与 refreshTheme 的提交入队即完成，无需 renderOnce（其会 flush 并丢弃队列中的 commit）。
     const darkSpans = takeScrollbackSpans(setup.renderer)
-    expect(spanByText(darkSpans, "一级标题").fg.toInts()).toEqual([...parseColor(darkThemeColors.accent).toInts()])
+    expect(spanByText(darkSpans, "一级标题").fg.toInts()).toEqual([...parseColor(darkThemeColors.mdHeading1).toInts()])
     expect(spanByText(darkSpans, "一级标题").bg.toInts()).toEqual([...parseColor(darkThemeColors.bgAssistant).toInts()])
     setSystemColors("light")
     try {
       await view.refreshTheme()
       const lightSpans = takeScrollbackSpans(setup.renderer)
-      expect(spanByText(lightSpans, "一级标题").fg.toInts()).toEqual([...parseColor(lightThemeColors.accent).toInts()])
+      expect(spanByText(lightSpans, "一级标题").fg.toInts()).toEqual([
+        ...parseColor(lightThemeColors.mdHeading1).toInts(),
+      ])
       expect(spanByText(lightSpans, "一级标题").bg.toInts()).toEqual([
         ...parseColor(lightThemeColors.bgAssistant).toInts(),
       ])
