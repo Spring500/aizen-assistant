@@ -58,6 +58,36 @@ export const darkThemeColors = {
   syntaxVariable: "#fb923c",
   /** 运算符。 */
   syntaxOperator: "#f9a8d4",
+
+  // ── markdown 语法 ─────────────────────────────────
+  /** markdown 一级标题。 */
+  mdHeading1: "#f472b6",
+  /** markdown 二级标题。 */
+  mdHeading2: "#22d3ee",
+  /** markdown 三级标题。 */
+  mdHeading3: "#a78bfa",
+  /** markdown 四级标题。 */
+  mdHeading4: "#c4b5fd",
+  /** markdown 五级标题。 */
+  mdHeading5: "#d8b4fe",
+  /** markdown 六级标题。 */
+  mdHeading6: "#e9d5ff",
+  /** markdown 内联代码（`code`）。 */
+  mdInlineCode: "#fb923c",
+  /** markdown 链接文本。 */
+  mdLink: "#22d3ee",
+  /** markdown 链接地址。 */
+  mdLinkUrl: "#9ca3af",
+  /** markdown 引用。 */
+  mdQuote: "#9ca3af",
+  /** markdown 列表标记。 */
+  mdListBullet: "#a78bfa",
+  /** markdown 特殊标点。 */
+  mdPunctuation: "#9ca3af",
+  /** markdown 公式（行内与块级）。 */
+  mdFormula: "#facc15",
+  /** markdown 代码块内未命中规则的默认文字。 */
+  mdCodeBlock: "#d1d5db",
 } as const
 
 /** 浅色终端色板。 */
@@ -111,6 +141,36 @@ export const lightThemeColors = {
   syntaxVariable: "#c2410c",
   /** 运算符。 */
   syntaxOperator: "#9d174d",
+
+  // ── markdown 语法 ─────────────────────────────────
+  /** markdown 一级标题。 */
+  mdHeading1: "#be185d",
+  /** markdown 二级标题。 */
+  mdHeading2: "#0e7490",
+  /** markdown 三级标题。 */
+  mdHeading3: "#7c3aed",
+  /** markdown 四级标题。 */
+  mdHeading4: "#9333ea",
+  /** markdown 五级标题。 */
+  mdHeading5: "#a855f7",
+  /** markdown 六级标题。 */
+  mdHeading6: "#c084fc",
+  /** markdown 内联代码（`code`）。 */
+  mdInlineCode: "#c2410c",
+  /** markdown 链接文本。 */
+  mdLink: "#0e7490",
+  /** markdown 链接地址。 */
+  mdLinkUrl: "#6b7280",
+  /** markdown 引用。 */
+  mdQuote: "#6b7280",
+  /** markdown 列表标记。 */
+  mdListBullet: "#7c3aed",
+  /** markdown 特殊标点。 */
+  mdPunctuation: "#6b7280",
+  /** markdown 公式（行内与块级）。 */
+  mdFormula: "#b45309",
+  /** markdown 代码块内未命中规则的默认文字。 */
+  mdCodeBlock: "#4b5563",
 } as const
 
 /** 终端配色模式：深色或浅色。 */
