@@ -40,10 +40,16 @@ async function confirmUninstall(skipConfirmation: boolean): Promise<boolean> {
   return answer.trim().toLowerCase() === "y"
 }
 
+/** 安装根：真身在多版本布局下位于 <根>/versions/<current>/，旧布局位于 <根>/bin/。 */
+function installRootFromExecutable(): string {
+  const exeDir = dirname(process.execPath)
+  return basename(dirname(exeDir)) === "versions" ? dirname(dirname(exeDir)) : dirname(exeDir)
+}
+
 /** 从 bash/zsh/fish 配置中移除安装目录相关的 PATH 行（幂等重写）。 */
 async function removeShellPathEntries(home: string): Promise<void> {
-  // 安装目录绝对路径（覆盖 --install-dir 自定义安装场景与手写绝对路径的条目，与 Windows $entry3 对齐）
-  const installBinDir = dirname(process.execPath)
+  // 安装目录 = 安装根/bin（多版本布局下真身在 versions/，不能直接用 dirname(execPath)）
+  const installBinDir = join(installRootFromExecutable(), "bin")
   // 覆盖 install.sh 的 bash 分支写入的 .bashrc 与 .bash_profile（macOS 登录 shell 读 .bash_profile）
   const candidates = [
     join(home, ".bashrc"),
@@ -70,7 +76,7 @@ async function removeShellPathEntries(home: string): Promise<void> {
 
 /** 从用户级 PATH 移除安装目录条目（经 PowerShell 操作 HKCU\Environment，免管理员）。 */
 async function removeWindowsPathEntry(): Promise<void> {
-  const binDir = dirname(process.execPath)
+  const binDir = join(installRootFromExecutable(), "bin")
   const quotedBinDir = binDir.replaceAll("'", "''")
   const script = [
     // 默认安装路径的展开绝对形式（install.ps1 写入 $InstallDir）；install.ps1 已不再写 %USERPROFILE% 字面
@@ -91,9 +97,7 @@ async function removeWindowsPathEntry(): Promise<void> {
 
 /** 删除数据与安装记录；安装根由可执行文件位置推导（多版本布局为 <根>/versions/<current>/，旧布局为 <根>/bin/），支持自定义安装目录。 */
 async function removeAizenDirectory(): Promise<void> {
-  // 安装根：真身在多版本布局下位于 <根>/versions/<current>/，旧布局位于 <根>/bin/。
-  const exeDir = dirname(process.execPath)
-  const root = basename(dirname(exeDir)) === "versions" ? dirname(dirname(exeDir)) : dirname(exeDir)
+  const root = installRootFromExecutable()
   await rm(installRecordPath(), { force: true })
 
   if (process.platform === "win32") {
