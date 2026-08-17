@@ -4,14 +4,15 @@
  * 用法：bun run scripts/repo/e2e-distribution-test.ts [--with-path]
  *
  * 流程：构建产物 → 打包 v0.1.0 / v0.2.0 → 本地 mock release 服务器 →
- * 以 --install-dir 安装到临时目录（查 latest=v0.1.0）→ 断言安装 →
- * 切到 latest=v0.2.0 后执行 update --release-api → 断言升级 → 执行 uninstall --yes → 断言卸载。
+ * 以 --install-dir 安装到临时目录（查 latest=v0.1.0）→ 断言多版本布局（launcher + versions 真身 + current）→
+ * 切到 latest=v0.2.0 后执行 update --release-api（进程运行中完成更新）→ 断言版本落位与 current 切换 →
+ * 执行 uninstall --yes → 断言整个安装根被删除。
  *
  * 默认 --skip-path（不写真实注册表、不依赖环境变量）；--with-path 时真实执行用户 PATH 写入与回滚
  * （用于 CI 临时 runner，覆盖 PATH 回归；本地运行请勿开启以免改动真实 PATH）。
  */
 
-import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
+import { access, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
 import { randomUUID } from "node:crypto"
@@ -157,33 +158,39 @@ async function main(): Promise<void> {
     if (installExit !== 0) throw new Error(`install.ps1 失败 exit=${installExit}\n${installOut}\n${installErr}`)
     console.log(installOut.trim())
 
-    // 3. 断言安装结果
+    // 3. 断言安装结果（多版本布局：bin/ 下为 launcher，versions/ 下为版本真身）
     console.log("[3/6] 断言安装结果")
-    assert(await pathExists(join(tempHome, ".aizen", "bin", "aizen-assistant.exe")), "可执行文件未安装")
+    assert(await pathExists(join(tempHome, ".aizen", "bin", "aizen-assistant.exe")), "launcher 未安装")
+    assert(
+      await pathExists(join(tempHome, ".aizen", "versions", "v0.1.0", "aizen-assistant.exe")),
+      "版本真身未安装到 versions/",
+    )
+    assert(await pathExists(join(tempHome, ".aizen", "data")), "data 目录未创建")
     const installRecord = JSON.parse(await readFile(join(tempHome, ".aizen", "install.json"), "utf8"))
     assert(installRecord.channel === "github", `install.json.channel 异常：${installRecord.channel}`)
     assert(installRecord.version === "0.1.0", `install.json.version 异常：${installRecord.version}`)
     assert(installRecord.platform === "windows-x64", `install.json.platform 异常：${installRecord.platform}`)
-    console.log("安装断言通过：exe 与 install.json 落位正确")
+    assert(installRecord.current === "v0.1.0", `install.json.current 异常：${installRecord.current}`)
+    console.log("安装断言通过：launcher、版本真身、data 与 install.json 落位正确")
 
-    // 4. 切到 v0.2.0 并执行更新
+    // 4. 切到 v0.2.0 并执行更新（update 进程运行期间完成落位，即运行中更新）
     console.log("[4/6] 切换 mock release（v0.2.0）并执行 update")
     servers[0]?.kill()
     servers.pop()
     servers.push(await startMockServer(assetsV2, "0.2.0", MOCK_PORT_V2))
-    const updateWorkDirsBefore = new Set((await readdir(tmpdir())).filter((name) => name.startsWith("aizen-update-")))
     await runInstalledExe(tempHome, ["update", "--release-api", `http://localhost:${MOCK_PORT_V2}`])
-    await Bun.sleep(3_000) // Windows 延迟替换约 1 秒，留足余量
 
-    // 5. 断言更新结果
+    // 5. 断言更新结果（新版本落位、current 切换、历史版本保留供回滚）
     console.log("[5/6] 断言更新结果")
     const updatedRecord = JSON.parse(await readFile(join(tempHome, ".aizen", "install.json"), "utf8"))
     assert(updatedRecord.version === "0.2.0", `更新后 install.json.version 异常：${updatedRecord.version}`)
-    // 延迟替换脚本执行到清理步骤即证明替换成功：workDir 含新 exe，未被主流程提前删除，脚本先 Move 再删目录。
-    const updateWorkDirsAfter = new Set((await readdir(tmpdir())).filter((name) => name.startsWith("aizen-update-")))
-    const leftover = [...updateWorkDirsAfter].filter((name) => !updateWorkDirsBefore.has(name))
-    assert(leftover.length === 0, `延迟替换的临时目录未被清理：${leftover.join(",")}`)
-    console.log("更新断言通过：版本已升级到 0.2.0，延迟替换已执行")
+    assert(updatedRecord.current === "v0.2.0", `更新后 install.json.current 异常：${updatedRecord.current}`)
+    assert(await pathExists(join(tempHome, ".aizen", "versions", "v0.2.0", "aizen-assistant.exe")), "v0.2.0 版本未落位")
+    assert(
+      await pathExists(join(tempHome, ".aizen", "versions", "v0.1.0", "aizen-assistant.exe")),
+      "v0.1.0 历史版本应保留（回滚）",
+    )
+    console.log("更新断言通过：版本升级到 0.2.0，current 已切换，历史版本保留")
 
     // 6. 执行卸载并断言清理（默认 --skip-path 时卸载也不碰真实 PATH，保持本地无副作用）
     console.log("[6/6] 执行 uninstall --yes 并断言清理")
@@ -195,10 +202,13 @@ async function main(): Promise<void> {
       console.log(`残留内容：\n${leftover.stdout.toString()}`)
     }
     assert(!(await pathExists(join(tempHome, ".aizen"))), "卸载后 ~/.aizen 仍存在")
-    // PATH 断言仅对 --with-path 场景有效（真实写入过才能验证回滚）；--skip-path 时该断言恒真但无害。
-    const pathProbe = await Bun.$`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path','User')"`
-    const userPath = pathProbe.stdout.toString() ?? ""
-    assert(!userPath.includes(".aizen"), "用户 PATH 中仍残留安装目录条目")
+    // PATH 断言仅对 --with-path 场景有效（真实写入过才能验证回滚）；--skip-path 不触碰用户 PATH，跳过。
+    if (withPath) {
+      const pathProbe =
+        await Bun.$`powershell -NoProfile -Command "[Environment]::GetEnvironmentVariable('Path','User')"`
+      const userPath = pathProbe.stdout.toString() ?? ""
+      assert(!userPath.includes(".aizen"), "用户 PATH 中仍残留安装目录条目")
+    }
     console.log(`卸载断言通过：~/.aizen 已删除${withPath ? "，PATH 已写入并回滚" : "（--skip-path，未触碰 PATH）"}`)
 
     console.log("\n端到端测试全部通过")

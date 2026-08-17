@@ -160,6 +160,8 @@ fi
 exec "$EXE" --data-dir "$INSTALL_ROOT/data" "$@"
 LAUNCHER
   chmod +x "$INSTALL_DIR/aizen-assistant"
+  # 数据目录固定于安装根，安装时创建保证就绪
+  mkdir -p "$DATA_DIR"
 
   if [ -f "$extracted_dir/version" ]; then
     installed_version="$(tr -d '[:space:]' < "$extracted_dir/version")"

@@ -108,6 +108,8 @@ function Install-Release {
     if (-not (Test-Path $launcherSource)) { throw "压缩包内未找到 launcher（launcher.exe）" }
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     Copy-Item -Path $launcherSource -Destination (Join-Path $InstallDir "aizen-assistant.exe") -Force
+    # 数据目录固定于安装根，安装时创建保证就绪
+    New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
 
     $installedVersion = ""
     $versionFile = Join-Path $tmpDir "extracted\version"
