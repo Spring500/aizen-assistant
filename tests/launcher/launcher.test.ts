@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
 import { join } from "node:path"
-import { resolveLaunchPlan } from "../../apps/launcher/main.ts"
+import { resolveLaunchPlan, shouldInjectDataDir } from "../../apps/launcher/main.ts"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
@@ -23,5 +23,18 @@ describe("launcher 启动计划", () => {
     expect(() => resolveLaunchPlan("/x", {}, "linux", [])).toThrow("缺少 current")
     expect(() => resolveLaunchPlan("/x", { current: "" }, "linux", [])).toThrow("缺少 current")
     expect(() => resolveLaunchPlan("/x", { current: 42 }, "linux", [])).toThrow("缺少 current")
+  })
+})
+
+describe("launcher 数据目录注入", () => {
+  test("交互模式注入 --data-dir", () => {
+    expect(shouldInjectDataDir([])).toBe(true)
+    expect(shouldInjectDataDir(["--data-dir", "/x"])).toBe(true)
+  })
+
+  test("update / uninstall 分发子命令不注入", () => {
+    expect(shouldInjectDataDir(["update"])).toBe(false)
+    expect(shouldInjectDataDir(["update", "--release-api", "url"])).toBe(false)
+    expect(shouldInjectDataDir(["uninstall", "--yes"])).toBe(false)
   })
 })

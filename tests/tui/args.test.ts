@@ -31,19 +31,6 @@ describe("TUI 参数", () => {
     })
   })
 
-  test("update / uninstall 子命令忽略注入的 --data-dir", () => {
-    expect(parseArguments(["--data-dir", "/x", "update"])).toEqual({ command: "update" })
-    expect(parseArguments(["update", "--data-dir", "/x", "--release-api", "http://localhost:18081"])).toEqual({
-      command: "update",
-      releaseApi: "http://localhost:18081",
-    })
-    expect(parseArguments(["uninstall", "--data-dir", "/x", "--yes"])).toEqual({
-      command: "uninstall",
-      yes: true,
-      skipPath: false,
-    })
-  })
-
   test("拒绝未知、重复和缺少值的参数", () => {
     expect(() => parseArguments(["--unknown"])).toThrow("未知的 TUI 参数")
     expect(() => parseArguments(["--data-dir"])).toThrow("必须提供目录")

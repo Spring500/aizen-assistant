@@ -1,14 +1,13 @@
 /**
  * AizenAssistant launcher（受管安装的启动入口）。
  *
- * 职责：读取 install.json 的 current 版本目录 → 以 --data-dir 注入固定的数据目录 →
- * 启动 versions/<current>/ 下的真实可执行文件，并透传 stdio 与退出码。
+ * 职责：读取 install.json 的 current 版本目录 → 启动 versions/<current>/ 下的真实可执行文件，
+ * 并透传 stdio 与退出码；仅交互模式注入 --data-dir（update / uninstall 分发子命令不使用数据目录）。
  *
  * 设计约束：
  * - 只服务受管安装（install.json 存在且含 current）；便携模式不经过 launcher，直接运行真实可执行文件。
- * - 逻辑刻意保持极简稳定：只做"定位 + 注入 + 启动"，不承担版本检查、下载、清理等职责，
+ * - 逻辑刻意保持极简稳定：只做"定位 + 启动 + 透传"，不承担版本检查、下载、清理等职责，
  *   以保证 launcher 自身几乎不需要随主程序更新。
- * - 永远注入 --data-dir（update / uninstall 子命令在参数解析层忽略该参数），避免对参数做分支判断。
  */
 
 import { readFile } from "node:fs/promises"
@@ -19,6 +18,11 @@ export type LaunchPlan = {
   executable: string
   dataDirectory: string
   args: string[]
+}
+
+/** 是否注入 --data-dir：仅交互模式使用数据目录；update / uninstall 分发子命令不使用，launcher 不注入。 */
+export function shouldInjectDataDir(args: string[]): boolean {
+  return args[0] !== "update" && args[0] !== "uninstall"
 }
 
 /**
@@ -50,9 +54,15 @@ function installRootFromLauncher(): string {
 }
 
 /** 启动真实可执行文件并透传 stdio；返回其退出码。 */
-async function launch(executable: string, dataDirectory: string, args: string[]): Promise<number> {
+async function launch(
+  executable: string,
+  dataDirectory: string,
+  args: string[],
+  injectDataDir: boolean,
+): Promise<number> {
+  const cmd = injectDataDir ? [executable, "--data-dir", dataDirectory, ...args] : [executable, ...args]
   const proc = Bun.spawn({
-    cmd: [executable, "--data-dir", dataDirectory, ...args],
+    cmd,
     stdin: "inherit",
     stdout: "inherit",
     stderr: "inherit",
@@ -83,7 +93,8 @@ async function main(): Promise<number> {
   }
   // 交互模式下 Ctrl+C 由子进程（TUI）处理，launcher 忽略信号、只透传退出码。
   process.on("SIGINT", () => {})
-  return await launch(plan.executable, plan.dataDirectory, plan.args)
+  const args = process.argv.slice(2)
+  return await launch(plan.executable, plan.dataDirectory, args, shouldInjectDataDir(args))
 }
 
 if (import.meta.main) process.exitCode = await main()
