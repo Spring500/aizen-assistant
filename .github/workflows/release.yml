@@ -64,6 +64,9 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: 参数化构建
         run: bun run build:tui --target ${{ matrix.target }}
+      - name: 构建 launcher（仅 Windows）
+        if: contains(matrix.platform, 'windows')
+        run: bun run build:launcher --target ${{ matrix.target }}
       - name: 产物冒烟验证（单文件、无外部运行时）
         run: >-
           bun run tests/distribution/verify-tui.ts

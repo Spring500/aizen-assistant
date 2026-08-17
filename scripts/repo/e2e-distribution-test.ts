@@ -113,6 +113,7 @@ async function main(): Promise<void> {
     // 1. 构建并打包两个版本
     console.log("[1/6] 构建 Windows 产物并打包 v0.1.0 / v0.2.0")
     await Bun.$`bun run build:tui`
+    await Bun.$`bun run build:launcher`
     await Bun.$`bun run scripts/repo/package-release.ts --version 0.1.0 --platform windows-x64`
     await Bun.$`bun run scripts/repo/package-release.ts --version 0.2.0 --platform windows-x64`
     for (const [version, assetsDir] of [

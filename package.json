@@ -18,6 +18,7 @@
     "dev:tui": "bun run scripts/dev/run-tui.ts",
     "dev:mock": "bun run scripts/dev/run-mock.ts",
     "build:tui": "bun run scripts/repo/build-tui.ts",
+    "build:launcher": "bun run scripts/repo/build-launcher.ts",
     "build:pi-http-probe": "bun build --compile --target=bun-windows-x64 --outfile dist/pi-http-probe.exe tests/distribution/pi-http-probe.ts",
     "verify": "bun run check:config && bun run format:check && bun run lint && bun run typecheck && bun run build:tui && bun run build:pi-http-probe && bun test --timeout 0 --bail=1 && bun run tests/distribution/verify-tui.ts && bun run tests/distribution/verify-pi-http.ts",
     "postinstall": "git config core.hooksPath .githooks",
