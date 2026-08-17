@@ -18,6 +18,8 @@ SUPPORTED_PLATFORMS="linux-x64 darwin-arm64 windows-x64"
 HOME_DIR="${HOME:-}"
 CONFIG_DIR="$HOME_DIR/.aizen"
 INSTALL_DIR="$CONFIG_DIR/bin"
+VERSIONS_DIR="$CONFIG_DIR/versions"
+DATA_DIR="$CONFIG_DIR/data"
 
 REQUESTED_VERSION=""
 SKIP_PATH=0
@@ -36,7 +38,7 @@ parse_arguments() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --version) require_value "$1" "${2:-}"; REQUESTED_VERSION="$2"; shift 2 ;;
-      --install-dir) require_value "$1" "${2:-}"; INSTALL_DIR="$2"; CONFIG_DIR="$(dirname "$INSTALL_DIR")"; CUSTOM_INSTALL_DIR=1; shift 2 ;;
+      --install-dir) require_value "$1" "${2:-}"; INSTALL_DIR="$2"; CONFIG_DIR="$(dirname "$INSTALL_DIR")"; VERSIONS_DIR="$CONFIG_DIR/versions"; DATA_DIR="$CONFIG_DIR/data"; CUSTOM_INSTALL_DIR=1; shift 2 ;;
       --api-url) require_value "$1" "${2:-}"; RELEASE_API="$2"; shift 2 ;;
       --download-url) require_value "$1" "${2:-}"; RELEASE_DOWNLOAD="$2"; shift 2 ;;
       --skip-path) SKIP_PATH=1; shift ;;
@@ -128,8 +130,35 @@ download_and_install() {
     echo "错误：压缩包内未找到可执行文件" >&2
     exit 1
   fi
+  # 真身放入 versions/v<版本>/，bin/ 下生成 launcher 脚本（多版本布局：运行中的实例不被替换）
+  version_dir="$VERSIONS_DIR/v$version"
+  mkdir -p "$version_dir"
+  cp -f "$extracted_dir/aizen-assistant" "$version_dir/aizen-assistant"
+  chmod +x "$version_dir/aizen-assistant"
   mkdir -p "$INSTALL_DIR"
-  cp -f "$extracted_dir/aizen-assistant" "$INSTALL_DIR/aizen-assistant"
+  cat > "$INSTALL_DIR/aizen-assistant" <<'LAUNCHER'
+#!/usr/bin/env sh
+# AizenAssistant launcher（由安装脚本生成，勿手动编辑）
+set -eu
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+INSTALL_ROOT="$(dirname -- "$SCRIPT_DIR")"
+RECORD="$INSTALL_ROOT/install.json"
+if [ ! -f "$RECORD" ]; then
+  echo "错误：无法读取安装记录：$RECORD" >&2
+  exit 1
+fi
+CURRENT="$(grep -o '"current"[[:space:]]*:[[:space:]]*"[^"]*"' "$RECORD" | head -1 | sed 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/')"
+if [ -z "$CURRENT" ]; then
+  echo "错误：安装记录缺少 current 字段" >&2
+  exit 1
+fi
+EXE="$INSTALL_ROOT/versions/$CURRENT/aizen-assistant"
+if [ ! -x "$EXE" ]; then
+  echo "错误：找不到可执行文件：$EXE" >&2
+  exit 1
+fi
+exec "$EXE" --data-dir "$INSTALL_ROOT/data" "$@"
+LAUNCHER
   chmod +x "$INSTALL_DIR/aizen-assistant"
 
   if [ -f "$extracted_dir/version" ]; then
@@ -147,7 +176,8 @@ write_install_record() {
 {
   "channel": "github",
   "version": "$version",
-  "platform": "$platform"
+  "platform": "$platform",
+  "current": "v$version"
 }
 EOF
 }
@@ -167,6 +197,34 @@ append_path_line() {
   fi
   printf '\n# AizenAssistant\n%s\n' "$line" >> "$file"
   echo "已追加 PATH 到 $file"
+}
+
+# 检测旧单文件布局：bin/ 下是可执行文件且 install.json 无 current 字段（多版本布局才有 current）。
+needs_legacy_migration() {
+  [ -f "$INSTALL_DIR/aizen-assistant" ] || return 1
+  if [ -f "$CONFIG_DIR/install.json" ] && grep -q '"current"' "$CONFIG_DIR/install.json" 2>/dev/null; then
+    return 1
+  fi
+  return 0
+}
+
+# 从旧单文件布局迁移到多版本布局：旧 exe → versions/v<旧版本>/，bin/.aizen → data/（bin/ 随后由下载流程放置 launcher）。
+migrate_legacy_layout() {
+  local old_version="legacy"
+  if [ -f "$CONFIG_DIR/install.json" ]; then
+    old_version="$(grep -o '"version"[[:space:]]*:[[:space:]]*"[^"]*"' "$CONFIG_DIR/install.json" | head -1 | sed 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/')"
+    [ -n "$old_version" ] || old_version="legacy"
+  fi
+  local version_dir="$VERSIONS_DIR/v$old_version"
+  mkdir -p "$version_dir"
+  mv -f "$INSTALL_DIR/aizen-assistant" "$version_dir/aizen-assistant"
+  chmod +x "$version_dir/aizen-assistant"
+  if [ -d "$INSTALL_DIR/.aizen" ]; then
+    mkdir -p "$DATA_DIR"
+    mv -f "$INSTALL_DIR/.aizen"/* "$DATA_DIR"/ 2>/dev/null || true
+    rm -rf "$INSTALL_DIR/.aizen"
+  fi
+  echo "旧版布局已迁移：versions/v$old_version 与 $DATA_DIR"
 }
 
 # 按当前 shell 配置 PATH（bash/zsh/fish），幂等。
@@ -221,6 +279,10 @@ main() {
   fi
 
   echo "安装 AizenAssistant v${version}（${platform}）"
+  if needs_legacy_migration; then
+    echo "检测到旧版单文件布局，正在迁移..."
+    migrate_legacy_layout
+  fi
   installed_version="$(download_and_install "$version" "$platform")"
   write_install_record "$installed_version" "$platform"
   if [ "$SKIP_PATH" -ne 1 ]; then
@@ -231,7 +293,7 @@ main() {
 
 安装完成：AizenAssistant v${installed_version}（${platform}）
 安装位置：$INSTALL_DIR
-数据目录：$INSTALL_DIR/.aizen（随程序目录保存）
+数据目录：$DATA_DIR（固定于安装根，升级不迁移）
 
 请重新打开终端后运行：
   aizen-assistant

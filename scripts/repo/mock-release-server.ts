@@ -27,6 +27,8 @@ async function main(): Promise<void> {
 
   const server = Bun.serve({
     port,
+    // 大文件（单文件可执行压缩包可达上百 MB）下载易触发默认 10s 空闲超时，调大供本地与 CI 使用。
+    idleTimeout: 120,
     async fetch(request) {
       const url = new URL(request.url)
       if (url.pathname === "/releases/latest") {

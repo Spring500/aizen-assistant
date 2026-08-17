@@ -18,6 +18,8 @@ $ReleaseDownload = "https://github.com/$Repository/releases/download"
 $SupportedPlatforms = @("windows-x64", "linux-x64", "darwin-arm64")
 $ConfigDir = Join-Path $env:USERPROFILE ".aizen"
 $InstallDir = Join-Path $ConfigDir "bin"
+$VersionsDir = Join-Path $ConfigDir "versions"
+$DataDir = Join-Path $ConfigDir "data"
 
 $RequestedVersion = ""
 $SkipPath = $false
@@ -26,7 +28,7 @@ $SkipPath = $false
 for ($i = 0; $i -lt $args.Count; $i++) {
   switch ($args[$i]) {
     "--version" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--version 必须提供值" }; $RequestedVersion = $args[$i]; break }
-    "--install-dir" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--install-dir 必须提供值" }; $InstallDir = $args[$i]; $ConfigDir = Split-Path $InstallDir -Parent; break }
+    "--install-dir" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--install-dir 必须提供值" }; $InstallDir = $args[$i]; $ConfigDir = Split-Path $InstallDir -Parent; $VersionsDir = Join-Path $ConfigDir "versions"; $DataDir = Join-Path $ConfigDir "data"; break }
     "--api-url" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--api-url 必须提供值" }; $ReleaseApi = $args[$i]; break }
     "--download-url" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--download-url 必须提供值" }; $ReleaseDownload = $args[$i]; break }
     "--skip-path" { $SkipPath = $true; break }
@@ -98,8 +100,14 @@ function Install-Release {
     Expand-Archive -LiteralPath $zipPath -DestinationPath (Join-Path $tmpDir "extracted") -Force
     $exeSource = Join-Path $tmpDir "extracted\aizen-assistant.exe"
     if (-not (Test-Path $exeSource)) { throw "压缩包内未找到可执行文件" }
+    # 真身放入 versions/v<版本>/，bin/ 下放置 launcher（多版本布局：运行中的实例不被替换）
+    $versionDir = Join-Path $VersionsDir "v$Version"
+    New-Item -ItemType Directory -Path $versionDir -Force | Out-Null
+    Copy-Item -Path $exeSource -Destination (Join-Path $versionDir "aizen-assistant.exe") -Force
+    $launcherSource = Join-Path $tmpDir "extracted\launcher.exe"
+    if (-not (Test-Path $launcherSource)) { throw "压缩包内未找到 launcher（launcher.exe）" }
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
-    Copy-Item -Path $exeSource -Destination (Join-Path $InstallDir "aizen-assistant.exe") -Force
+    Copy-Item -Path $launcherSource -Destination (Join-Path $InstallDir "aizen-assistant.exe") -Force
 
     $installedVersion = ""
     $versionFile = Join-Path $tmpDir "extracted\version"
@@ -111,14 +119,51 @@ function Install-Release {
   }
 }
 
-# 写安装来源记录（channel/version/platform）。使用无 BOM 的 UTF-8，避免 JSON 解析失败。
+# 写安装来源记录（channel/version/platform/current）。使用无 BOM 的 UTF-8，避免 JSON 解析失败。
 function Write-InstallRecord {
   param([string]$Version, [string]$Platform)
 
   New-Item -ItemType Directory -Path $ConfigDir -Force | Out-Null
   $recordPath = Join-Path $ConfigDir "install.json"
-  $record = @{ channel = "github"; version = $Version; platform = $Platform } | ConvertTo-Json
+  $record = @{ channel = "github"; version = $Version; platform = $Platform; current = "v$Version" } | ConvertTo-Json
   [System.IO.File]::WriteAllText($recordPath, $record, [System.Text.UTF8Encoding]::new($false))
+}
+
+# 检测旧单文件布局：bin/ 下是完整 exe 且 install.json 无 current 字段（多版本布局才有 current）。
+function Test-LegacyLayout {
+  param([string]$InstallDir, [string]$ConfigDir)
+  if (-not (Test-Path (Join-Path $InstallDir "aizen-assistant.exe"))) { return $false }
+  $recordPath = Join-Path $ConfigDir "install.json"
+  if (Test-Path $recordPath) {
+    try {
+      $record = Get-Content $recordPath -Raw | ConvertFrom-Json
+      if ($record.current) { return $false }
+    } catch {}
+  }
+  return $true
+}
+
+# 从旧单文件布局迁移到多版本布局：旧 exe → versions/v<旧版本>/，bin/.aizen → data/（bin/ 随后由 Install-Release 放置 launcher）。
+function Convert-LegacyLayout {
+  param([string]$ConfigDir, [string]$InstallDir, [string]$VersionsDir, [string]$DataDir)
+  $oldVersion = "legacy"
+  $recordPath = Join-Path $ConfigDir "install.json"
+  if (Test-Path $recordPath) {
+    try {
+      $record = Get-Content $recordPath -Raw | ConvertFrom-Json
+      if ($record.version) { $oldVersion = $record.version }
+    } catch {}
+  }
+  $versionDir = Join-Path $VersionsDir "v$oldVersion"
+  New-Item -ItemType Directory -Path $versionDir -Force | Out-Null
+  Move-Item -Force (Join-Path $InstallDir "aizen-assistant.exe") (Join-Path $versionDir "aizen-assistant.exe")
+  $oldData = Join-Path $InstallDir ".aizen"
+  if (Test-Path $oldData) {
+    New-Item -ItemType Directory -Path $DataDir -Force | Out-Null
+    Get-ChildItem -Force $oldData | ForEach-Object { Move-Item -Force -Path $_.FullName -Destination $DataDir }
+    Remove-Item -Recurse -Force $oldData -ErrorAction SilentlyContinue
+  }
+  Write-Host "旧版布局已迁移：versions/v$oldVersion 与 $DataDir"
 }
 
 # 幂等写入用户级 PATH（HKCU\Environment）。始终写展开后的绝对路径：
@@ -144,6 +189,10 @@ function Main {
   $version = if ($RequestedVersion) { $RequestedVersion.TrimStart("v") } else { Get-LatestVersion }
 
   Write-Host "安装 AizenAssistant v$version（$platform）"
+  if (Test-LegacyLayout -InstallDir $InstallDir -ConfigDir $ConfigDir) {
+    Write-Host "检测到旧版单文件布局，正在迁移..."
+    Convert-LegacyLayout -ConfigDir $ConfigDir -InstallDir $InstallDir -VersionsDir $VersionsDir -DataDir $DataDir
+  }
   $installedVersion = Install-Release -Version $version -Platform $platform
   Write-InstallRecord -Version $installedVersion -Platform $platform
   if (-not $SkipPath) { Add-UserPath }
@@ -151,7 +200,7 @@ function Main {
   Write-Host ""
   Write-Host "安装完成：AizenAssistant v$installedVersion（$platform）"
   Write-Host "安装位置：$InstallDir"
-  Write-Host "数据目录：$InstallDir\.aizen（随程序目录保存）"
+  Write-Host "数据目录：$DataDir（固定于安装根，升级不迁移）"
   Write-Host ""
   Write-Host "请重新打开终端后运行："
   Write-Host "  aizen-assistant"
