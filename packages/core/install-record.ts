@@ -1,5 +1,5 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises"
-import { dirname, join } from "node:path"
+import { basename, dirname, join } from "node:path"
 
 /** 安装来源通道：github（安装脚本安装）或 npm（launcher 管理，预留）。 */
 export type InstallChannel = "github" | "npm"
@@ -15,11 +15,13 @@ export type InstallRecord = {
 
 /**
  * install.json 位置：受管安装为 <安装根>/install.json。
- * 真身在多版本布局下位于 <安装根>/versions/<current>/，向上三层即为安装根；
+ * 真身可能在两种布局下运行：多版本布局 <根>/versions/<current>/exe，或旧单文件布局 <根>/bin/exe；
  * 便携拷贝（exe 旁无 install.json）视为未受管。
  */
 export function installRecordPath(): string {
-  return join(dirname(dirname(dirname(process.execPath))), "install.json")
+  const exeDir = dirname(process.execPath)
+  const root = basename(dirname(exeDir)) === "versions" ? dirname(dirname(exeDir)) : dirname(exeDir)
+  return join(root, "install.json")
 }
 
 /** 读取 install.json；文件不存在或内容无效时返回 undefined（视为未受管）。 */
