@@ -130,7 +130,7 @@ download_and_install() {
     echo "错误：压缩包内未找到可执行文件" >&2
     exit 1
   fi
-  # 真身放入 versions/v<版本>/，bin/ 下生成 launcher 脚本（多版本布局：运行中的实例不被替换）
+  # 真实可执行文件放入 versions/v<版本>/，bin/ 下生成 launcher 脚本（多版本布局：运行中的实例不被替换）
   version_dir="$VERSIONS_DIR/v$version"
   mkdir -p "$version_dir"
   cp -f "$extracted_dir/aizen-assistant" "$version_dir/aizen-assistant"

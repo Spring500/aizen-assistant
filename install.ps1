@@ -100,7 +100,7 @@ function Install-Release {
     Expand-Archive -LiteralPath $zipPath -DestinationPath (Join-Path $tmpDir "extracted") -Force
     $exeSource = Join-Path $tmpDir "extracted\aizen-assistant.exe"
     if (-not (Test-Path $exeSource)) { throw "压缩包内未找到可执行文件" }
-    # 真身放入 versions/v<版本>/，bin/ 下放置 launcher（多版本布局：运行中的实例不被替换）
+    # 真实可执行文件放入 versions/v<版本>/，bin/ 下放置 launcher（多版本布局：运行中的实例不被替换）
     $versionDir = Join-Path $VersionsDir "v$Version"
     New-Item -ItemType Directory -Path $versionDir -Force | Out-Null
     Copy-Item -Path $exeSource -Destination (Join-Path $versionDir "aizen-assistant.exe") -Force

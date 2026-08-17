@@ -46,7 +46,7 @@ async function main(): Promise<void> {
   await mkdir(stagingDir, { recursive: true })
   await copyFile(join("dist", name), join(stagingDir, name))
   if (platform.startsWith("windows")) {
-    // 发布包附带 launcher：安装脚本将其放置为 bin/aizen-assistant.exe，真身放入 versions/ 目录
+    // 发布包附带 launcher：安装脚本将其放置为 bin/aizen-assistant.exe，真实可执行文件放入 versions/ 目录
     await copyFile(join("dist", "aizen-launcher.exe"), join(stagingDir, "launcher.exe"))
   }
   await writeFile(join(stagingDir, "version"), `${version}\n`)

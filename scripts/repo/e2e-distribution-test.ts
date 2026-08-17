@@ -4,7 +4,7 @@
  * 用法：bun run scripts/repo/e2e-distribution-test.ts [--with-path]
  *
  * 流程：构建产物 → 打包 v0.1.0 / v0.2.0 → 本地 mock release 服务器 →
- * 以 --install-dir 安装到临时目录（查 latest=v0.1.0）→ 断言多版本布局（launcher + versions 真身 + current）→
+ * 以 --install-dir 安装到临时目录（查 latest=v0.1.0）→ 断言多版本布局（launcher + versions 真实可执行文件 + current）→
  * 切到 latest=v0.2.0 后执行 update --release-api（进程运行中完成更新）→ 断言版本落位与 current 切换 →
  * 执行 uninstall --yes → 断言整个安装根被删除。
  *
@@ -158,12 +158,12 @@ async function main(): Promise<void> {
     if (installExit !== 0) throw new Error(`install.ps1 失败 exit=${installExit}\n${installOut}\n${installErr}`)
     console.log(installOut.trim())
 
-    // 3. 断言安装结果（多版本布局：bin/ 下为 launcher，versions/ 下为版本真身）
+    // 3. 断言安装结果（多版本布局：bin/ 下为 launcher，versions/ 下为真实可执行文件）
     console.log("[3/6] 断言安装结果")
     assert(await pathExists(join(tempHome, ".aizen", "bin", "aizen-assistant.exe")), "launcher 未安装")
     assert(
       await pathExists(join(tempHome, ".aizen", "versions", "v0.1.0", "aizen-assistant.exe")),
-      "版本真身未安装到 versions/",
+      "真实可执行文件未安装到 versions/",
     )
     assert(await pathExists(join(tempHome, ".aizen", "data")), "data 目录未创建")
     const installRecord = JSON.parse(await readFile(join(tempHome, ".aizen", "install.json"), "utf8"))
@@ -171,7 +171,7 @@ async function main(): Promise<void> {
     assert(installRecord.version === "0.1.0", `install.json.version 异常：${installRecord.version}`)
     assert(installRecord.platform === "windows-x64", `install.json.platform 异常：${installRecord.platform}`)
     assert(installRecord.current === "v0.1.0", `install.json.current 异常：${installRecord.current}`)
-    console.log("安装断言通过：launcher、版本真身、data 与 install.json 落位正确")
+    console.log("安装断言通过：launcher、真实可执行文件、data 与 install.json 落位正确")
 
     // 4. 切到 v0.2.0 并执行更新（update 进程运行期间完成落位，即运行中更新）
     console.log("[4/6] 切换 mock release（v0.2.0）并执行 update")

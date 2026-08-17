@@ -40,7 +40,7 @@ async function confirmUninstall(skipConfirmation: boolean): Promise<boolean> {
   return answer.trim().toLowerCase() === "y"
 }
 
-/** 安装根：真身在多版本布局下位于 <根>/versions/<current>/，旧布局位于 <根>/bin/。 */
+/** 安装根：真实可执行文件在多版本布局下位于 <根>/versions/<current>/，旧布局位于 <根>/bin/。 */
 function installRootFromExecutable(): string {
   const exeDir = dirname(process.execPath)
   return basename(dirname(exeDir)) === "versions" ? dirname(dirname(exeDir)) : dirname(exeDir)
@@ -48,7 +48,7 @@ function installRootFromExecutable(): string {
 
 /** 从 bash/zsh/fish 配置中移除安装目录相关的 PATH 行（幂等重写）。 */
 async function removeShellPathEntries(home: string): Promise<void> {
-  // 安装目录 = 安装根/bin（多版本布局下真身在 versions/，不能直接用 dirname(execPath)）
+  // 安装目录 = 安装根/bin（多版本布局下真实可执行文件在 versions/，不能直接用 dirname(execPath)）
   const installBinDir = join(installRootFromExecutable(), "bin")
   // 覆盖 install.sh 的 bash 分支写入的 .bashrc 与 .bash_profile（macOS 登录 shell 读 .bash_profile）
   const candidates = [

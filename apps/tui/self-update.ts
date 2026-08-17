@@ -141,7 +141,7 @@ async function extractZip(zipPath: string, destDir: string): Promise<void> {
   }
 }
 
-/** 安装根目录：真身位于 <根>/versions/<current>/ 或旧布局 <根>/bin/，据此向上推导。 */
+/** 安装根目录：真实可执行文件位于 <根>/versions/<current>/ 或旧布局 <根>/bin/，据此向上推导。 */
 function installRoot(): string {
   const exeDir = dirname(process.execPath)
   return basename(dirname(exeDir)) === "versions" ? dirname(dirname(exeDir)) : dirname(exeDir)
@@ -311,7 +311,7 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
     if (!(await Bun.file(packageExe).exists())) throw new Error("压缩包内未找到可执行文件")
 
     const root = installRoot()
-    // 旧单文件布局先迁移（bin/ 下真身场景），迁移后 current 由下方切换
+    // 旧单文件布局先迁移（bin/ 下真实可执行文件场景），迁移后 current 由下方切换
     if (isLegacyLayout()) {
       console.log("检测到旧版单文件布局，正在迁移...")
       await migrateLegacyLayout(root, join(extracted, "launcher.exe"))

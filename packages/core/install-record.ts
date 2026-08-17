@@ -15,7 +15,7 @@ export type InstallRecord = {
 
 /**
  * install.json 位置：受管安装为 <安装根>/install.json。
- * 真身可能在两种布局下运行：多版本布局 <根>/versions/<current>/exe，或旧单文件布局 <根>/bin/exe；
+ * 真实可执行文件可能在两种布局下运行：多版本布局 <根>/versions/<current>/exe，或旧单文件布局 <根>/bin/exe；
  * 便携拷贝（exe 旁无 install.json）视为未受管。
  */
 export function installRecordPath(): string {
