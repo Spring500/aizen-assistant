@@ -14,8 +14,32 @@ describe("install-record", () => {
     const dir = await mkdtemp(join(tmpdir(), `install-record-${randomUUID()}`))
     try {
       const file = join(dir, "install.json")
-      await writeInstallRecord({ channel: "github", version: "0.1.0", platform: "windows-x64" }, file)
-      expect(await readInstallRecord(file)).toEqual({ channel: "github", version: "0.1.0", platform: "windows-x64" })
+      await writeInstallRecord(
+        { channel: "github", version: "0.1.0", platform: "windows-x64", current: "v0.1.0" },
+        file,
+      )
+      expect(await readInstallRecord(file)).toEqual({
+        channel: "github",
+        version: "0.1.0",
+        platform: "windows-x64",
+        current: "v0.1.0",
+      })
+    } finally {
+      await removeTemporaryDirectory(dir)
+    }
+  })
+
+  test("旧格式（无 current）读取时以 version 兜底", async () => {
+    const dir = await mkdtemp(join(tmpdir(), `install-record-${randomUUID()}`))
+    try {
+      const file = join(dir, "legacy.json")
+      await writeFile(file, JSON.stringify({ channel: "github", version: "0.1.0", platform: "windows-x64" }))
+      expect(await readInstallRecord(file)).toEqual({
+        channel: "github",
+        version: "0.1.0",
+        platform: "windows-x64",
+        current: "0.1.0",
+      })
     } finally {
       await removeTemporaryDirectory(dir)
     }

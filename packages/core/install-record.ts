@@ -9,6 +9,8 @@ export type InstallRecord = {
   channel: InstallChannel
   version: string
   platform: string
+  /** 当前激活的版本目录名（多版本布局下为 versions/ 下的子目录名，如 v0.2.0）。旧记录无此字段时以 version 兜底。 */
+  current: string
 }
 
 /**
@@ -33,7 +35,13 @@ export async function readInstallRecord(file: string = installRecordPath()): Pro
     const parsed = JSON.parse(text) as Partial<InstallRecord>
     if (parsed.channel !== "github" && parsed.channel !== "npm") return undefined
     if (typeof parsed.version !== "string" || typeof parsed.platform !== "string") return undefined
-    return { channel: parsed.channel, version: parsed.version, platform: parsed.platform }
+    // 旧版单文件布局的 install.json 没有 current 字段；读取时以 version 兜底，保证多版本机制启用前的记录可读。
+    return {
+      channel: parsed.channel,
+      version: parsed.version,
+      platform: parsed.platform,
+      current: typeof parsed.current === "string" && parsed.current.length > 0 ? parsed.current : parsed.version,
+    }
   } catch {
     return undefined
   }

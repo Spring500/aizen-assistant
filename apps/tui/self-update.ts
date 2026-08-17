@@ -262,7 +262,12 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
     const newExecutable = join(workDir, "extracted", basename(process.execPath))
     if (!(await Bun.file(newExecutable).exists())) throw new Error("压缩包内未找到可执行文件")
 
-    const successRecord: InstallRecord = { channel: "github", version: release.version, platform: record.platform }
+    const successRecord: InstallRecord = {
+      channel: "github",
+      version: release.version,
+      platform: record.platform,
+      current: `v${release.version}`,
+    }
     await replaceExecutable(newExecutable, process.execPath, workDir, successRecord)
     // Windows 下延迟替换尚未完成，workDir 由延迟脚本清理；POSIX 下替换同步完成，由 finally 清理。
     if (process.platform === "win32") {
