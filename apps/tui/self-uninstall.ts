@@ -6,7 +6,7 @@
  */
 
 import { homedir } from "node:os"
-import { readFile, writeFile, rm, readdir } from "node:fs/promises"
+import { readFile, writeFile, rm } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import { installRecordPath, readInstallRecord } from "../../packages/core/install-record.ts"
@@ -89,35 +89,23 @@ async function removeWindowsPathEntry(): Promise<void> {
   else console.log("已从用户 PATH 移除安装目录")
 }
 
-/** 删除数据与安装记录；目录由可执行文件位置推导（exe 位于 <安装根>/bin/），支持自定义安装目录。 */
+/** 删除数据与安装记录；安装根由可执行文件位置推导（多版本布局为 <根>/versions/<current>/，旧布局为 <根>/bin/），支持自定义安装目录。 */
 async function removeAizenDirectory(): Promise<void> {
-  const binDir = dirname(process.execPath)
-  const aizenDir = dirname(binDir)
-  await rm(join(binDir, ".aizen"), { recursive: true, force: true })
+  // 安装根：真身在多版本布局下位于 <根>/versions/<current>/，旧布局位于 <根>/bin/。
+  const exeDir = dirname(process.execPath)
+  const root = basename(dirname(exeDir)) === "versions" ? dirname(dirname(exeDir)) : dirname(exeDir)
   await rm(installRecordPath(), { force: true })
 
   if (process.platform === "win32") {
-    // 删除 bin 下除安装的可执行文件之外的内容（安装的 exe 正被系统锁定，交给延迟脚本删除）。
-    // 用固定文件名而非 process.execPath 判断，避免源码运行（bun 启动）时语义失配。
-    const managedExecutableName = "aizen-assistant.exe"
-    try {
-      const entries = await readdir(binDir)
-      for (const entry of entries) {
-        const full = join(binDir, entry)
-        if (basename(full) !== managedExecutableName) await rm(full, { recursive: true, force: true })
-      }
-    } catch {
-      // bin 目录不存在时跳过
-    }
-    // 延迟删除自身 exe 与整个 ~/.aizen：由共享调度器在进程退出后执行（Bun.spawn 子进程会随父退出被终止）。
+    // 运行中的 exe 与数据目录可能被系统锁定，整个安装根交给延迟脚本在进程退出后删除
+    // （Bun.spawn 子进程会随父退出被终止，须经 Start-Process 创建独立进程）。
     await scheduleDeferredPowerShell([
       "Start-Sleep -Seconds 1",
-      `Remove-Item -Recurse -Force ${quotedPowerShell(binDir)}`,
-      `Remove-Item -Recurse -Force ${quotedPowerShell(aizenDir)}`,
+      `Remove-Item -Recurse -Force ${quotedPowerShell(root)}`,
     ])
   } else {
-    // POSIX 允许删除运行中的可执行文件，整个目录一并删除
-    await rm(aizenDir, { recursive: true, force: true })
+    // POSIX 允许删除运行中的可执行文件，整个安装根一并删除
+    await rm(root, { recursive: true, force: true })
   }
 }
 
