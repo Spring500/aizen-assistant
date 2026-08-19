@@ -30,12 +30,21 @@ func installRoot(launcherPath string) string {
 	return filepath.Dir(filepath.Dir(launcherPath))
 }
 
-// shouldInjectDataDir 判断是否注入 --data-dir：仅交互模式（非 update / uninstall 分发子命令）使用数据目录。
+// shouldInjectDataDir 判断是否注入 --data-dir：launcher 的注入只是提供默认值——
+// 用户已显式传入 --data-dir 时尊重用户选择；update / uninstall 分发子命令不使用数据目录。
 func shouldInjectDataDir(args []string) bool {
 	if len(args) == 0 {
 		return true
 	}
-	return args[0] != "update" && args[0] != "uninstall"
+	if args[0] == "update" || args[0] == "uninstall" {
+		return false
+	}
+	for _, arg := range args {
+		if arg == "--data-dir" {
+			return false
+		}
+	}
+	return true
 }
 
 // executablePath 返回 versions/<current>/ 下的真实可执行文件路径（Windows 带 .exe 后缀）。

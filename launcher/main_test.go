@@ -16,14 +16,14 @@ func TestInstallRoot(t *testing.T) {
 	}
 }
 
-// 交互模式注入 --data-dir；update / uninstall 分发子命令不注入。
+// 交互模式注入 --data-dir（默认值语义：用户已显式传入时不注入）；update / uninstall 分发子命令不注入。
 func TestShouldInjectDataDir(t *testing.T) {
 	cases := []struct {
 		args []string
 		want bool
 	}{
 		{[]string{}, true},
-		{[]string{"--data-dir", "/x"}, true},
+		{[]string{"--data-dir", "/x"}, false},
 		{[]string{"update"}, false},
 		{[]string{"update", "--release-api", "url"}, false},
 		{[]string{"uninstall", "--yes"}, false},

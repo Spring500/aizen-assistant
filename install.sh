@@ -157,7 +157,21 @@ if [ ! -x "$EXE" ]; then
   echo "错误：找不到可执行文件：$EXE" >&2
   exit 1
 fi
-exec "$EXE" --data-dir "$INSTALL_ROOT/data" "$@"
+# --data-dir 注入只是提供默认值：用户已显式传入时尊重用户选择；
+# update / uninstall 分发子命令不使用数据目录，同样不注入。
+INJECT=1
+case "${1:-}" in
+  update|uninstall) INJECT=0 ;;
+esac
+if [ "$INJECT" -eq 1 ]; then
+  for ARG in "$@"; do
+    if [ "$ARG" = "--data-dir" ]; then INJECT=0; break; fi
+  done
+fi
+if [ "$INJECT" -eq 1 ]; then
+  exec "$EXE" --data-dir "$INSTALL_ROOT/data" "$@"
+fi
+exec "$EXE" "$@"
 LAUNCHER
   chmod +x "$INSTALL_DIR/aizen-assistant"
   # 数据目录固定于安装根，安装时创建保证就绪
