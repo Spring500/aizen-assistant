@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from "node:fs/promises"
+import { readFile, writeFile, mkdir, rename, rm } from "node:fs/promises"
 import { basename, dirname, join } from "node:path"
 
 /** 安装来源通道：github（安装脚本安装）或 npm（launcher 管理，预留）。 */
@@ -49,8 +49,19 @@ export async function readInstallRecord(file: string = installRecordPath()): Pro
   }
 }
 
-/** 写入 install.json（自动创建父目录）；不传路径时写入默认安装位置。 */
+/**
+ * 写入 install.json（自动创建父目录）；不传路径时写入默认安装位置。
+ * 采用同目录临时文件 + rename 原子落位：install.json 是 launcher 选择版本的依据，
+ * 直接覆盖写在写入中途被并发启动的 launcher 读到会得到截断 JSON，导致启动失败。
+ */
 export async function writeInstallRecord(record: InstallRecord, file: string = installRecordPath()): Promise<void> {
   await mkdir(dirname(file), { recursive: true })
-  await writeFile(file, `${JSON.stringify(record, null, 2)}\n`)
+  const staged = join(dirname(file), `.install-${process.pid}-${Date.now()}.tmp`)
+  try {
+    await writeFile(staged, `${JSON.stringify(record, null, 2)}\n`)
+    await rename(staged, file)
+  } finally {
+    // rename 成功后临时文件已不存在，失败路径下清理残留；force 保证两种情形都安全
+    await rm(staged, { force: true }).catch(() => {})
+  }
 }
