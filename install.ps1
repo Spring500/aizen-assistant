@@ -3,6 +3,7 @@
 # 用法：
 #   iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.ps1'))
 #   powershell -ExecutionPolicy Bypass -File install.ps1 0.1.0   # 指定历史版本（默认最新）
+#   $env:GITHUB_TOKEN='xxx'; powershell -File install.ps1 --version 0.2.0-beta.1   # 预发布版（Draft，需 push 权限 token）
 #
 # 行为：检测架构 → 下载压缩包 → SHA256 校验 → 解压到 %USERPROFILE%\.aizen\bin →
 # 幂等写入用户级 PATH（HKCU\Environment，免管理员）→ 写 install.json。
@@ -23,16 +24,20 @@ $DataDir = Join-Path $ConfigDir "data"
 
 $RequestedVersion = ""
 $SkipPath = $false
+# GitHub token（环境变量或 --token）：仅预发布测试需要——Draft Release 对匿名请求不可见，
+# 资产须经鉴权资产 API 下载；正式安装路径不使用 token，行为不变。
+$Token = if ($env:GITHUB_TOKEN) { $env:GITHUB_TOKEN } else { "" }
 
-# 解析参数：--version / --install-dir / --api-url / --download-url / --skip-path；兼容位置参数形式传入版本号。
+# 解析参数：--version / --install-dir / --api-url / --download-url / --token / --skip-path；兼容位置参数形式传入版本号。
 for ($i = 0; $i -lt $args.Count; $i++) {
   switch ($args[$i]) {
     "--version" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--version 必须提供值" }; $RequestedVersion = $args[$i]; break }
     "--install-dir" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--install-dir 必须提供值" }; $InstallDir = $args[$i]; $ConfigDir = Split-Path $InstallDir -Parent; $VersionsDir = Join-Path $ConfigDir "versions"; $DataDir = Join-Path $ConfigDir "data"; break }
     "--api-url" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--api-url 必须提供值" }; $ReleaseApi = $args[$i]; break }
     "--download-url" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--download-url 必须提供值" }; $ReleaseDownload = $args[$i]; break }
+    "--token" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--token 必须提供值" }; $Token = $args[$i]; break }
     "--skip-path" { $SkipPath = $true; break }
-    "-h" { Write-Host "用法：install.ps1 [版本号] [--version <v>] [--install-dir <目录>] [--api-url <url>] [--download-url <url>] [--skip-path]"; exit 0 }
+    "-h" { Write-Host "用法：install.ps1 [版本号] [--version <v>] [--install-dir <目录>] [--api-url <url>] [--download-url <url>] [--token <gh-token>] [--skip-path]"; exit 0 }
     default { if ($RequestedVersion -eq "") { $RequestedVersion = $args[$i] } else { throw "未知参数：$($args[$i])" } }
   }
 }
@@ -76,6 +81,19 @@ function Get-Sha256Hex {
   }
 }
 
+# token 模式下载单个资产：从鉴权 releases 列表定位资产 id，经资产 API 以 octet-stream 下载
+#（Draft 资产没有可匿名访问的 browser_download_url，只能走这条通道）。
+function Save-AssetWithToken {
+  param($Releases, [string]$Tag, [string]$AssetName, [string]$Dest)
+  $release = $Releases | Where-Object { $_.tag_name -eq $Tag } | Select-Object -First 1
+  if (-not $release) { throw "找不到发布 $Tag（确认 tag 存在且 token 有仓库读权限）" }
+  $asset = $release.assets | Where-Object { $_.name -eq $AssetName } | Select-Object -First 1
+  if (-not $asset) { throw "发布 $Tag 中找不到资产 $AssetName" }
+  Invoke-WebRequest -UseBasicParsing -Uri "$ReleaseApi/releases/assets/$($asset.id)" `
+    -Headers @{ "User-Agent" = "aizen-assistant"; "Authorization" = "Bearer $Token"; "Accept" = "application/octet-stream" } `
+    -OutFile $Dest
+}
+
 # 下载、校验并解压指定版本，把可执行文件放入安装目录；输出实际安装版本号。
 function Install-Release {
   param([string]$Version, [string]$Platform)
@@ -87,8 +105,16 @@ function Install-Release {
 
   try {
     Write-Host "下载 $zipName ..."
-    Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/$zipName" -OutFile (Join-Path $tmpDir $zipName)
-    Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/SHA256SUMS" -OutFile (Join-Path $tmpDir "SHA256SUMS")
+    if ($Token) {
+      # token 模式：经鉴权 API 下载（可见范围含 Draft，供预发布测试；后续校验/解压/落位与匿名路径完全一致）
+      $releases = Invoke-RestMethod -Uri "$ReleaseApi/releases?per_page=100" `
+        -Headers @{ "User-Agent" = "aizen-assistant"; "Authorization" = "Bearer $Token"; "Accept" = "application/vnd.github+json" }
+      Save-AssetWithToken -Releases $releases -Tag "v$Version" -AssetName $zipName -Dest (Join-Path $tmpDir $zipName)
+      Save-AssetWithToken -Releases $releases -Tag "v$Version" -AssetName "SHA256SUMS" -Dest (Join-Path $tmpDir "SHA256SUMS")
+    } else {
+      Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/$zipName" -OutFile (Join-Path $tmpDir $zipName)
+      Invoke-WebRequest -UseBasicParsing -Uri "$baseUrl/SHA256SUMS" -OutFile (Join-Path $tmpDir "SHA256SUMS")
+    }
 
     $zipPath = Join-Path $tmpDir $zipName
     $expectedLine = Get-Content (Join-Path $tmpDir "SHA256SUMS") | Where-Object { $_.TrimEnd() -like "*$zipName" } | Select-Object -First 1

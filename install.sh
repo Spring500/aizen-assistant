@@ -4,6 +4,7 @@
 # 用法：
 #   curl -fsSL https://raw.githubusercontent.com/Spring500/aizen-assistant/main/install.sh | bash
 #   bash install.sh 0.1.0        # 指定历史版本（默认安装最新版）
+#   GITHUB_TOKEN=xxx bash install.sh --version 0.2.0-beta.1   # 安装预发布版（Draft，需 push 权限 token）
 #
 # 行为：检测平台 → 下载压缩包 → SHA256 校验 → 解压到 ~/.aizen/bin → 幂等配置 PATH → 写 install.json。
 # 只修改用户级位置，不需要 sudo。重复执行安全（幂等）。
@@ -24,6 +25,9 @@ DATA_DIR="$CONFIG_DIR/data"
 REQUESTED_VERSION=""
 SKIP_PATH=0
 CUSTOM_INSTALL_DIR=0
+# GitHub token（环境变量或 --token）：仅预发布测试需要——Draft Release 对匿名请求不可见，
+# 资产须经鉴权资产 API 下载；正式安装路径不使用 token，行为不变。
+TOKEN="${GITHUB_TOKEN:-}"
 
 # 校验选项值存在且非另一选项（避免 --version --skip-path 把 --skip-path 误当版本号）。
 require_value() {
@@ -33,7 +37,7 @@ require_value() {
   fi
 }
 
-# 解析参数：--version / --install-dir / --api-url / --download-url / --skip-path；兼容位置参数形式传入版本号。
+# 解析参数：--version / --install-dir / --api-url / --download-url / --token / --skip-path；兼容位置参数形式传入版本号。
 parse_arguments() {
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -41,8 +45,9 @@ parse_arguments() {
       --install-dir) require_value "$1" "${2:-}"; INSTALL_DIR="$2"; CONFIG_DIR="$(dirname "$INSTALL_DIR")"; VERSIONS_DIR="$CONFIG_DIR/versions"; DATA_DIR="$CONFIG_DIR/data"; CUSTOM_INSTALL_DIR=1; shift 2 ;;
       --api-url) require_value "$1" "${2:-}"; RELEASE_API="$2"; shift 2 ;;
       --download-url) require_value "$1" "${2:-}"; RELEASE_DOWNLOAD="$2"; shift 2 ;;
+      --token) require_value "$1" "${2:-}"; TOKEN="$2"; shift 2 ;;
       --skip-path) SKIP_PATH=1; shift ;;
-      -h | --help) echo "用法：install.sh [版本号] [--version <v>] [--install-dir <目录>] [--api-url <url>] [--download-url <url>] [--skip-path]"; exit 0 ;;
+      -h | --help) echo "用法：install.sh [版本号] [--version <v>] [--install-dir <目录>] [--api-url <url>] [--download-url <url>] [--token <gh-token>] [--skip-path]"; exit 0 ;;
       *) if [ -z "$REQUESTED_VERSION" ]; then REQUESTED_VERSION="$1"; shift; else echo "未知参数：$1" >&2; exit 1; fi ;;
     esac
   done
@@ -99,6 +104,47 @@ file_sha256() {
   fi
 }
 
+# 从 releases 列表 JSON 中取指定 tag 的资产 id（token 模式；Draft 仅在鉴权列表中可见）。
+# 嵌套 JSON 用 grep/sed 解析不可靠（body/uploader 等字段含干扰 id），依赖 python3 或 jq 之一；
+# 仅预发布测试路径需要，匿名正式安装不经过此函数、保持零额外依赖。
+asset_id_from_releases() {
+  local json_file="$1" tag="$2" asset_name="$3"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$json_file" "$tag" "$asset_name" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as f:
+    releases = json.load(f)
+for release in releases:
+    if release.get("tag_name") == sys.argv[2]:
+        for asset in release.get("assets", []):
+            if asset.get("name") == sys.argv[3]:
+                print(asset["id"])
+                sys.exit(0)
+sys.exit(1)
+PY
+  elif command -v jq >/dev/null 2>&1; then
+    jq -re --arg tag "$tag" --arg name "$asset_name" \
+      '[.[] | select(.tag_name == $tag) | .assets[] | select(.name == $name) | .id][0] // empty' "$json_file"
+  else
+    echo "错误：token 模式需要 python3 或 jq 解析 API 响应（仅预发布测试需要）" >&2
+    return 1
+  fi
+}
+
+# token 模式下载单个资产：先从鉴权 releases 列表解析资产 id，再经资产 API 以 octet-stream 下载
+#（Draft 资产没有可匿名访问的 browser_download_url，只能走这条通道）。
+download_asset_with_token() {
+  local releases_json="$1" tag="$2" asset_name="$3" dest="$4"
+  local asset_id
+  asset_id="$(asset_id_from_releases "$releases_json" "$tag" "$asset_name")"
+  if [ -z "$asset_id" ]; then
+    echo "错误：发布 $tag 中找不到资产 $asset_name（确认 tag 存在且 token 有仓库读权限）" >&2
+    return 1
+  fi
+  curl -fL -H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-stream" \
+    "${RELEASE_API}/releases/assets/${asset_id}" -o "$dest"
+}
+
 # 下载、校验并解压指定版本，把可执行文件放入安装目录；输出实际安装版本号。
 download_and_install() {
   local version="$1" platform="$2"
@@ -110,8 +156,17 @@ download_and_install() {
   trap "rm -rf '$tmp_dir'" EXIT
 
   echo "下载 ${zip_name} ..."
-  curl -fL "${base_url}/${zip_name}" -o "$tmp_dir/$zip_name"
-  curl -fL "${base_url}/SHA256SUMS" -o "$tmp_dir/SHA256SUMS"
+  if [ -n "$TOKEN" ]; then
+    # token 模式：经鉴权 API 下载（可见范围含 Draft，供预发布测试；后续校验/解压/落位与匿名路径完全一致）
+    local releases_json="$tmp_dir/releases.json"
+    curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+      "${RELEASE_API}/releases?per_page=100" -o "$releases_json"
+    download_asset_with_token "$releases_json" "v${version}" "$zip_name" "$tmp_dir/$zip_name"
+    download_asset_with_token "$releases_json" "v${version}" "SHA256SUMS" "$tmp_dir/SHA256SUMS"
+  else
+    curl -fL "${base_url}/${zip_name}" -o "$tmp_dir/$zip_name"
+    curl -fL "${base_url}/SHA256SUMS" -o "$tmp_dir/SHA256SUMS"
+  fi
 
   expected="$(grep " ${zip_name}$" "$tmp_dir/SHA256SUMS" | awk '{print $1}' | head -1 || true)"
   if [ -z "$expected" ]; then
