@@ -3,10 +3,11 @@
  *
  * 用法：bun run scripts/repo/e2e-distribution-test.ts [--with-path]
  *
- * 流程：构建产物 → 打包 v0.1.0 / v0.2.0 → 本地 mock release 服务器 →
- * 以 --install-dir 安装到临时目录（查 latest=v0.1.0）→ 断言多版本布局（launcher + versions 真实可执行文件 + current）→
- * 切到 latest=v0.2.0 后执行 update --release-api（进程运行中完成更新）→ 断言版本落位与 current 切换 →
- * 执行 uninstall --yes → 断言整个安装根被删除。
+ * 流程：构建产物 → 打包 v0.1.0 / v0.2.0（两包携带内容不同的 launcher，验证自更新换位）→
+ * 本地 mock release 服务器 → 以 --install-dir 安装到临时目录（查 latest=v0.1.0）→
+ * 断言多版本布局（launcher + versions 真实可执行文件 + current）→
+ * 切到 latest=v0.2.0 后经 launcher 执行 update --release-api（进程运行中完成更新）→
+ * 断言版本落位、current 切换与 launcher 自更新 → 执行 uninstall --yes → 断言整个安装根被删除。
  *
  * 默认 --skip-path（不写真实注册表、不依赖环境变量）；--with-path 时真实执行用户 PATH 写入与回滚
  * （用于 CI 临时 runner，覆盖 PATH 回归；本地运行请勿开启以免改动真实 PATH）。
@@ -111,12 +112,22 @@ async function main(): Promise<void> {
     await mkdir(assetsV1, { recursive: true })
     await mkdir(assetsV2, { recursive: true })
 
-    // 1. 构建并打包两个版本
+    // 1. 构建并打包两个版本：v0.2.0 的 launcher 末尾追加填充字节使内容与 v0.1.0 不同
+    //（PE 文件尾部追加字节不影响执行），用于断言 update 中的 launcher 自更新换位真实发生。
     console.log("[1/6] 构建 Windows 产物并打包 v0.1.0 / v0.2.0")
     await Bun.$`bun run build:tui`
     await Bun.$`bun run build:launcher`
     await Bun.$`bun run scripts/repo/package-release.ts --version 0.1.0 --platform windows-x64`
+    const launcherPath = join("dist", "aizen-launcher.exe")
+    const originalLauncher = await Bun.file(launcherPath).arrayBuffer()
+    const padded = new Uint8Array(originalLauncher.byteLength + 16)
+    padded.set(new Uint8Array(originalLauncher))
+    padded.set(new TextEncoder().encode("AIZEN-E2E-V2-PAD"), originalLauncher.byteLength)
+    await writeFile(launcherPath, padded)
     await Bun.$`bun run scripts/repo/package-release.ts --version 0.2.0 --platform windows-x64`
+    const launcherV2Sha = await sha256File(launcherPath)
+    // 恢复原始 launcher（避免污染 dist/ 供后续步骤/其它脚本使用）
+    await writeFile(launcherPath, new Uint8Array(originalLauncher))
     for (const [version, assetsDir] of [
       ["0.1.0", assetsV1],
       ["0.2.0", assetsV2],
@@ -190,7 +201,10 @@ async function main(): Promise<void> {
       await pathExists(join(tempHome, ".aizen", "versions", "v0.1.0", "aizen-assistant.exe")),
       "v0.1.0 历史版本应保留（回滚）",
     )
-    console.log("更新断言通过：版本升级到 0.2.0，current 已切换，历史版本保留")
+    // launcher 自更新：bin/ 下入口已换为 v0.2.0 包内的 launcher（rename 方案，自身运行中完成）
+    const binLauncherSha = await sha256File(join(tempHome, ".aizen", "bin", "aizen-assistant.exe"))
+    assert(binLauncherSha === launcherV2Sha, "launcher 自更新未生效（bin/ 入口哈希不等于 v0.2.0 包内 launcher）")
+    console.log("更新断言通过：版本升级到 0.2.0，current 已切换，历史版本保留，launcher 已自更新")
 
     // 6. 执行卸载并断言清理（默认 --skip-path 时卸载也不碰真实 PATH，保持本地无副作用）
     console.log("[6/6] 执行 uninstall --yes 并断言清理")
