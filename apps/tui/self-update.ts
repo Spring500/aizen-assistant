@@ -1,10 +1,12 @@
 /**
- * update 子命令：检查并安装最新版本（多版本布局）。
+ * update 子命令（过渡期引导）。
  *
- * 受管安装（github 通道）执行自更新：查询 GitHub API → 下载 → SHA256 校验 → 解压 →
- * 落位到 versions/v<版本>/ → 原子切换 install.json 的 current → 清理旧版本。
- * 新版本落位在独立版本目录，不触碰运行中的可执行文件，因此更新可以在实例运行中完成；
- * 启动入口始终是 bin/ 下的 launcher（读 install.json 的 current 指向版本目录）。
+ * 多版本布局下 update 由 bin/ 下的 launcher 拦截处理（Go 实现），本模块不再可达；
+ * 仅以下两种场景会执行到这里：
+ * - 旧单文件布局（bin/ 下是真实可执行文件）：v0.1.0 用户升级链路的关键路径，
+ *   保留完整逻辑：下载 → 校验 → 迁移多版本布局 → 落位新版本与 launcher → 写含 current 的记录；
+ *   此后 update/uninstall 均由 launcher 接管。
+ * - 用户直接运行 versions/ 下的真实可执行文件：提示改走 bin/ 入口。
  * npm 通道（预留）与便携模式不做自更新，分别提示对应操作。
  */
 
@@ -236,6 +238,11 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
     console.log("当前通道无需自更新，请按对应安装方式更新。")
     return 0
   }
+  // 多版本布局下 update 归 launcher：能执行到这里说明绕过了 bin/ 入口（直接运行 versions/ 下真实文件）
+  if (!isLegacyLayout()) {
+    console.error("请通过安装入口执行更新：运行 bin/ 目录下的 aizen-assistant update（由 launcher 处理）。")
+    return 1
+  }
 
   let release: LatestRelease
   try {
@@ -291,11 +298,9 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
     if (!(await Bun.file(packageExe).exists())) throw new Error("压缩包内未找到可执行文件")
 
     const root = installRoot()
-    // 旧单文件布局先迁移（bin/ 下真实可执行文件场景），迁移后 current 由下方切换
-    if (isLegacyLayout()) {
-      console.log("检测到旧版单文件布局，正在迁移...")
-      await migrateLegacyLayout(root, join(extracted, PACKAGE_LAUNCHER_NAME))
-    }
+    // 旧单文件布局迁移（进入本流程已确认旧布局）：旧 exe 归档 versions/、数据迁移 data/、launcher 落位 bin/
+    console.log("检测到旧版单文件布局，正在迁移...")
+    await migrateLegacyLayout(root, join(extracted, PACKAGE_LAUNCHER_NAME))
 
     // 新版本落位到 versions/v<版本>/（同卷临时名 + 原子 rename）
     const versionDir = join(root, "versions", `v${release.version}`)
@@ -306,7 +311,7 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
     await rm(target, { force: true }).catch(() => {})
     await rename(staged, target)
 
-    // 更新 bin/ 下 launcher（多版本布局已是 launcher；旧布局迁移场景由延迟脚本兜底）
+    // 更新 bin/ 下 launcher（旧布局迁移场景 Windows 由延迟脚本兜底，POSIX 已在迁移中落位，此处幂等补写）
     await updateLauncher(root, extracted)
 
     const successRecord: InstallRecord = {
