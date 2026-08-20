@@ -9,7 +9,7 @@
  */
 
 import { basename, dirname, join } from "node:path"
-import { copyFile, mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises"
+import { chmod, copyFile, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { $ } from "bun"
@@ -24,43 +24,8 @@ import { quotedPowerShell, scheduleDeferredPowerShell } from "./deferred-powersh
 /** 默认 GitHub API 基地址，用于查询最新 release；资产 URL 取自返回 JSON，无需额外配置。 */
 const DEFAULT_RELEASE_API = "https://api.github.com/repos/Spring500/aizen-assistant"
 
-/** POSIX launcher 脚本（与 install.sh 生成的脚本保持一致，供旧布局迁移与 launcher 更新复用）。 */
-const POSIX_LAUNCHER_SCRIPT = `#!/usr/bin/env sh
-# AizenAssistant launcher（由安装脚本生成，勿手动编辑）
-set -eu
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-INSTALL_ROOT="$(dirname -- "$SCRIPT_DIR")"
-RECORD="$INSTALL_ROOT/install.json"
-if [ ! -f "$RECORD" ]; then
-  echo "错误：无法读取安装记录：$RECORD" >&2
-  exit 1
-fi
-CURRENT="$(grep -o '"current"[[:space:]]*:[[:space:]]*"[^"]*"' "$RECORD" | head -1 | sed 's/.*"current"[[:space:]]*:[[:space:]]*"\\([^"]*\\)"/\\1/')"
-if [ -z "$CURRENT" ]; then
-  echo "错误：安装记录缺少 current 字段" >&2
-  exit 1
-fi
-EXE="$INSTALL_ROOT/versions/$CURRENT/aizen-assistant"
-if [ ! -x "$EXE" ]; then
-  echo "错误：找不到可执行文件：$EXE" >&2
-  exit 1
-fi
-# --data-dir 注入只是提供默认值：用户已显式传入时尊重用户选择；
-# update / uninstall 分发子命令不使用数据目录，同样不注入。
-INJECT=1
-case "\${1:-}" in
-  update|uninstall) INJECT=0 ;;
-esac
-if [ "$INJECT" -eq 1 ]; then
-  for ARG in "$@"; do
-    if [ "$ARG" = "--data-dir" ]; then INJECT=0; break; fi
-  done
-fi
-if [ "$INJECT" -eq 1 ]; then
-  exec "$EXE" --data-dir "$INSTALL_ROOT/data" "$@"
-fi
-exec "$EXE" "$@"
-`
+/** 发布包内 launcher 的文件名（全平台附带；Windows 带 .exe 后缀）。 */
+const PACKAGE_LAUNCHER_NAME = process.platform === "win32" ? "launcher.exe" : "launcher"
 
 /** 比较语义化版本（x.y.z，可选预发布后缀如 -beta.1）：a 大于 b 返回正数，相等返回 0，否则负数。 */
 export function compareVersions(a: string, b: string): number {
@@ -189,19 +154,20 @@ async function moveDataDir(oldData: string, newData: string): Promise<void> {
 /**
  * 从旧单文件布局迁移到多版本布局（update 触发的路径）。
  * - Windows：运行中的 exe 被锁，复制自身到 versions/，launcher 经延迟脚本替换 bin/ 下旧 exe。
- * - POSIX：运行中的 exe 可重命名，直接移动自身并在 bin/ 下生成 launcher 脚本。
+ * - POSIX：运行中的 exe 可重命名，直接移动自身并把发布包内的 launcher 二进制落位到 bin/。
  */
-async function migrateLegacyLayout(root: string, launcherSource?: string): Promise<void> {
+async function migrateLegacyLayout(root: string, launcherSource: string): Promise<void> {
   const exeDir = dirname(process.execPath)
   const exeName = basename(process.execPath)
   const record = await readInstallRecord()
   const oldVersion = record?.version ?? "legacy"
   const versionDir = join(root, "versions", `v${oldVersion}`)
   await mkdir(versionDir, { recursive: true })
+  const launcherAvailable = await Bun.file(launcherSource).exists()
   if (process.platform === "win32") {
     await copyFile(process.execPath, join(versionDir, exeName))
     await moveDataDir(join(exeDir, ".aizen"), join(root, "data"))
-    if (launcherSource && (await Bun.file(launcherSource).exists())) {
+    if (launcherAvailable) {
       // 旧 exe 正被当前进程锁定，launcher 由独立进程在当前进程退出后落位
       const staged = join(root, `.launcher-staged-${process.pid}.exe`)
       await copyFile(launcherSource, staged)
@@ -214,22 +180,22 @@ async function migrateLegacyLayout(root: string, launcherSource?: string): Promi
   } else {
     await rename(process.execPath, join(versionDir, exeName))
     await moveDataDir(join(exeDir, ".aizen"), join(root, "data"))
-    await writeFile(join(exeDir, exeName), POSIX_LAUNCHER_SCRIPT, { mode: 0o755 })
+    if (launcherAvailable) {
+      await copyFile(launcherSource, join(exeDir, exeName))
+      await chmod(join(exeDir, exeName), 0o755)
+    }
   }
   console.log(`旧版布局已迁移：versions/v${oldVersion} 与 ${join(root, "data")}`)
 }
 
-/** 用发布包内容更新 bin/ 下 launcher（Windows 取 launcher.exe，POSIX 重写脚本）；被锁时忽略、下次再试。 */
+/** 用发布包内容更新 bin/ 下 launcher（全平台取包内二进制）；被锁时忽略（自更新机制待后续提交重做）。 */
 async function updateLauncher(root: string, packageDir: string): Promise<void> {
   const binDir = join(root, "bin")
-  if (process.platform === "win32") {
-    const source = join(packageDir, "launcher.exe")
-    if (await Bun.file(source).exists()) {
-      await copyFile(source, join(binDir, "aizen-assistant.exe")).catch(() => {})
-    }
-  } else {
-    await writeFile(join(binDir, "aizen-assistant"), POSIX_LAUNCHER_SCRIPT, { mode: 0o755 })
-  }
+  const source = join(packageDir, PACKAGE_LAUNCHER_NAME)
+  if (!(await Bun.file(source).exists())) return
+  const targetName = process.platform === "win32" ? "aizen-assistant.exe" : "aizen-assistant"
+  await copyFile(source, join(binDir, targetName)).catch(() => {})
+  if (process.platform !== "win32") await chmod(join(binDir, targetName), 0o755).catch(() => {})
 }
 
 /** 清理 versions/ 下除 current 之外的历史版本（保留最近一个，供回滚；被运行中实例锁定时忽略）。 */
@@ -328,7 +294,7 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
     // 旧单文件布局先迁移（bin/ 下真实可执行文件场景），迁移后 current 由下方切换
     if (isLegacyLayout()) {
       console.log("检测到旧版单文件布局，正在迁移...")
-      await migrateLegacyLayout(root, join(extracted, "launcher.exe"))
+      await migrateLegacyLayout(root, join(extracted, PACKAGE_LAUNCHER_NAME))
     }
 
     // 新版本落位到 versions/v<版本>/（同卷临时名 + 原子 rename）

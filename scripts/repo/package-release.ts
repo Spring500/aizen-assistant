@@ -4,9 +4,9 @@
  * 用法：
  *   bun run scripts/repo/package-release.ts --version 0.1.0 --platform windows-x64
  *
- * 输入：dist/aizen-assistant[.exe]（由 build:tui 按平台生成）
+ * 输入：dist/aizen-assistant[.exe]（由 build:tui 按平台生成）与 dist/aizen-launcher[.exe]（由 build:launcher 生成）
  * 输出：dist/aizen-assistant-<version>-<platform>.zip
- * 压缩包内容：可执行文件 + version 文件（供安装脚本写 install.json，不依赖 zip 名解析）。
+ * 压缩包内容：可执行文件 + launcher + version 文件（供安装脚本写 install.json，不依赖 zip 名解析）。
  */
 
 import { $ } from "bun"
@@ -45,10 +45,10 @@ async function main(): Promise<void> {
   await rm(stagingDir, { recursive: true, force: true })
   await mkdir(stagingDir, { recursive: true })
   await copyFile(join("dist", name), join(stagingDir, name))
-  if (platform.startsWith("windows")) {
-    // 发布包附带 launcher：安装脚本将其放置为 bin/aizen-assistant.exe，真实可执行文件放入 versions/ 目录
-    await copyFile(join("dist", "aizen-launcher.exe"), join(stagingDir, "launcher.exe"))
-  }
+  // 发布包全平台附带 launcher：安装脚本将其放置为 bin/ 下的启动入口，真实可执行文件放入 versions/ 目录
+  const launcherSource = platform.startsWith("windows") ? "aizen-launcher.exe" : "aizen-launcher"
+  const launcherTarget = platform.startsWith("windows") ? "launcher.exe" : "launcher"
+  await copyFile(join("dist", launcherSource), join(stagingDir, launcherTarget))
   await writeFile(join(stagingDir, "version"), `${version}\n`)
   await createZip(stagingDir, zipPath)
   await rm(stagingDir, { recursive: true, force: true })

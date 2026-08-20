@@ -75,11 +75,9 @@ jobs:
       - name: 参数化构建
         run: bun run build:tui --target ${{ matrix.target }}
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
-        if: contains(matrix.platform, 'windows')
         with:
           go-version: '1.26'
-      - name: 构建 launcher（仅 Windows）
-        if: contains(matrix.platform, 'windows')
+      - name: 构建 launcher（全平台）
         run: bun run build:launcher --target ${{ matrix.target }}
       - name: 产物冒烟验证（单文件、无外部运行时）
         run: >-

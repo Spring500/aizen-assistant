@@ -185,49 +185,17 @@ download_and_install() {
     echo "错误：压缩包内未找到可执行文件" >&2
     exit 1
   fi
-  # 真实可执行文件放入 versions/v<版本>/，bin/ 下生成 launcher 脚本（多版本布局：运行中的实例不被替换）
+  # 真实可执行文件放入 versions/v<版本>/，bin/ 下放置发布包内的 launcher（多版本布局：运行中的实例不被替换）
   version_dir="$VERSIONS_DIR/v$version"
   mkdir -p "$version_dir"
   cp -f "$extracted_dir/aizen-assistant" "$version_dir/aizen-assistant"
   chmod +x "$version_dir/aizen-assistant"
+  if [ ! -f "$extracted_dir/launcher" ]; then
+    echo "错误：压缩包内未找到 launcher" >&2
+    exit 1
+  fi
   mkdir -p "$INSTALL_DIR"
-  cat > "$INSTALL_DIR/aizen-assistant" <<'LAUNCHER'
-#!/usr/bin/env sh
-# AizenAssistant launcher（由安装脚本生成，勿手动编辑）
-set -eu
-SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
-INSTALL_ROOT="$(dirname -- "$SCRIPT_DIR")"
-RECORD="$INSTALL_ROOT/install.json"
-if [ ! -f "$RECORD" ]; then
-  echo "错误：无法读取安装记录：$RECORD" >&2
-  exit 1
-fi
-CURRENT="$(grep -o '"current"[[:space:]]*:[[:space:]]*"[^"]*"' "$RECORD" | head -1 | sed 's/.*"current"[[:space:]]*:[[:space:]]*"\([^"]*\)"/\1/')"
-if [ -z "$CURRENT" ]; then
-  echo "错误：安装记录缺少 current 字段" >&2
-  exit 1
-fi
-EXE="$INSTALL_ROOT/versions/$CURRENT/aizen-assistant"
-if [ ! -x "$EXE" ]; then
-  echo "错误：找不到可执行文件：$EXE" >&2
-  exit 1
-fi
-# --data-dir 注入只是提供默认值：用户已显式传入时尊重用户选择；
-# update / uninstall 分发子命令不使用数据目录，同样不注入。
-INJECT=1
-case "${1:-}" in
-  update|uninstall) INJECT=0 ;;
-esac
-if [ "$INJECT" -eq 1 ]; then
-  for ARG in "$@"; do
-    if [ "$ARG" = "--data-dir" ]; then INJECT=0; break; fi
-  done
-fi
-if [ "$INJECT" -eq 1 ]; then
-  exec "$EXE" --data-dir "$INSTALL_ROOT/data" "$@"
-fi
-exec "$EXE" "$@"
-LAUNCHER
+  cp -f "$extracted_dir/launcher" "$INSTALL_DIR/aizen-assistant"
   chmod +x "$INSTALL_DIR/aizen-assistant"
   # 数据目录固定于安装根，安装时创建保证就绪
   mkdir -p "$DATA_DIR"

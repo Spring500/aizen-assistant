@@ -6,8 +6,8 @@
  *   bun run build:launcher --target bun-linux-x64
  *
  * 产物命名：Windows 平台输出 dist/aizen-launcher.exe，其余平台输出 dist/aizen-launcher。
- * 受管安装的 launcher 仅 Windows 端需要编译产物（安装脚本将其放置为 bin/aizen-assistant.exe）；
- * POSIX 端的 launcher 为安装脚本现场生成的 shell 脚本，不经本构建。
+ * 全平台均需编译产物（安装脚本将其放置为 bin/ 下的启动入口）；
+ * 交叉编译由 Go 工具链原生支持，不依赖目标平台环境。
  */
 
 import { $ } from "bun"
