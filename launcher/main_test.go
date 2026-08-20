@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"testing"
 )
@@ -16,22 +17,38 @@ func TestInstallRoot(t *testing.T) {
 	}
 }
 
-// 交互模式注入 --data-dir（默认值语义：用户已显式传入时不注入）；update / uninstall 分发子命令不注入。
-func TestShouldInjectDataDir(t *testing.T) {
+// 默认参数合并：用户未传的 flag 前置注入，已显式传入的跳过；用户参数保持原顺序。
+func TestMergeDefaults(t *testing.T) {
+	defaults := [][]string{
+		{"--data-dir", "/root/data"},
+	}
 	cases := []struct {
+		name string
 		args []string
-		want bool
+		want []string
 	}{
-		{[]string{}, true},
-		{[]string{"--data-dir", "/x"}, false},
-		{[]string{"update"}, false},
-		{[]string{"update", "--release-api", "url"}, false},
-		{[]string{"uninstall", "--yes"}, false},
+		{"无参数时注入全部默认项", []string{}, []string{"--data-dir", "/root/data"}},
+		{"用户已传 --data-dir 时跳过注入", []string{"--data-dir", "/x"}, []string{"--data-dir", "/x"}},
+		{"其余参数不影响注入且顺序保持", []string{"--theme", "dark"}, []string{"--data-dir", "/root/data", "--theme", "dark"}},
+		{"子命令同样注入（launcher 对子命令零认知）", []string{"doctor"}, []string{"--data-dir", "/root/data", "doctor"}},
 	}
 	for _, c := range cases {
-		if got := shouldInjectDataDir(c.args); got != c.want {
-			t.Errorf("shouldInjectDataDir(%v) = %v, want %v", c.args, got, c.want)
+		if got := mergeDefaults(defaults, c.args); !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: mergeDefaults(%v) = %v, want %v", c.name, c.args, got, c.want)
 		}
+	}
+}
+
+// 多个默认项独立判断：命中一项不影响其它项注入。
+func TestMergeDefaultsMultiple(t *testing.T) {
+	defaults := [][]string{
+		{"--data-dir", "/root/data"},
+		{"--flag-b", "vb"},
+	}
+	got := mergeDefaults(defaults, []string{"--flag-b", "user"})
+	want := []string{"--data-dir", "/root/data", "--flag-b", "user"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("mergeDefaults = %v, want %v", got, want)
 	}
 }
 

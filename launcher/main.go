@@ -1,12 +1,12 @@
 // AizenAssistant launcher（受管安装的启动入口）。
 //
 // 职责：读取 install.json 的 current 版本目录 → 启动 versions/<current>/ 下的真实可执行文件，
-// 并透传标准输入输出与退出码；仅交互模式注入 --data-dir（update / uninstall 分发子命令不使用数据目录）。
+// 并透传标准输入输出与退出码；按"默认参数表"注入默认参数（用户已显式传入的 flag 不注入）。
 //
 // 设计约束：
 // - 只服务受管安装（install.json 存在且含 current）；便携模式不经过 launcher，直接运行真实可执行文件。
-// - 逻辑刻意保持极简稳定：只做"定位 + 启动 + 透传"，不承担版本检查、下载、清理等职责，
-//   以保证 launcher 自身几乎不需要随主程序更新。
+// - 对主程序 CLI 语义零认知：不辨认主程序子命令，注入规则只看"用户是否已传入同名 flag"。
+// - POSIX 上用 exec 替换自身进程（不留双进程）；Windows 无 exec，等待子进程并透传退出码。
 package main
 
 import (
@@ -14,8 +14,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"os/signal"
 	"path/filepath"
 	"runtime"
 )
@@ -30,21 +28,29 @@ func installRoot(launcherPath string) string {
 	return filepath.Dir(filepath.Dir(launcherPath))
 }
 
-// shouldInjectDataDir 判断是否注入 --data-dir：launcher 的注入只是提供默认值——
-// 用户已显式传入 --data-dir 时尊重用户选择；update / uninstall 分发子命令不使用数据目录。
-func shouldInjectDataDir(args []string) bool {
-	if len(args) == 0 {
-		return true
+// defaultArgs 返回 launcher 注入的默认参数表；每项为 {flag, 值...}。
+// 将来新增注入内容只需向表中加一行，合并规则（mergeDefaults）不变。
+func defaultArgs(root string) [][]string {
+	return [][]string{
+		{"--data-dir", filepath.Join(root, "data")},
 	}
-	if args[0] == "update" || args[0] == "uninstall" {
-		return false
+}
+
+// mergeDefaults 合并默认参数与用户参数：逐项检查默认参数的 flag（首元素），
+// 用户已显式传入同名 flag 时跳过该项注入；未传入则前置注入。用户参数保持原顺序追加在后。
+func mergeDefaults(defaults [][]string, userArgs []string) []string {
+	given := make(map[string]bool, len(userArgs))
+	for _, arg := range userArgs {
+		given[arg] = true
 	}
-	for _, arg := range args {
-		if arg == "--data-dir" {
-			return false
+	merged := make([]string, 0, len(userArgs)+4)
+	for _, def := range defaults {
+		if len(def) == 0 || given[def[0]] {
+			continue
 		}
+		merged = append(merged, def...)
 	}
-	return true
+	return append(merged, userArgs...)
 }
 
 // executablePath 返回 versions/<current>/ 下的真实可执行文件路径（Windows 带 .exe 后缀）。
@@ -86,24 +92,6 @@ func main() {
 		fmt.Fprintf(os.Stderr, "找不到可执行文件：%s，请重新安装或运行 aizen-assistant update\n", exe)
 		os.Exit(1)
 	}
-	args := os.Args[1:]
-	cmdArgs := []string{exe}
-	if shouldInjectDataDir(args) {
-		cmdArgs = append(cmdArgs, "--data-dir", filepath.Join(root, "data"))
-	}
-	cmdArgs = append(cmdArgs, args...)
-	cmd := exec.Command(cmdArgs[0], cmdArgs[1:]...)
-	cmd.Stdin = os.Stdin
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	// 交互模式下 Ctrl+C 由子进程（TUI）处理，launcher 忽略信号、只透传退出码。
-	signal.Ignore(os.Interrupt)
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			os.Exit(exitErr.ExitCode())
-		}
-		fmt.Fprintf(os.Stderr, "启动失败：%v\n", err)
-		os.Exit(1)
-	}
+	args := mergeDefaults(defaultArgs(root), os.Args[1:])
+	runTarget(exe, args)
 }
