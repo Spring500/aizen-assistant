@@ -4,7 +4,7 @@
 //   - 启动：读 install.json 的 current → 启动 versions/<current>/ 下的真实可执行文件，
 //     按"默认参数表"注入默认参数（用户已显式传入的 flag 不注入）并透传 stdio 与退出码。
 //   - update：下载新版本落位 versions/、原子切换 current、自更新 launcher、GC 历史版本。
-//   - uninstall：删除安装根并回滚 PATH（后续提交实现）。
+//   - uninstall：确认后回滚 PATH 并删除安装根（Windows 下自身被锁，交延迟脚本删除）。
 //
 // 设计约束：
 //   - 只服务受管安装（install.json 存在且含 current）；便携模式不经过 launcher，直接运行真实可执行文件。
@@ -71,6 +71,9 @@ func main() {
 	// update / uninstall 是 launcher 自身的子命令：操作对象是安装布局，不启动主程序
 	if len(args) > 0 && args[0] == "update" {
 		os.Exit(runUpdate(root, args[1:]))
+	}
+	if len(args) > 0 && args[0] == "uninstall" {
+		os.Exit(runUninstall(root, args[1:]))
 	}
 
 	record, err := readInstallRecord(filepath.Join(root, "install.json"))
