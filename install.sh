@@ -146,6 +146,8 @@ download_asset_with_token() {
 }
 
 # 下载、校验并解压指定版本，把可执行文件放入安装目录；输出实际安装版本号。
+# 注意：调用方用命令替换捕获本函数的 stdout 作为返回值，因此函数内一切
+# 人类可读输出必须发往 stderr（>&2），stdout 只允许最后一行版本号。
 download_and_install() {
   local version="$1" platform="$2"
   local base_url="${RELEASE_DOWNLOAD}/v${version}"
@@ -155,7 +157,7 @@ download_and_install() {
   # 无论成功失败都清理临时目录（覆盖中途 exit 的情况）。
   trap "rm -rf '$tmp_dir'" EXIT
 
-  echo "下载 ${zip_name} ..."
+  echo "下载 ${zip_name} ..." >&2
   if [ -n "$TOKEN" ]; then
     # token 模式：经鉴权 API 下载（可见范围含 Draft，供预发布测试；后续校验/解压/落位与匿名路径完全一致）
     local releases_json="$tmp_dir/releases.json"
@@ -185,15 +187,25 @@ download_and_install() {
     echo "错误：压缩包内未找到可执行文件" >&2
     exit 1
   fi
+  if [ ! -f "$extracted_dir/launcher" ]; then
+    echo "错误：压缩包内未找到 launcher（旧版发布包不含 launcher，请安装更新的版本）" >&2
+    exit 1
+  fi
+
+  # 旧布局迁移必须在包内容验证完整（exe 与 launcher 都存在）之后才执行：
+  # 迁移会移走 bin/ 下的旧可执行文件，若先迁移后验包失败（如安装的目标版本
+  # 是不含 launcher 的旧发布包），会留下 "bin/ 无启动入口" 的坏中间态，
+  # 且因旧布局检测不再命中而无法重跑自愈。
+  if needs_legacy_migration; then
+    echo "检测到旧版单文件布局，正在迁移..." >&2
+    migrate_legacy_layout
+  fi
+
   # 真实可执行文件放入 versions/v<版本>/，bin/ 下放置发布包内的 launcher（多版本布局：运行中的实例不被替换）
   version_dir="$VERSIONS_DIR/v$version"
   mkdir -p "$version_dir"
   cp -f "$extracted_dir/aizen-assistant" "$version_dir/aizen-assistant"
   chmod +x "$version_dir/aizen-assistant"
-  if [ ! -f "$extracted_dir/launcher" ]; then
-    echo "错误：压缩包内未找到 launcher" >&2
-    exit 1
-  fi
   mkdir -p "$INSTALL_DIR"
   cp -f "$extracted_dir/launcher" "$INSTALL_DIR/aizen-assistant"
   chmod +x "$INSTALL_DIR/aizen-assistant"
@@ -248,6 +260,8 @@ needs_legacy_migration() {
 }
 
 # 从旧单文件布局迁移到多版本布局：旧 exe → versions/v<旧版本>/，bin/.aizen → data/（bin/ 随后由下载流程放置 launcher）。
+# 本函数在 download_and_install 内部调用（包验证之后），而该函数的 stdout 是返回值通道，
+# 因此本函数的人类可读输出必须发往 stderr。
 migrate_legacy_layout() {
   local old_version="legacy"
   if [ -f "$CONFIG_DIR/install.json" ]; then
@@ -260,10 +274,12 @@ migrate_legacy_layout() {
   chmod +x "$version_dir/aizen-assistant"
   if [ -d "$INSTALL_DIR/.aizen" ]; then
     mkdir -p "$DATA_DIR"
-    mv -f "$INSTALL_DIR/.aizen"/* "$DATA_DIR"/ 2>/dev/null || true
+    # 子 shell 内开启 dotglob：bash 默认 glob 不匹配点开头文件（如会话锁 .sessions），
+    # 不开启会漏迁移隐藏文件并被随后的 rm -rf 删除；nullglob 避免空目录时 glob 字面传递。
+    (shopt -s dotglob nullglob; mv -f "$INSTALL_DIR/.aizen"/* "$DATA_DIR"/ 2>/dev/null || true)
     rm -rf "$INSTALL_DIR/.aizen"
   fi
-  echo "旧版布局已迁移：versions/v$old_version 与 $DATA_DIR"
+  echo "旧版布局已迁移：versions/v$old_version 与 $DATA_DIR" >&2
 }
 
 # 按当前 shell 配置 PATH（bash/zsh/fish），幂等。
@@ -318,10 +334,7 @@ main() {
   fi
 
   echo "安装 AizenAssistant v${version}（${platform}）"
-  if needs_legacy_migration; then
-    echo "检测到旧版单文件布局，正在迁移..."
-    migrate_legacy_layout
-  fi
+  # 旧布局迁移在 download_and_install 内部、包内容验证之后执行（见其注释），此处不再前置调用
   installed_version="$(download_and_install "$version" "$platform")"
   write_install_record "$installed_version" "$platform"
   if [ "$SKIP_PATH" -ne 1 ]; then

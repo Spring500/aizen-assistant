@@ -126,12 +126,22 @@ function Install-Release {
     Expand-Archive -LiteralPath $zipPath -DestinationPath (Join-Path $tmpDir "extracted") -Force
     $exeSource = Join-Path $tmpDir "extracted\aizen-assistant.exe"
     if (-not (Test-Path $exeSource)) { throw "压缩包内未找到可执行文件" }
+    $launcherSource = Join-Path $tmpDir "extracted\launcher.exe"
+    if (-not (Test-Path $launcherSource)) { throw "压缩包内未找到 launcher（旧版发布包不含 launcher，请安装更新的版本）" }
+
+    # 旧布局迁移必须在包内容验证完整（exe 与 launcher 都存在）之后才执行：
+    # 迁移会移走 bin/ 下的旧可执行文件，若先迁移后验包失败（如安装的目标版本
+    # 是不含 launcher 的旧发布包），会留下 "bin/ 无启动入口" 的坏中间态，
+    # 且因旧布局检测不再命中而无法重跑自愈。
+    if (Test-LegacyLayout -InstallDir $InstallDir -ConfigDir $ConfigDir) {
+      Write-Host "检测到旧版单文件布局，正在迁移..."
+      Convert-LegacyLayout -ConfigDir $ConfigDir -InstallDir $InstallDir -VersionsDir $VersionsDir -DataDir $DataDir
+    }
+
     # 真实可执行文件放入 versions/v<版本>/，bin/ 下放置 launcher（多版本布局：运行中的实例不被替换）
     $versionDir = Join-Path $VersionsDir "v$Version"
     New-Item -ItemType Directory -Path $versionDir -Force | Out-Null
     Copy-Item -Path $exeSource -Destination (Join-Path $versionDir "aizen-assistant.exe") -Force
-    $launcherSource = Join-Path $tmpDir "extracted\launcher.exe"
-    if (-not (Test-Path $launcherSource)) { throw "压缩包内未找到 launcher（launcher.exe）" }
     New-Item -ItemType Directory -Path $InstallDir -Force | Out-Null
     Copy-Item -Path $launcherSource -Destination (Join-Path $InstallDir "aizen-assistant.exe") -Force
     # 数据目录固定于安装根，安装时创建保证就绪
@@ -217,10 +227,7 @@ function Main {
   $version = if ($RequestedVersion) { $RequestedVersion.TrimStart("v") } else { Get-LatestVersion }
 
   Write-Host "安装 AizenAssistant v$version（$platform）"
-  if (Test-LegacyLayout -InstallDir $InstallDir -ConfigDir $ConfigDir) {
-    Write-Host "检测到旧版单文件布局，正在迁移..."
-    Convert-LegacyLayout -ConfigDir $ConfigDir -InstallDir $InstallDir -VersionsDir $VersionsDir -DataDir $DataDir
-  }
+  # 旧布局迁移在 Install-Release 内部、包内容验证之后执行（见其注释），此处不再前置调用
   $installedVersion = Install-Release -Version $version -Platform $platform
   Write-InstallRecord -Version $installedVersion -Platform $platform
   if (-not $SkipPath) { Add-UserPath }
