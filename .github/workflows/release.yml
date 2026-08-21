@@ -1,7 +1,9 @@
 name: release
 
-# 发布流程：push v* tag 触发 → 校验 tag → 3 平台原生矩阵构建并冒烟 → 打包上传 → 创建 Draft Release。
-# 全部产物由 CI 生成，人工只需在 GitHub Releases 页确认后发布。
+# 发布流程（双轨）：push v* tag 触发 → 校验 tag → 3 平台原生矩阵构建并冒烟 → 打包上传 → 创建 Draft Release。
+# - 正式 tag（vX.Y.Z）：必须指向 main 历史；Draft 由人工在 Releases 页确认后发布。
+# - 预发布 tag（vX.Y.Z-后缀，如 v0.2.0-beta.1）：免除 main 门禁（允许功能分支测试发布）；
+#   产物同样是 Draft（页面与匿名 API 均不可见），仅供持 token 的安装/更新测试，测完即删、不人工发布。
 
 on:
   push:
@@ -16,27 +18,35 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.validate.outputs.version }}
+      prerelease: ${{ steps.validate.outputs.prerelease }}
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           fetch-depth: 0
-      # 发布门禁：tag 必须指向 main 分支历史中的提交，防止绕过 PR 把未审查的本地 commit 直接发布
-      - name: 校验 tag 指向 main 分支历史
-        run: |
-          git fetch origin main
-          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
-            echo "错误：tag 必须指向 main 分支上的提交（经过 PR 合入）" >&2
-            exit 1
-          fi
       - name: 校验 tag 格式并提取版本号
         id: validate
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "错误：tag 格式必须为 vX.Y.Z（实际：$TAG）" >&2
+          if ! [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "错误：tag 格式必须为 vX.Y.Z 或 vX.Y.Z-后缀（实际：$TAG）" >&2
             exit 1
           fi
           echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+          if [[ "$TAG" == *-* ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+      # 正式发布门禁：tag 必须指向 main 分支历史中的提交，防止绕过 PR 把未审查的本地 commit 直接发布；
+      # 预发布 tag 免除此门禁（产物是对外不可见的 Draft，下载需 push 权限 token，暴露面为零）。
+      - name: 校验 tag 指向 main 分支历史（仅正式发布）
+        if: steps.validate.outputs.prerelease != 'true'
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "错误：正式发布 tag 必须指向 main 分支上的提交（经过 PR 合入）" >&2
+            exit 1
+          fi
 
   build:
     needs: verify-tag
@@ -64,6 +74,11 @@ jobs:
       - run: bun install --frozen-lockfile
       - name: 参数化构建
         run: bun run build:tui --target ${{ matrix.target }}
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version: '1.26'
+      - name: 构建 launcher（全平台）
+        run: bun run build:launcher --target ${{ matrix.target }}
       - name: 产物冒烟验证（单文件、无外部运行时）
         run: >-
           bun run tests/distribution/verify-tui.ts
@@ -107,9 +122,11 @@ jobs:
             (cd "$(dirname "$f")" && sha256sum "$(basename "$f")")
           done > SHA256SUMS
       - name: 创建 Draft Release
+        # 预发布加 --prerelease 标记：即使误点发布也不会成为 releases/latest（正式用户不可见）
         run: >-
           gh release create "v${{ needs.verify-tag.outputs.version }}"
           --draft
+          ${{ needs.verify-tag.outputs.prerelease == 'true' && '--prerelease' || '' }}
           --generate-notes
           --title "AizenAssistant v${{ needs.verify-tag.outputs.version }}"
         env:

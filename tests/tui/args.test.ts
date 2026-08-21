@@ -31,6 +31,26 @@ describe("TUI 参数", () => {
     })
   })
 
+  test("子命令接受并忽略 --data-dir（launcher 向任意调用形态注入默认参数）", () => {
+    // 注入在前：子命令被挤出首位也必须正确分发
+    expect(parseArguments(["--data-dir", "/d", "update"])).toEqual({ command: "update" })
+    expect(parseArguments(["--data-dir", "/d", "uninstall", "--yes"])).toEqual({
+      command: "uninstall",
+      yes: true,
+      skipPath: false,
+    })
+    // 用户手写在后：同样接受并忽略
+    expect(parseArguments(["update", "--data-dir", "/d", "--release-api", "http://x"])).toEqual({
+      command: "update",
+      releaseApi: "http://x",
+    })
+    expect(parseArguments(["uninstall", "--data-dir", "/d"])).toEqual({
+      command: "uninstall",
+      yes: false,
+      skipPath: false,
+    })
+  })
+
   test("拒绝未知、重复和缺少值的参数", () => {
     expect(() => parseArguments(["--unknown"])).toThrow("未知的 TUI 参数")
     expect(() => parseArguments(["--data-dir"])).toThrow("必须提供目录")

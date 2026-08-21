@@ -1,12 +1,16 @@
 /**
- * uninstall 子命令：删除受管安装并回滚 PATH。
+ * uninstall 子命令（过渡期引导）。
  *
- * 行为：确认（--yes 跳过）→ 读 install.json → 回滚 PATH → 删除 ~/.aizen。
- * Windows 下运行中的 exe 无法删除，通过临时 PowerShell 脚本延迟删除自身与 bin 目录。
+ * 多版本布局下 uninstall 由 bin/ 下的 launcher 拦截处理（Go 实现），本模块不再可达；
+ * 仅以下两种场景会执行到这里：
+ * - 旧单文件布局（bin/ 下是真实可执行文件）：保留完整卸载行为
+ *  （确认 → 回滚 PATH → 删除安装根，Windows 下自身被锁交延迟脚本）；
+ * - 用户直接运行 versions/ 下的真实可执行文件：提示改走 bin/ 入口。
  */
 
 import { homedir } from "node:os"
-import { readFile, writeFile, rm, readdir } from "node:fs/promises"
+import { readFile, writeFile, rm } from "node:fs/promises"
+import { existsSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 import { installRecordPath, readInstallRecord } from "../../packages/core/install-record.ts"
@@ -40,10 +44,23 @@ async function confirmUninstall(skipConfirmation: boolean): Promise<boolean> {
   return answer.trim().toLowerCase() === "y"
 }
 
+/** 安装根：真实可执行文件在多版本布局下位于 <根>/versions/<current>/，旧布局位于 <根>/bin/。 */
+function installRootFromExecutable(): string {
+  const exeDir = dirname(process.execPath)
+  return basename(dirname(exeDir)) === "versions" ? dirname(dirname(exeDir)) : dirname(exeDir)
+}
+
+/** 是否旧单文件布局：exe 位于 <根>/bin/ 且不存在 versions/ 目录（与 self-update.ts 同一判据）。 */
+function isLegacyLayout(): boolean {
+  const exeDir = dirname(process.execPath)
+  if (basename(exeDir) !== "bin") return false
+  return !existsSync(join(dirname(exeDir), "versions"))
+}
+
 /** 从 bash/zsh/fish 配置中移除安装目录相关的 PATH 行（幂等重写）。 */
 async function removeShellPathEntries(home: string): Promise<void> {
-  // 安装目录绝对路径（覆盖 --install-dir 自定义安装场景与手写绝对路径的条目，与 Windows $entry3 对齐）
-  const installBinDir = dirname(process.execPath)
+  // 安装目录 = 安装根/bin（多版本布局下真实可执行文件在 versions/，不能直接用 dirname(execPath)）
+  const installBinDir = join(installRootFromExecutable(), "bin")
   // 覆盖 install.sh 的 bash 分支写入的 .bashrc 与 .bash_profile（macOS 登录 shell 读 .bash_profile）
   const candidates = [
     join(home, ".bashrc"),
@@ -70,7 +87,7 @@ async function removeShellPathEntries(home: string): Promise<void> {
 
 /** 从用户级 PATH 移除安装目录条目（经 PowerShell 操作 HKCU\Environment，免管理员）。 */
 async function removeWindowsPathEntry(): Promise<void> {
-  const binDir = dirname(process.execPath)
+  const binDir = join(installRootFromExecutable(), "bin")
   const quotedBinDir = binDir.replaceAll("'", "''")
   const script = [
     // 默认安装路径的展开绝对形式（install.ps1 写入 $InstallDir）；install.ps1 已不再写 %USERPROFILE% 字面
@@ -89,35 +106,21 @@ async function removeWindowsPathEntry(): Promise<void> {
   else console.log("已从用户 PATH 移除安装目录")
 }
 
-/** 删除数据与安装记录；目录由可执行文件位置推导（exe 位于 <安装根>/bin/），支持自定义安装目录。 */
+/** 删除数据与安装记录；安装根由可执行文件位置推导（多版本布局为 <根>/versions/<current>/，旧布局为 <根>/bin/），支持自定义安装目录。 */
 async function removeAizenDirectory(): Promise<void> {
-  const binDir = dirname(process.execPath)
-  const aizenDir = dirname(binDir)
-  await rm(join(binDir, ".aizen"), { recursive: true, force: true })
+  const root = installRootFromExecutable()
   await rm(installRecordPath(), { force: true })
 
   if (process.platform === "win32") {
-    // 删除 bin 下除安装的可执行文件之外的内容（安装的 exe 正被系统锁定，交给延迟脚本删除）。
-    // 用固定文件名而非 process.execPath 判断，避免源码运行（bun 启动）时语义失配。
-    const managedExecutableName = "aizen-assistant.exe"
-    try {
-      const entries = await readdir(binDir)
-      for (const entry of entries) {
-        const full = join(binDir, entry)
-        if (basename(full) !== managedExecutableName) await rm(full, { recursive: true, force: true })
-      }
-    } catch {
-      // bin 目录不存在时跳过
-    }
-    // 延迟删除自身 exe 与整个 ~/.aizen：由共享调度器在进程退出后执行（Bun.spawn 子进程会随父退出被终止）。
+    // 运行中的 exe 与数据目录可能被系统锁定，整个安装根交给延迟脚本在进程退出后删除
+    // （Bun.spawn 子进程会随父退出被终止，须经 Start-Process 创建独立进程）。
     await scheduleDeferredPowerShell([
       "Start-Sleep -Seconds 1",
-      `Remove-Item -Recurse -Force ${quotedPowerShell(binDir)}`,
-      `Remove-Item -Recurse -Force ${quotedPowerShell(aizenDir)}`,
+      `Remove-Item -Recurse -Force ${quotedPowerShell(root)}`,
     ])
   } else {
-    // POSIX 允许删除运行中的可执行文件，整个目录一并删除
-    await rm(aizenDir, { recursive: true, force: true })
+    // POSIX 允许删除运行中的可执行文件，整个安装根一并删除
+    await rm(root, { recursive: true, force: true })
   }
 }
 
@@ -133,6 +136,11 @@ export async function runUninstall(skipConfirmation: boolean, skipPath = false):
   if (!record) {
     console.error("未检测到受管安装（~/.aizen/install.json 不存在）。")
     console.error("若为便携模式，直接删除可执行文件及同目录 .aizen 目录即可，无需执行卸载。")
+    return 1
+  }
+  // 多版本布局下 uninstall 归 launcher：能执行到这里说明绕过了 bin/ 入口（直接运行 versions/ 下真实文件）
+  if (!isLegacyLayout()) {
+    console.error("请通过安装入口执行卸载：运行 bin/ 目录下的 aizen-assistant uninstall（由 launcher 处理）。")
     return 1
   }
   if (!(await confirmUninstall(skipConfirmation))) {

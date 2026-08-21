@@ -1,13 +1,19 @@
 /**
- * update 子命令：检查并安装最新版本。
+ * update 子命令（过渡期引导）。
  *
- * 仅 github 通道执行自更新（查询 GitHub API → 下载 → SHA256 校验 → 替换自身）。
+ * 多版本布局下 update 由 bin/ 下的 launcher 拦截处理（Go 实现），本模块不再可达；
+ * 仅以下两种场景会执行到这里：
+ * - 旧单文件布局（bin/ 下是真实可执行文件）：v0.1.0 用户升级链路的关键路径，
+ *   保留完整逻辑：下载 → 校验 → 迁移多版本布局 → 落位新版本与 launcher → 写含 current 的记录；
+ *   此后 update/uninstall 均由 launcher 接管。
+ * - 用户直接运行 versions/ 下的真实可执行文件：提示改走 bin/ 入口。
  * npm 通道（预留）与便携模式不做自更新，分别提示对应操作。
  */
 
 import { basename, dirname, join } from "node:path"
+import { chmod, copyFile, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/promises"
+import { existsSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { chmod, copyFile, mkdir, mkdtemp, rename, rm, stat } from "node:fs/promises"
 import { $ } from "bun"
 import {
   type InstallRecord,
@@ -19,6 +25,9 @@ import { quotedPowerShell, scheduleDeferredPowerShell } from "./deferred-powersh
 
 /** 默认 GitHub API 基地址，用于查询最新 release；资产 URL 取自返回 JSON，无需额外配置。 */
 const DEFAULT_RELEASE_API = "https://api.github.com/repos/Spring500/aizen-assistant"
+
+/** 发布包内 launcher 的文件名（全平台附带；Windows 带 .exe 后缀）。 */
+const PACKAGE_LAUNCHER_NAME = process.platform === "win32" ? "launcher.exe" : "launcher"
 
 /** 比较语义化版本（x.y.z，可选预发布后缀如 -beta.1）：a 大于 b 返回正数，相等返回 0，否则负数。 */
 export function compareVersions(a: string, b: string): number {
@@ -113,77 +122,99 @@ async function extractZip(zipPath: string, destDir: string): Promise<void> {
   }
 }
 
-/**
- * 用新可执行文件替换当前进程的可执行文件。
- * - Windows：运行中 exe 被锁，延迟替换；替换成功后由延迟脚本写 install.json（避免版本记录与实际 exe 不一致）。
- * - POSIX：rename 原子替换；跨文件系统（EXDEV）时先复制到目标同目录再 rename。
- * cleanupDir：Windows 延迟替换时由延迟脚本负责删除的临时目录（调用方不得提前删除其中的新文件）。
- * successRecord：Windows 下替换成功后写入的安装记录（channel/version/platform）。
- */
-async function replaceExecutable(
-  newExecutable: string,
-  currentExecutable: string,
-  cleanupDir?: string,
-  successRecord?: InstallRecord,
-): Promise<void> {
-  if (process.platform === "win32") {
-    // 延迟脚本独立进程执行，结果无法回传主进程，落盘日志供排查（成功/失败都写一行）。
-    const logFile = join(dirname(currentExecutable), `aizen-update-${Date.now()}.log`)
-    const oldExecutable = `${currentExecutable}.old`
-    const log = (message: string) =>
-      `Add-Content -Encoding UTF8 -Path ${quotedPowerShell(logFile)} -Value ${quotedPowerShell(message)}`
-    const lines = [
-      // try/finally 保证无论替换成功与否都清理 workDir（含下载的 zip）
-      "try {",
-      "Start-Sleep -Seconds 1",
-      // 用 .NET 计算新文件哈希作为替换成功的基准（不依赖 PowerShell 模块自动加载）。
-      // FileStream 必须显式 Dispose：OpenRead 默认 FileShare.Read，未关闭的流会阻止后续 Move-Item。
-      "$sha = [System.Security.Cryptography.SHA256]::Create()",
-      `$newStream = [System.IO.File]::OpenRead(${quotedPowerShell(newExecutable)})`,
-      "try { $newHash = [System.BitConverter]::ToString($sha.ComputeHash($newStream)).Replace('-','').ToLower() } finally { $newStream.Dispose() }",
-      // 运行中的 exe 不可删除但可重命名：先改名旧 exe，再落位新 exe，规避删除被锁文件的竞态
-      `Rename-Item -Force ${quotedPowerShell(currentExecutable)} ${quotedPowerShell(oldExecutable)}`,
-      `Move-Item -Force ${quotedPowerShell(newExecutable)} ${quotedPowerShell(currentExecutable)}`,
-      // Test-Path 无法区分目标处是新 exe 还是被锁残留的旧 exe，必须比较内容哈希一致才认为替换成功
-      `if (-not [System.IO.File]::Exists(${quotedPowerShell(currentExecutable)})) { ${log("替换失败：新可执行文件未落位")}; exit 1 }`,
-      `$currentStream = [System.IO.File]::OpenRead(${quotedPowerShell(currentExecutable)})`,
-      "try { $currentHash = [System.BitConverter]::ToString($sha.ComputeHash($currentStream)).Replace('-','').ToLower() } finally { $currentStream.Dispose() }",
-      `if ($currentHash -ne $newHash) { ${log("替换失败：落位后哈希不一致")}; exit 1 }`,
-      // 旧 exe 可能仍被进程占用，退避重试删除；失败则残留 .old（下次更新可清理）
-      `for ($retry = 0; $retry -lt 5; $retry++) { try { Remove-Item -Force ${quotedPowerShell(oldExecutable)} -ErrorAction Stop; break } catch { Start-Sleep -Seconds 1 } }`,
-      ...(successRecord
-        ? [
-            `[System.IO.File]::WriteAllText(${quotedPowerShell(installRecordPath())}, ${quotedPowerShell(
-              JSON.stringify(successRecord),
-            )}, (New-Object System.Text.UTF8Encoding($false)))`,
-          ]
-        : []),
-      log("替换成功"),
-      "} finally {",
-      ...(cleanupDir ? [`Remove-Item -Recurse -Force ${quotedPowerShell(cleanupDir)}`] : []),
-      "}",
-    ]
-    await scheduleDeferredPowerShell(lines)
-  } else {
-    try {
-      await rename(newExecutable, currentExecutable)
-    } catch (error) {
-      if (error && typeof error === "object" && "code" in error && error.code === "EXDEV") {
-        // 跨文件系统：临时目录与安装目录不在同一挂载点（如 Linux /tmp 为 tmpfs），rename 抛 EXDEV。
-        // 先复制到目标同目录（同卷）再 rename，保持同卷原子替换并保留可执行权限。
-        const staged = join(dirname(currentExecutable), `.aizen-update-${process.pid}.tmp`)
-        try {
-          const mode = (await stat(newExecutable)).mode
-          await copyFile(newExecutable, staged)
-          await chmod(staged, mode)
-          await rename(staged, currentExecutable)
-        } finally {
-          await rm(staged, { force: true })
-        }
-      } else {
-        throw error
-      }
+/** 安装根目录：真实可执行文件位于 <根>/versions/<current>/ 或旧布局 <根>/bin/，据此向上推导。 */
+function installRoot(): string {
+  const exeDir = dirname(process.execPath)
+  return basename(dirname(exeDir)) === "versions" ? dirname(dirname(exeDir)) : dirname(exeDir)
+}
+
+/** 是否旧单文件布局：exe 位于 <根>/bin/ 且不存在 versions/ 目录。 */
+function isLegacyLayout(): boolean {
+  const exeDir = dirname(process.execPath)
+  if (basename(exeDir) !== "bin") return false
+  return !existsSync(join(dirname(exeDir), "versions"))
+}
+
+/** 移动数据目录内容（旧布局 bin/.aizen → 安装根 data/）；失败时保留旧目录、不阻塞更新。 */
+async function moveDataDir(oldData: string, newData: string): Promise<void> {
+  try {
+    const entries = await readdir(oldData)
+    if (entries.length === 0) {
+      await rm(oldData, { recursive: true, force: true })
+      return
     }
+    await mkdir(newData, { recursive: true })
+    for (const entry of entries) {
+      await rename(join(oldData, entry), join(newData, entry))
+    }
+    await rm(oldData, { recursive: true, force: true })
+  } catch {
+    // 数据迁移失败（如跨卷）时保留旧目录，由后续流程或用户手动处理
+  }
+}
+
+/**
+ * 从旧单文件布局迁移到多版本布局（update 触发的路径）。
+ * - Windows：运行中的 exe 被锁，复制自身到 versions/，launcher 经延迟脚本替换 bin/ 下旧 exe。
+ * - POSIX：运行中的 exe 可重命名，直接移动自身并把发布包内的 launcher 二进制落位到 bin/。
+ */
+async function migrateLegacyLayout(root: string, launcherSource: string): Promise<void> {
+  const exeDir = dirname(process.execPath)
+  const exeName = basename(process.execPath)
+  const record = await readInstallRecord()
+  const oldVersion = record?.version ?? "legacy"
+  const versionDir = join(root, "versions", `v${oldVersion}`)
+  await mkdir(versionDir, { recursive: true })
+  const launcherAvailable = await Bun.file(launcherSource).exists()
+  if (process.platform === "win32") {
+    await copyFile(process.execPath, join(versionDir, exeName))
+    await moveDataDir(join(exeDir, ".aizen"), join(root, "data"))
+    if (launcherAvailable) {
+      // 旧 exe 正被当前进程锁定，launcher 由独立进程在当前进程退出后落位
+      const staged = join(root, `.launcher-staged-${process.pid}.exe`)
+      await copyFile(launcherSource, staged)
+      await scheduleDeferredPowerShell([
+        "Start-Sleep -Seconds 1",
+        `Copy-Item -Force ${quotedPowerShell(staged)} ${quotedPowerShell(join(exeDir, exeName))}`,
+        `Remove-Item -Force ${quotedPowerShell(staged)} -ErrorAction SilentlyContinue`,
+      ])
+    }
+  } else {
+    await rename(process.execPath, join(versionDir, exeName))
+    await moveDataDir(join(exeDir, ".aizen"), join(root, "data"))
+    if (launcherAvailable) {
+      await copyFile(launcherSource, join(exeDir, exeName))
+      await chmod(join(exeDir, exeName), 0o755)
+    }
+  }
+  console.log(`旧版布局已迁移：versions/v${oldVersion} 与 ${join(root, "data")}`)
+}
+
+/** 用发布包内容更新 bin/ 下 launcher（全平台取包内二进制）；被锁时忽略（自更新机制待后续提交重做）。 */
+async function updateLauncher(root: string, packageDir: string): Promise<void> {
+  const binDir = join(root, "bin")
+  const source = join(packageDir, PACKAGE_LAUNCHER_NAME)
+  if (!(await Bun.file(source).exists())) return
+  const targetName = process.platform === "win32" ? "aizen-assistant.exe" : "aizen-assistant"
+  await copyFile(source, join(binDir, targetName)).catch(() => {})
+  if (process.platform !== "win32") await chmod(join(binDir, targetName), 0o755).catch(() => {})
+}
+
+/** 清理 versions/ 下除 current 之外的历史版本（保留最近一个，供回滚；被运行中实例锁定时忽略）。 */
+async function gcVersions(root: string, keepCurrent: string): Promise<void> {
+  const versionsDir = join(root, "versions")
+  let entries: string[]
+  try {
+    entries = await readdir(versionsDir)
+  } catch {
+    return
+  }
+  const others = entries
+    .filter((name) => name.startsWith("v") && name !== keepCurrent)
+    .sort((a, b) => compareVersions(a.replace(/^v/, ""), b.replace(/^v/, "")))
+    .reverse()
+  for (const extra of others.slice(1)) {
+    await rm(join(versionsDir, extra), { recursive: true, force: true }).catch(() => {})
   }
 }
 
@@ -207,6 +238,11 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
     console.log("当前通道无需自更新，请按对应安装方式更新。")
     return 0
   }
+  // 多版本布局下 update 归 launcher：能执行到这里说明绕过了 bin/ 入口（直接运行 versions/ 下真实文件）
+  if (!isLegacyLayout()) {
+    console.error("请通过安装入口执行更新：运行 bin/ 目录下的 aizen-assistant update（由 launcher 处理）。")
+    return 1
+  }
 
   let release: LatestRelease
   try {
@@ -228,8 +264,6 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
   }
 
   const workDir = await mkdtemp(join(tmpdir(), "aizen-update-"))
-  // Windows 下已调度延迟替换时，workDir 由延迟脚本清理，主流程不得提前删除（否则新文件丢失）。
-  let delayReplaceScheduled = false
   try {
     const zipPath = join(workDir, assetName)
     await download(asset.url, zipPath)
@@ -259,23 +293,42 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
     }
 
     await extractZip(zipPath, join(workDir, "extracted"))
-    const newExecutable = join(workDir, "extracted", basename(process.execPath))
-    if (!(await Bun.file(newExecutable).exists())) throw new Error("压缩包内未找到可执行文件")
+    const extracted = join(workDir, "extracted")
+    const packageExe = join(extracted, basename(process.execPath))
+    if (!(await Bun.file(packageExe).exists())) throw new Error("压缩包内未找到可执行文件")
 
-    const successRecord: InstallRecord = { channel: "github", version: release.version, platform: record.platform }
-    await replaceExecutable(newExecutable, process.execPath, workDir, successRecord)
-    // Windows 下延迟替换尚未完成，workDir 由延迟脚本清理；POSIX 下替换同步完成，由 finally 清理。
-    if (process.platform === "win32") {
-      delayReplaceScheduled = true
-    } else {
-      await writeInstallRecord(successRecord)
+    const root = installRoot()
+    // 旧单文件布局迁移（进入本流程已确认旧布局）：旧 exe 归档 versions/、数据迁移 data/、launcher 落位 bin/
+    console.log("检测到旧版单文件布局，正在迁移...")
+    await migrateLegacyLayout(root, join(extracted, PACKAGE_LAUNCHER_NAME))
+
+    // 新版本落位到 versions/v<版本>/（同卷临时名 + 原子 rename）
+    const versionDir = join(root, "versions", `v${release.version}`)
+    await mkdir(versionDir, { recursive: true })
+    const target = join(versionDir, basename(process.execPath))
+    const staged = join(versionDir, `.tmp-${process.pid}`)
+    await copyFile(packageExe, staged)
+    await rm(target, { force: true }).catch(() => {})
+    await rename(staged, target)
+
+    // 更新 bin/ 下 launcher（旧布局迁移场景 Windows 由延迟脚本兜底，POSIX 已在迁移中落位，此处幂等补写）
+    await updateLauncher(root, extracted)
+
+    const successRecord: InstallRecord = {
+      channel: "github",
+      version: release.version,
+      platform: record.platform,
+      current: `v${release.version}`,
     }
+    await writeInstallRecord(successRecord)
+    await gcVersions(root, `v${release.version}`)
+
     console.log(`更新完成：${record.version} → ${release.version}`)
     return 0
   } catch (error) {
     console.error(`更新失败：${error instanceof Error ? error.message : String(error)}`)
     return 1
   } finally {
-    if (!delayReplaceScheduled) await rm(workDir, { recursive: true, force: true })
+    await rm(workDir, { recursive: true, force: true })
   }
 }

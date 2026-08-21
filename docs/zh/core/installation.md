@@ -27,19 +27,40 @@ iex ((New-Object System.Net.WebClient).DownloadString('https://raw.githubusercon
 curl -fsSL https://cdn.jsdelivr.net/gh/Spring500/aizen-assistant@main/install.sh | bash
 ```
 
-安装到 `~/.aizen/bin/`（Windows 为 `%USERPROFILE%\.aizen\bin`），只修改用户级环境（`~/.aizen`、shell 配置、用户 PATH），全程无需管理员权限；重复执行安全。需要指定历史版本时：macOS/Linux 用 `bash install.sh 0.1.0`，Windows 下载脚本后 `powershell -ExecutionPolicy Bypass -File install.ps1 0.1.0`。
+安装到 `~/.aizen/`（Windows 为 `%USERPROFILE%\.aizen`），目录结构如下：
+
+- `bin/aizen-assistant`：启动入口（launcher，Go 实现，全平台统一），读取 `install.json` 的当前版本并注入数据目录后启动真实程序；`update` / `uninstall` 子命令也由 launcher 直接处理；
+- `versions/vX.Y.Z/`：各版本的真实可执行文件，安装与更新时新增版本目录，运行中的实例不被替换；
+- `data/`：数据目录，固定于安装根，升级不迁移；
+- `install.json`：安装来源记录（channel / version / platform / current）。
+
+只修改用户级环境（`~/.aizen`、shell 配置、用户 PATH），全程无需管理员权限；重复执行安全。需要指定历史版本时：macOS/Linux 用 `bash install.sh 0.1.0`，Windows 下载脚本后 `powershell -ExecutionPolicy Bypass -File install.ps1 0.1.0`。
 
 当前提供官方安装包的平台：**Windows x64、Linux x64、macOS（Apple Silicon）**。Windows ARM64、Linux ARM64 与 Intel Mac（darwin-x64）暂不支持，安装脚本检测到这些平台时会明确提示，不会返回 404。
 
-**更新**：运行 `aizen-assistant update`，自动从 GitHub Releases 下载最新版并原子替换自身。
+**更新**：运行 `aizen-assistant update`（由 launcher 处理），自动从 GitHub Releases 下载最新版并落位到新的版本目录，随后原子切换 `install.json` 的当前版本指向。新版本与运行中的实例互不干扰，**更新可在实例运行中完成**，下次启动即用新版本；历史版本保留最近一个供回滚；launcher 自身也会随更新自动替换（下次启动生效）。
 
-**卸载**：运行 `aizen-assistant uninstall`，确认后删除 `~/.aizen` 并回滚 PATH。
+**卸载**：运行 `aizen-assistant uninstall`（由 launcher 处理），确认后删除 `~/.aizen` 并回滚 PATH。
 
-**macOS 提示**：未签名的发布版首次运行可能被 Gatekeeper 拦截，请右键点击打开，或在终端执行：
+**macOS 提示**：未签名的发布版首次运行可能被 Gatekeeper 拦截，请右键点击打开，或在终端对真实可执行文件执行：
 
 ```bash
-xattr -d com.apple.quarantine ~/.aizen/bin/aizen-assistant
+xattr -d com.apple.quarantine ~/.aizen/versions/v*/aizen-assistant
 ```
+
+### 预发布通道（开发测试）
+
+功能分支上打 `vX.Y.Z-后缀` 形式的 tag（如 `v0.2.0-beta.1`）会触发 CI 构建并创建 **Draft Release**：在 Releases 页面与匿名 API 中均不可见，仅供持仓库 push 权限 token 的测试者使用，测完即删。预发布 tag 不要求指向 main（正式 tag 仍强制经 PR 合入）。
+
+```bash
+# 从功能分支获取安装脚本，指定预发布版本（需 token）
+GITHUB_TOKEN=xxx bash install.sh --version 0.2.0-beta.1
+
+# 已安装预发布版后，升级到更新的预发布版（--pre 启用预发布可见性）
+GITHUB_TOKEN=xxx aizen-assistant update --pre
+```
+
+普通用户不受影响：无 token 时安装与更新只看正式发布（`releases/latest`）。
 
 ## 环境准备（源码开发）
 
@@ -92,7 +113,7 @@ bun run build:tui --target bun-linux-x64
 bun run build:tui --target bun-darwin-arm64
 ```
 
-产物位于 `dist/`（Windows 为 `aizen-assistant.exe`，其余平台为 `aizen-assistant`），运行时不要求另行安装 Node.js 或 Bun。默认数据目录为可执行文件同目录的 `.aizen`，也可以显式指定：
+产物位于 `dist/`（Windows 为 `aizen-assistant.exe`，其余平台为 `aizen-assistant`），运行时不要求另行安装 Node.js 或 Bun。直接运行产物（便携模式）时默认数据目录为可执行文件同目录的 `.aizen`，也可以显式指定；受管安装的数据目录由启动入口注入到 `~/.aizen/data/`：
 
 ```powershell
 .\dist\aizen-assistant.exe --data-dir <目录>
