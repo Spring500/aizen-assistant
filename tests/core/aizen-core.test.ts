@@ -1346,9 +1346,7 @@ describe("核心编排", () => {
     const [oldTurn, recentTurn] = core.getSnapshot().historyTurns
     if (!oldTurn || !recentTurn) throw new Error("缺少压缩测试轮次")
     const records = (await store.read(core.getSnapshot().currentSessionId ?? "")).records
-    const recentStart = records.find(
-      (record) => record.kind === "turn_started" && record.turnId === recentTurn.turnId,
-    )
+    const recentStart = records.find((record) => record.kind === "turn_started" && record.turnId === recentTurn.turnId)
     if (!recentStart) throw new Error("缺少保留边界记录")
     pi.compact = async () => {
       for (const listener of pi.listeners)
@@ -1362,9 +1360,7 @@ describe("核心编排", () => {
 
     expect(await core.dispatch({ type: "compact" })).toEqual({ ok: true })
     expect(
-      core
-        .getSnapshot()
-        .transcript.some((entry) => entry.type === "input" && entry.turnId === oldTurn.turnId),
+      core.getSnapshot().transcript.some((entry) => entry.type === "input" && entry.turnId === oldTurn.turnId),
     ).toBe(false)
     expect(JSON.stringify(core.getSnapshot().transcript)).toContain("旧问题摘要")
     expect(JSON.stringify(core.getSnapshot().transcript)).toContain("保留问题")
