@@ -37,6 +37,8 @@ class ViewsCore implements CorePort {
     views: [],
     authProviders: [],
     transcript: [],
+    transcriptRevision: 0,
+    historyTurns: [],
     activeTools: [],
     streamingText: "",
     streamingThinking: "",

@@ -19,9 +19,17 @@ export type CoreStatus = "idle" | "running" | "compacting" | "aborting" | "authe
 
 export type TranscriptEntry =
   | { type: "environment"; recordId: string; text: string }
+  | { type: "compaction_summary"; recordId: string; summary: string; tokensBefore: number }
   | { type: "input"; turnId: string; items: TurnInputItem[] }
   | { type: "message"; turnId: string; message: MessageRecord["message"] }
   | { type: "turn_end"; turnId: string; outcome: "completed" | "aborted" | "failed" }
+
+/** 完整会话中的已完成用户轮次，供 rewind/fork 使用，不受主对话压缩投影影响。 */
+export type ConversationHistoryTurn = {
+  turnId: string
+  text: string
+  compacted: boolean
+}
 
 export type ActiveTool = {
   callId: string
@@ -77,6 +85,10 @@ export type CoreSnapshot = {
   authProviders: AuthProviderOption[]
   piProviders?: PiProviderOption[]
   transcript: TranscriptEntry[]
+  /** transcript 的语义版本；内容被压缩重投影但长度不变时也会递增。 */
+  transcriptRevision: number
+  /** 完整会话中的已完成轮次，专供 rewind/fork 等历史操作。 */
+  historyTurns: ConversationHistoryTurn[]
   activeTools: ActiveTool[]
   responseMetrics?: ResponseMetrics
   contextUsage?: ContextUsage
@@ -187,6 +199,13 @@ export function recordsToTranscript(records: SessionRecord[]): TranscriptEntry[]
         type: "environment",
         recordId: record.recordId,
         text: workingDirectoryChangeText(record.previousCwd, record.currentCwd),
+      })
+    if (record.kind === "compaction")
+      entries.push({
+        type: "compaction_summary",
+        recordId: record.recordId,
+        summary: record.summary,
+        tokensBefore: record.tokensBefore,
       })
     if (record.kind === "turn_started") entries.push({ type: "input", turnId: record.turnId, items: record.items })
     if (record.kind === "message") entries.push({ type: "message", turnId: record.turnId, message: record.message })
