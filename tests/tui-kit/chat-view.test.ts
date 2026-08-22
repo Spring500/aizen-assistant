@@ -26,6 +26,8 @@ function snapshot(overrides: Partial<CoreSnapshot> = {}): CoreSnapshot {
     views: [],
     authProviders: [],
     transcript: [],
+    transcriptRevision: 0,
+    historyTurns: [],
     activeTools: [],
     streamingText: "",
     streamingThinking: "",
@@ -168,6 +170,33 @@ test("聊天视图展示工作目录变化", async () => {
     )
     await setup.renderOnce()
     expect(setup.externalOutput.takeText()).toContain('Working directory changed from "E:\\old" to "D:\\new".')
+  } finally {
+    setup.renderer.destroy()
+  }
+})
+
+test("聊天视图展示上下文压缩摘要", async () => {
+  const setup = await setupRepl()
+  try {
+    const view = createChatView(setup.renderer)
+    await view.update(
+      snapshot({
+        transcriptRevision: 1,
+        transcript: [
+          {
+            type: "compaction_summary",
+            recordId: "compact-1",
+            summary: "## 当前目标\n\n保留关键决策",
+            tokensBefore: 120000,
+          },
+        ],
+      }),
+    )
+    await setup.renderOnce()
+    const output = setup.externalOutput.takeText().replace(/\s+/g, "")
+    expect(output).toContain("上下文压缩摘要·压缩前120000tokens")
+    expect(output).toContain("当前目标")
+    expect(output).toContain("保留关键决策")
   } finally {
     setup.renderer.destroy()
   }

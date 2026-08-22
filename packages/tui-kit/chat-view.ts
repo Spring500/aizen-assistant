@@ -43,6 +43,7 @@ type ToolDisplay = {
 
 type DisplayBlock =
   | { kind: "plain"; id: string; turnId: string; content: string }
+  | { kind: "compaction_summary"; id: string; turnId: string; content: string; tokensBefore: number }
   | { kind: "user"; id: string; turnId: string; content: string }
   | { kind: "assistant"; id: string; turnId: string; content: string; timing?: Timing }
   | { kind: "thinking"; id: string; turnId: string; content: string; timing?: Timing }
@@ -234,6 +235,14 @@ function displayBlocks(snapshot: CoreSnapshot): DisplayBlock[] {
         turnId: `environment-${entry.recordId}`,
         content: entry.text,
       })
+    } else if (entry.type === "compaction_summary") {
+      blocks.push({
+        kind: "compaction_summary",
+        id: `compaction-${entry.recordId}`,
+        turnId: `compaction-${entry.recordId}`,
+        content: entry.summary,
+        tokensBefore: entry.tokensBefore,
+      })
     } else if (entry.type === "input") {
       for (const [itemIndex, item] of entry.items.entries()) {
         const text = item.parts
@@ -385,6 +394,19 @@ function createHistoryBlock(
     root.add(makeText(context, `${rootId}-text`, block.content, blockColors.plain))
     return root
   }
+  if (block.kind === "compaction_summary") {
+    const root = makeBox(context, rootId, blockColors.assistant)
+    root.add(
+      makeText(
+        context,
+        `${rootId}-header`,
+        `上下文压缩摘要 · 压缩前 ${block.tokensBefore} tokens`,
+        blockColors.assistant,
+      ),
+    )
+    root.add(createAssistantMarkdownRenderer(context, `${rootId}-markdown`, block.content, assistantMarkdownStyles))
+    return root
+  }
   if (block.kind === "user") {
     const root = makeBox(context, rootId, blockColors.user)
     root.add(makeText(context, `${rootId}-text`, block.content, blockColors.user))
@@ -455,7 +477,8 @@ export function createChatView(renderer: CliRenderer): ChatView {
   let operationQueue = Promise.resolve()
   let lifecycle: "active" | "closing" | "destroyed" = "active"
   let destroyPromise: Promise<void> | undefined
-  /** 上次构建 blocks 的 transcript 长度；流式期间 transcript 不变，用于跳过全量重算。 */
+  /** 上次构建 blocks 的 transcript 版本与长度；流式期间两者不变，用于跳过全量重算。 */
+  let lastTranscriptRevision = -1
   let lastTranscriptLength = -1
 
   const renderedFingerprints = () => blocks.map((block) => JSON.stringify({ block, fold }))
@@ -549,11 +572,13 @@ export function createChatView(renderer: CliRenderer): ChatView {
         // 是回复中后段卡顿的主要来源，这里直接跳过。
         const transcriptUnchanged =
           blocks.length > 0 &&
+          snapshot.transcriptRevision === lastTranscriptRevision &&
           snapshot.transcript.length === lastTranscriptLength &&
           nextFold.thinkingExpanded === fold.thinkingExpanded &&
           nextFold.toolGroupExpanded === fold.toolGroupExpanded &&
           nextFold.toolDetailsExpanded === fold.toolDetailsExpanded
         if (transcriptUnchanged) return
+        lastTranscriptRevision = snapshot.transcriptRevision
         lastTranscriptLength = snapshot.transcript.length
         fold = nextFold
         blocks = displayBlocks(snapshot)

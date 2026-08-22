@@ -16,6 +16,8 @@ function snapshot(overrides: Partial<CoreSnapshot> = {}): CoreSnapshot {
     views: [],
     authProviders: [],
     transcript: [],
+    transcriptRevision: 0,
+    historyTurns: [],
     activeTools: [],
     streamingText: "",
     streamingThinking: "",
