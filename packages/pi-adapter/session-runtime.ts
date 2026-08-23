@@ -771,8 +771,10 @@ export class PiSessionRuntime implements PiPort {
     this.#activeCompaction = running
     try {
       await running
-      this.#subscribeAgentMessages(session)
     } finally {
+      // pi 的手动压缩无论成功或失败都会重新订阅 Agent；adapter 也必须在 finally
+      // 中重订阅，保证下一轮仍在 pi 完成消息持久化后读取 SessionManager。
+      this.#subscribeAgentMessages(session)
       if (this.#activeCompaction === running) this.#activeCompaction = undefined
     }
   }

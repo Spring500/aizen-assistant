@@ -344,6 +344,122 @@ describe("pi 内存会话", () => {
     await runtime.dispose()
   })
 
+  test("dev mock 长对话按真实用量触发手动压缩", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aizen-pi-mock-"))
+    directories.push(directory)
+    const customProvidersPath = join(directory, "custom-providers.json")
+    await writeFile(
+      customProvidersPath,
+      JSON.stringify({
+        providers: {
+          "mock-anthropic": {
+            baseUrl: "http://127.0.0.1:1",
+            api: "anthropic-messages",
+            authHeader: false,
+            models: [{ id: "mock-dsl", input: ["text"], contextWindow: 32000, maxTokens: 4096 }],
+          },
+        },
+      }),
+    )
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), customProvidersPath })
+    const model = (await runtime.listModels()).find(
+      (item) => item.providerId === "mock-anthropic" && item.modelId === "mock-dsl",
+    )
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } })
+    mock.handle((request) => ({
+      type: "text",
+      text: JSON.stringify(request.system).includes("context summarization assistant") ? "text Mock 压缩摘要" : "完成",
+    }))
+    runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+    const records: SessionRecord[] = []
+    for (let index = 0; index < 8; index += 1) {
+      const turnId = `mock-turn-${index}`
+      records.push(
+        {
+          kind: "turn_started",
+          recordId: `mock-user-${index}`,
+          turnId,
+          at: "2026-07-23T10:00:00.000Z",
+          viewId: null,
+          items: [
+            {
+              source: "user",
+              role: "user",
+              useLater: true,
+              parts: [{ kind: "text", text: `第 ${index + 1} 段：${"长上下文".repeat(3000)}` }],
+            },
+          ],
+        },
+        {
+          kind: "message",
+          recordId: `mock-assistant-${index}`,
+          turnId,
+          at: "2026-07-23T10:00:01.000Z",
+          message: {
+            role: "assistant",
+            parts: [{ kind: "text", text: "完成" }],
+            source: { providerId: model.providerId, modelId: model.modelId, api: "anthropic-messages" },
+            stopReason: "stop",
+            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+        {
+          kind: "turn_finished",
+          recordId: `mock-finished-${index}`,
+          turnId,
+          at: "2026-07-23T10:00:02.000Z",
+          outcome: "completed",
+        },
+      )
+    }
+    await runtime.restore({ cwd: directory, model, view: emptyView, records })
+    const events: PiPortEvent[] = []
+    runtime.subscribe((event) => events.push(event))
+    await runtime.compact()
+    expect(events.some((event) => event.type === "compaction" && event.summary.includes("Mock 压缩摘要"))).toBe(true)
+    await runtime.dispose()
+    mock.stop()
+  })
+
+  test("手动压缩因会话过小时失败后仍可继续对话", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find(
+      (item) => item.providerId === "anthropic" && item.modelId === "claude-sonnet-4-6",
+    )
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } })
+    mock.handle(() => ({ type: "text", text: "压缩失败后仍能回复" }))
+    runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+    await runtime.create({ cwd: directory, model, view: emptyView })
+
+    await expect(runtime.compact()).rejects.toThrow("Nothing to compact (session too small)")
+    const events: PiPortEvent[] = []
+    runtime.subscribe((event) => events.push(event))
+    await expect(
+      runtime.prompt({
+        recordId: "after-failed-compaction",
+        turnId: "after-failed-compaction-turn",
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "继续对话" }] }],
+      }),
+    ).resolves.toBeUndefined()
+    expect(
+      events.some(
+        (event) =>
+          event.type === "message" &&
+          event.record.role === "assistant" &&
+          event.record.parts.some((part) => part.kind === "text" && part.text === "压缩失败后仍能回复"),
+      ),
+    ).toBe(true)
+    await runtime.dispose()
+    mock.stop()
+  })
+
   test("手动压缩生成核心边界事件并重建上下文", async () => {
     const { directory, runtime } = await makeRuntime()
     const model = (await runtime.listModels()).find(

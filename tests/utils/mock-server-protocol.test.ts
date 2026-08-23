@@ -1,5 +1,6 @@
 import { expect } from "bun:test"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
+import { ModelRuntime } from "@earendil-works/pi-coding-agent"
 import { startMockServer } from "./mock-server.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
@@ -36,6 +37,25 @@ test("OpenAI 协议归一化请求并输出指定工具调用 ID", async () => {
     expect(body).toContain('"index":0')
     expect(body).toContain('"index":1')
     expect(body).toContain('"finish_reason":"tool_calls"')
+  } finally {
+    mock.stop()
+  }
+})
+
+test("Anthropic Mock 按请求内容报告输入 token", async () => {
+  const mock = await startMockServer({ modelBehaviors: { "anthropic-usage": "test-control" } })
+  const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
+  await runtime.setRuntimeApiKey("anthropic", "test-key")
+  const anthropic = runtime.getModel("anthropic", "claude-sonnet-4-6")
+  if (!anthropic) throw new Error("找不到测试模型")
+  const longChinese = "长上下文".repeat(6000)
+  mock.handle(() => ({ type: "text", text: "完成" }))
+  try {
+    const anthropicResult = await runtime.completeSimple(
+      { ...anthropic, id: "anthropic-usage", baseUrl: mock.url },
+      { messages: [{ role: "user", content: longChinese, timestamp: Date.now() }] },
+    )
+    expect(anthropicResult.usage.input).toBeGreaterThan(20000)
   } finally {
     mock.stop()
   }
