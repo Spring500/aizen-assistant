@@ -30,7 +30,7 @@ export function encodeAnthropicEvents(
               sseEvent("message_delta", {
                 type: "message_delta",
                 delta: { stop_reason: "end_turn", stop_sequence: null },
-                usage: { output_tokens: outputTokens || 1 },
+                usage: { input_tokens: inputTokens, output_tokens: outputTokens || 1 },
               }),
             )
             controller.enqueue(sseEvent("message_stop", { type: "message_stop" }))
@@ -123,7 +123,7 @@ export function encodeAnthropicEvents(
             sseEvent("message_delta", {
               type: "message_delta",
               delta: { stop_reason: event.reason === "toolUse" ? "tool_use" : "end_turn", stop_sequence: null },
-              usage: { output_tokens: outputTokens || 1 },
+              usage: { input_tokens: inputTokens, output_tokens: outputTokens || 1 },
             }),
           )
           controller.enqueue(sseEvent("message_stop", { type: "message_stop" }))

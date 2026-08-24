@@ -121,7 +121,7 @@ type MockBehavior = (context: MockRequestContext) => AsyncIterable<MockEvent>
 
 ### 3.3 内置行为模块
 
-三个模块地位平等，均以相同接口实现，无任何一个享有特殊地位。
+三个模型行为模块地位平等，均以相同接口实现。Mock Server 另有一个先于模型行为执行的请求类型分流：当归一化后的系统提示词同时包含 `You are a context summarization assistant` 与 `ONLY output the structured summary` 时，请求交给摘要行为，不进入当前模型的专属行为。该分流适用于所有内置模型，因为 pi 使用当前会话模型生成压缩摘要；`test-control` 模型仍由测试显式控制，不受此分流影响。
 
 | 模型 ID | 模块职责 |
 |---|---|
@@ -135,6 +135,10 @@ type MockBehavior = (context: MockRequestContext) => AsyncIterable<MockEvent>
 - `submit_permission_review`：`decision` 取 `allow` / `deny` / `needHumanReview` 之一，`reason` 非空且不超过 500 字符。调用方传入的 user 消息是 `AiReviewRequest` 的 JSON 序列化结果，暗语从其 `declaredIntent` 字段读取。调用方最多纠正 2 轮（`packages/pi-adapter/permission-reviewer.ts`）。
 
 模块必须一次只调用一个工具，两个调用方都拒绝多个工具调用。
+
+摘要行为从最后一条用户消息的 `<conversation>` 标签中读取 pi 已序列化的待压缩内容，按 `[User]`、`[Assistant]`、`[Assistant thinking]`、`[Assistant tool calls]`、`[Tool result]` 统计消息段。返回内容包含各类段数、原文 Unicode 字符数，以及首末段各不超过 80 个 Unicode 字符的缩略内容；中间原文不进入摘要，确保摘要长度不随原文线性增长。
+
+Mock Server 上报的输入 token 使用与 pi 压缩估算一致的“Unicode 码点数除以 4”近似值。压缩完成事件同时携带 pi 计算的压缩后估算值，界面可立即刷新上下文用量；下一次模型回复后再以 Mock 实际上报值校正。
 
 ---
 

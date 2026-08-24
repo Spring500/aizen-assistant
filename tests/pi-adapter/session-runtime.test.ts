@@ -344,7 +344,7 @@ describe("pi 内存会话", () => {
     await runtime.dispose()
   })
 
-  test("dev mock 长对话按真实用量触发手动压缩", async () => {
+  test("dev mock 上下文未超限时可手动压缩并降低后续用量", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-pi-mock-"))
     directories.push(directory)
     const customProvidersPath = join(directory, "custom-providers.json")
@@ -368,11 +368,7 @@ describe("pi 内存会话", () => {
     expect(model).toBeDefined()
     if (!model) return
     await runtime.setRuntimeApiKey(model.providerId, "test-key")
-    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } })
-    mock.handle((request) => ({
-      type: "text",
-      text: JSON.stringify(request.system).includes("context summarization assistant") ? "text Mock 压缩摘要" : "完成",
-    }))
+    const mock = await startMockServer()
     runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
     const records: SessionRecord[] = []
     for (let index = 0; index < 8; index += 1) {
@@ -403,7 +399,7 @@ describe("pi 内存会话", () => {
             parts: [{ kind: "text", text: "完成" }],
             source: { providerId: model.providerId, modelId: model.modelId, api: "anthropic-messages" },
             stopReason: "stop",
-            usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 },
+            usage: { input: (index + 1) * 3000, output: 1, cacheRead: 0, cacheWrite: 0 },
           },
         },
         {
@@ -419,7 +415,39 @@ describe("pi 内存会话", () => {
     const events: PiPortEvent[] = []
     runtime.subscribe((event) => events.push(event))
     await runtime.compact()
-    expect(events.some((event) => event.type === "compaction" && event.summary.includes("Mock 压缩摘要"))).toBe(true)
+    const compacted = events.find((event) => event.type === "compaction")
+    expect(compacted?.type).toBe("compaction")
+    if (compacted?.type !== "compaction") throw new Error("缺少压缩事件")
+    expect(compacted.tokensBefore).toBeLessThan(model.contextWindow ?? 0)
+    expect(compacted.estimatedTokensAfter).toBeLessThan(compacted.tokensBefore)
+    expect(compacted.summary).toContain("已压缩 10 段（用户 5、助手 5")
+    expect(compacted.summary).toContain("首段（用户）：“第 1 段")
+    expect(compacted.summary).toContain("末段（助手）：“完成”")
+    expect(compacted.summary).not.toContain("第 2 段")
+
+    await runtime.prompt({
+      recordId: "mock-after-compaction-user",
+      turnId: "mock-after-compaction-turn",
+      viewId: null,
+      items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "text 压缩后继续" }] }],
+    })
+    const requests = await mock.requests()
+    const summaryRequest = requests.find((request) =>
+      JSON.stringify(request.system).includes("context summarization assistant"),
+    )
+    const nextRequest = requests.at(-1)
+    expect(summaryRequest).toBeDefined()
+    expect(nextRequest).toBeDefined()
+    expect(JSON.stringify(nextRequest)).toContain("Mock 压缩摘要")
+    expect(JSON.stringify(nextRequest)).not.toContain("第 2 段：长上下文长上下文")
+    expect(JSON.stringify(nextRequest)).toContain("压缩后继续")
+    const reply = [...events].reverse().find((event) => event.type === "message" && event.record.role === "assistant")
+    expect(reply?.type).toBe("message")
+    if (reply?.type === "message" && reply.record.role === "assistant") {
+      const contextTokens = reply.record.usage.input + reply.record.usage.cacheRead
+      expect(contextTokens).toBeLessThan(model.contextWindow ?? 0)
+      expect(contextTokens).toBeLessThan(compacted.tokensBefore)
+    }
     await runtime.dispose()
     mock.stop()
   })
@@ -450,9 +478,15 @@ describe("pi 内存会话", () => {
     await runtime.setRuntimeApiKey(model.providerId, "test-key")
     const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } })
     let conversationRequests = 0
-    mock.handle(() => {
+    mock.handle((request) => {
       conversationRequests++
-      return { type: "text", text: `连续大文本回复-${conversationRequests}` }
+      const isOverflowRequest =
+        conversationRequests === 2 && !JSON.stringify(request.system).includes("context summarization assistant")
+      return {
+        type: "text",
+        text: `连续大文本回复-${conversationRequests}`,
+        ...(isOverflowRequest ? { inputTokens: 33_000 } : {}),
+      }
     })
     runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
     await runtime.create({ cwd: directory, model, view: emptyView })
@@ -792,6 +826,7 @@ describe("pi 内存会话", () => {
       summary: "压缩摘要",
       firstKeptRecordId: "recent-user",
       tokensBefore: expect.any(Number),
+      estimatedTokensAfter: expect.any(Number),
     })
     await runtime.dispose()
     mock.stop()
