@@ -1,3 +1,4 @@
+import { estimateMockTokens } from "../token-estimate.ts"
 import type { MockBehavior, MockEvent, MockRequestContext } from "../types.ts"
 
 function sseEvent(event: string, data: unknown): Uint8Array {
@@ -11,11 +12,12 @@ function streamError(event: Extract<MockEvent, { type: "error" }>): Response {
 /** 将抽象事件流编码为 Anthropic Messages 协议的 SSE 响应。 */
 export function encodeAnthropicEvents(
   events: AsyncIterable<MockEvent>,
-  context: Pick<MockRequestContext, "signal"> & { modelId?: string },
+  context: Pick<MockRequestContext, "signal" | "rawBody"> & { modelId?: string },
 ): Response {
   const iterator = events[Symbol.asyncIterator]()
   let started = false
   let blockIndex = 0
+  let inputTokens = estimateMockTokens(context.rawBody)
   let outputTokens = 0
   const id = `msg_${crypto.randomUUID()}`
   const stream = new ReadableStream<Uint8Array>({
@@ -58,7 +60,7 @@ export function encodeAnthropicEvents(
                 role: "assistant",
                 content: [],
                 model: context.modelId ?? "mock-model",
-                usage: { input_tokens: 1, output_tokens: 0 },
+                usage: { input_tokens: inputTokens, output_tokens: 0 },
               },
             }),
           )
@@ -115,6 +117,7 @@ export function encodeAnthropicEvents(
           )
           controller.enqueue(sseEvent("content_block_stop", { type: "content_block_stop", index }))
         } else if (event.type === "finish") {
+          inputTokens = event.inputTokens ?? inputTokens
           outputTokens = event.outputTokens ?? outputTokens
           controller.enqueue(
             sseEvent("message_delta", {
