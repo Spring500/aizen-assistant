@@ -138,6 +138,8 @@ type MockBehavior = (context: MockRequestContext) => AsyncIterable<MockEvent>
 
 摘要行为从最后一条用户消息的 `<conversation>` 标签中读取 pi 已序列化的待压缩内容，按 `[User]`、`[Assistant]`、`[Assistant thinking]`、`[Assistant tool calls]`、`[Tool result]` 统计消息段。返回内容包含各类段数、原文 Unicode 字符数，以及首末段各不超过 80 个 Unicode 字符的缩略内容；中间原文不进入摘要，确保摘要长度不随原文线性增长。
 
+Mock Server 上报的输入 token 使用与 pi 压缩估算一致的“Unicode 码点数除以 4”近似值。压缩完成事件同时携带 pi 计算的压缩后估算值，界面可立即刷新上下文用量；下一次模型回复后再以 Mock 实际上报值校正。
+
 ---
 
 ## 4. 指令解析

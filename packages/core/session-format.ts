@@ -156,6 +156,8 @@ export type CompactionRecord = {
   summary: string
   firstKeptRecordId: string
   tokensBefore: number
+  /** 压缩完成后当前消息上下文的估算 token 数；旧记录可能缺失。 */
+  estimatedTokensAfter?: number
 }
 
 export type SessionRecord =
@@ -494,6 +496,9 @@ export function parseSessionValue(value: unknown): SessionLine {
       summary: string(source.summary, "summary"),
       firstKeptRecordId: string(source.firstKeptRecordId, "firstKeptRecordId"),
       tokensBefore: finiteNumber(source.tokensBefore, "tokensBefore"),
+      ...(source.estimatedTokensAfter === undefined
+        ? {}
+        : { estimatedTokensAfter: finiteNumber(source.estimatedTokensAfter, "estimatedTokensAfter") }),
     }
   }
   throw new UnknownSessionRecordTypeError(kind)

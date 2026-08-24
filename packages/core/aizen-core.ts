@@ -30,10 +30,10 @@ import type { SkillStore } from "./skill-store.ts"
 import { PermissionClassifierRegistry } from "./tool-permissions/classifier-registry.ts"
 import { createBuiltinBashClassifier } from "./tool-permissions/classifiers/bash.ts"
 import { createBuiltinFileClassifier } from "./tool-permissions/classifiers/file.ts"
+import type { PermissionAuditRecorder } from "./tool-permissions/permission-audit.ts"
 import { PolicyPermissionManager } from "./tool-permissions/policy-manager.ts"
 import { builtinPermissionPolicies } from "./tool-permissions/policy-types.ts"
 import { sanitizePermissionAuditPayload } from "./tool-permissions/sanitizer.ts"
-import type { PermissionAuditRecorder } from "./tool-permissions/permission-audit.ts"
 import type {
   HumanReviewBatchDecision,
   HumanReviewBatchRequest,
@@ -1426,9 +1426,15 @@ export class AizenCore implements CorePort {
         summary: event.summary,
         firstKeptRecordId: event.firstKeptRecordId,
         tokensBefore: event.tokensBefore,
+        ...(event.estimatedTokensAfter === undefined ? {} : { estimatedTokensAfter: event.estimatedTokensAfter }),
       }
       const sessionId = this.#snapshot.currentSessionId
       this.#enqueueRecord(sessionId, record)
+      if (event.estimatedTokensAfter !== undefined) {
+        const total = this.#snapshot.currentModel?.contextWindow
+        this.#snapshot.contextUsage =
+          total === undefined ? { used: event.estimatedTokensAfter } : { used: event.estimatedTokensAfter, total }
+      }
     }
     // 流式/工具/消息事件的快照通知按窗口合并：同一窗口内到达的一批 delta
     // 只克隆一次快照并通知一次，避免高频 delta 下每次事件都全量克隆+重算。
@@ -1551,14 +1557,26 @@ export class AizenCore implements CorePort {
   }
 
   #contextUsageFromRecords() {
-    const assistant = [...this.#records]
+    let latestCompactionIndex = -1
+    for (let index = this.#records.length - 1; index >= 0; index -= 1) {
+      if (this.#records[index]?.kind !== "compaction") continue
+      latestCompactionIndex = index
+      break
+    }
+    const latestCompaction = latestCompactionIndex < 0 ? undefined : this.#records[latestCompactionIndex]
+    const assistant = this.#records
+      .slice(latestCompactionIndex + 1)
       .reverse()
       .find(
         (record): record is SessionRecord & { message: AssistantMessage } =>
           record.kind === "message" && record.message.role === "assistant" && this.#hasContextUsage(record.message),
       )
     const total = this.#snapshot.currentModel?.contextWindow
-    const used = assistant ? this.#contextUsageFromAssistant(assistant.message).used : 0
+    const used = assistant
+      ? this.#contextUsageFromAssistant(assistant.message).used
+      : latestCompaction?.kind === "compaction"
+        ? (latestCompaction.estimatedTokensAfter ?? 0)
+        : 0
     return total === undefined ? { used } : { used, total }
   }
 

@@ -213,6 +213,7 @@ class CompactingFakePi extends FakePi {
         summary: "摘要",
         firstKeptRecordId: "assistant-record",
         tokensBefore: 100,
+        estimatedTokensAfter: 25,
       })
       listener({ type: "settled" })
     }
@@ -1312,9 +1313,16 @@ describe("核心编排", () => {
     pi.compact = async (customInstructions?: string) => {
       pi.compactInstructions.push(customInstructions)
       for (const listener of pi.listeners)
-        listener({ type: "compaction", summary: "摘要", firstKeptRecordId: "first", tokensBefore: 120000 })
+        listener({
+          type: "compaction",
+          summary: "摘要",
+          firstKeptRecordId: "first",
+          tokensBefore: 120000,
+          estimatedTokensAfter: 30000,
+        })
     }
     expect(await core.dispatch({ type: "compact", customInstructions: "保留决策" })).toEqual({ ok: true })
+    expect(core.getSnapshot().contextUsage).toEqual({ used: 30000 })
     const loaded = await store.read(sessionId)
     expect(pi.compactInstructions).toEqual(["保留决策"])
     expect(loaded.records.filter((record) => record.kind === "turn_started")).toHaveLength(0)
@@ -1324,8 +1332,13 @@ describe("核心编排", () => {
         summary: "摘要",
         firstKeptRecordId: "first",
         tokensBefore: 120000,
+        estimatedTokensAfter: 30000,
       }),
     )
+    const restored = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
+    await restored.dispatch({ type: "open_session", sessionId })
+    expect(restored.getSnapshot().contextUsage).toEqual({ used: 30000 })
+    await restored.dispose()
     await core.dispose()
   })
 

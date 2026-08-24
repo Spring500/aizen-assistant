@@ -1,6 +1,6 @@
 import { describe, expect } from "bun:test"
-import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { parseSessionLine, type SessionRecord } from "../../packages/core/session-format.ts"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 
@@ -87,6 +87,7 @@ describe("会话格式", () => {
         summary: "摘要",
         firstKeptRecordId: "r3",
         tokensBefore: 100,
+        estimatedTokensAfter: 25,
       },
     ]
 
