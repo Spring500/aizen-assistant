@@ -140,7 +140,7 @@ describe("pi 内存会话", () => {
           promptSnippet: "演示自定义工具摘要",
           promptGuidelines: ["只在必要时使用自定义工具。", "调用后应汇报用途。"],
         },
-        execute: async () => ({ content: [{ type: "text", text: "完成" }], details: undefined }),
+        execute: async () => ({ content: [{ type: "text", text: "完成" }] }),
       },
     ])
     const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } }).then((mock) => {
