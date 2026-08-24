@@ -23,7 +23,7 @@ import type {
   TurnStartedRecord,
   ViewId,
 } from "./session-format.ts"
-import { projectVisibleSessionRecords } from "./session-projection.ts"
+import { projectConversationHistory, projectCurrentTranscriptRecords } from "./session-projection.ts"
 import { recoverInterruptedToolCalls } from "./session-recovery.ts"
 import { InvalidSessionRecordError, SessionLockedError, type SessionStore } from "./session-store.ts"
 import type { SkillStore } from "./skill-store.ts"
@@ -145,6 +145,8 @@ export class AizenCore implements CorePort {
       authProviders: [],
       piProviders: [],
       transcript: [],
+      transcriptRevision: 0,
+      historyTurns: [],
       activeTools: [],
       pendingPermissionRequests: [],
       streamingText: "",
@@ -645,6 +647,8 @@ export class AizenCore implements CorePort {
     }
     this.#snapshot.pendingPermissionRequests = []
     this.#snapshot.transcript = []
+    this.#snapshot.transcriptRevision += 1
+    this.#snapshot.historyTurns = []
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
@@ -704,8 +708,7 @@ export class AizenCore implements CorePort {
         delete this.#snapshot.currentPermissionReviewMode
       }
       this.#snapshot.pendingPermissionRequests = []
-      const visibleRecords = projectVisibleSessionRecords(loaded.records)
-      this.#snapshot.transcript = recordsToTranscript(visibleRecords)
+      this.#refreshConversationProjection(loaded.records)
       this.#snapshot.streamingText = ""
       this.#snapshot.streamingThinking = ""
       delete this.#snapshot.responseMetrics
@@ -753,7 +756,7 @@ export class AizenCore implements CorePort {
     this.#snapshot.currentModel = modelRecord.model
     this.#snapshot.currentViewId = viewRecord.viewId
     this.#snapshot.pendingPermissionRequests = []
-    this.#snapshot.transcript = recordsToTranscript(projectVisibleSessionRecords(records))
+    this.#refreshConversationProjection(records)
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
     delete this.#snapshot.responseMetrics
@@ -930,6 +933,7 @@ export class AizenCore implements CorePort {
     this.#records.push(started)
     this.#currentTurnId = turnId
     this.#snapshot.transcript.push({ type: "input", turnId, items: started.items })
+    this.#snapshot.transcriptRevision += 1
     this.#snapshot.status = "running"
     this.#snapshot.streamingText = ""
     this.#snapshot.streamingThinking = ""
@@ -990,7 +994,7 @@ export class AizenCore implements CorePort {
         throw actual
       }
       this.#records.push(finished)
-      this.#snapshot.transcript.push({ type: "turn_end", turnId, outcome })
+      this.#refreshConversationProjection()
       if (error) this.#reportError(error.message)
     } finally {
       this.#snapshot.status = "idle"
@@ -1404,6 +1408,7 @@ export class AizenCore implements CorePort {
       const sessionId = this.#snapshot.currentSessionId
       this.#enqueueRecord(sessionId, record)
       this.#snapshot.transcript.push({ type: "message", turnId: this.#currentTurnId, message: event.record })
+      this.#snapshot.transcriptRevision += 1
       // 提取为局部常量以便对消息角色做判别式收窄。
       const messageRecord = event.record
       if (messageRecord.role === "assistant") {
@@ -1429,16 +1434,29 @@ export class AizenCore implements CorePort {
         ...(event.estimatedTokensAfter === undefined ? {} : { estimatedTokensAfter: event.estimatedTokensAfter }),
       }
       const sessionId = this.#snapshot.currentSessionId
-      this.#enqueueRecord(sessionId, record)
-      if (event.estimatedTokensAfter !== undefined) {
-        const total = this.#snapshot.currentModel?.contextWindow
-        this.#snapshot.contextUsage =
-          total === undefined ? { used: event.estimatedTokensAfter } : { used: event.estimatedTokensAfter, total }
-      }
+      void this.#appendRecord(sessionId, record)
+        .then(() => {
+          if (this.#snapshot.currentSessionId !== sessionId) return
+          this.#refreshConversationProjection()
+          if (event.estimatedTokensAfter !== undefined) {
+            const total = this.#snapshot.currentModel?.contextWindow
+            this.#snapshot.contextUsage =
+              total === undefined ? { used: event.estimatedTokensAfter } : { used: event.estimatedTokensAfter, total }
+          }
+          this.#scheduleSnapshotNotify()
+        })
+        .catch(() => {})
     }
     // 流式/工具/消息事件的快照通知按窗口合并：同一窗口内到达的一批 delta
     // 只克隆一次快照并通知一次，避免高频 delta 下每次事件都全量克隆+重算。
     this.#scheduleSnapshotNotify()
+  }
+
+  /** 使用完整记录同时刷新主对话投影和历史操作轮次。 */
+  #refreshConversationProjection(records: SessionRecord[] = this.#records): void {
+    this.#snapshot.transcript = recordsToTranscript(projectCurrentTranscriptRecords(records, this.#currentTurnId))
+    this.#snapshot.historyTurns = projectConversationHistory(records)
+    this.#snapshot.transcriptRevision += 1
   }
 
   async #appendRecord(sessionId: string, record: SessionRecord): Promise<void> {

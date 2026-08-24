@@ -1830,26 +1830,12 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   }
 
   function userTurnOptions() {
-    const transcript = core.getSnapshot().transcript
-    const completedTurns = new Set(transcript.filter((entry) => entry.type === "turn_end").map((entry) => entry.turnId))
-    return transcript
-      .filter(
-        (entry): entry is Extract<(typeof transcript)[number], { type: "input" }> =>
-          entry.type === "input" && completedTurns.has(entry.turnId),
-      )
-      .map((entry, index) => {
-        const text = entry.items
-          .filter((item) => item.source === "user")
-          .flatMap((item) => item.parts)
-          .filter((part) => part.kind === "text")
-          .map((part) => part.text.trim())
-          .find(Boolean)
-        return {
-          name: text || `第 ${index + 1} 轮`,
-          description: `回到第 ${index + 1} 轮之前`,
-          value: { turnId: entry.turnId, text: text ?? "" },
-        }
-      })
+    return core.getSnapshot().historyTurns.map((entry, index) => ({
+      name: `${entry.compacted ? "[压缩前] " : ""}${entry.text || `第 ${index + 1} 轮`}`,
+      description: `回到第 ${index + 1} 轮之前${entry.compacted ? "；该轮已被当前摘要替代" : ""}`,
+      value: { turnId: entry.turnId, text: entry.text },
+      ...(entry.compacted ? { tone: "muted" as const } : {}),
+    }))
   }
 
   async function changeConversation(action: "rewind" | "fork"): Promise<void> {

@@ -1335,10 +1335,61 @@ describe("核心编排", () => {
         estimatedTokensAfter: 30000,
       }),
     )
+    expect(core.getSnapshot().transcript).toContainEqual(
+      expect.objectContaining({ type: "compaction_summary", summary: "摘要", tokensBefore: 120000 }),
+    )
+    expect(core.getSnapshot().historyTurns).toEqual([])
+    await core.dispose()
+
     const restored = new AizenCore({ cwd: "E:\\project", store, pi: new FakePi() })
     await restored.dispatch({ type: "open_session", sessionId })
     expect(restored.getSnapshot().contextUsage).toEqual({ used: 30000 })
     await restored.dispose()
+  })
+
+  test("压缩后主对话重绘且完整轮次仍可回退", async () => {
+    const root = await mkdtemp(join(tmpdir(), "aizen-core-"))
+    directories.push(root)
+    const store = new SessionStore(root)
+    const pi = new FakePi()
+    const core = new AizenCore({ cwd: "E:\\project", store, pi })
+
+    await core.dispatch({ type: "create_session", model, viewId: null })
+    await core.dispatch({ type: "send_prompt", text: "旧问题" })
+    await core.dispatch({ type: "send_prompt", text: "保留问题" })
+    const [oldTurn, recentTurn] = core.getSnapshot().historyTurns
+    if (!oldTurn || !recentTurn) throw new Error("缺少压缩测试轮次")
+    const records = (await store.read(core.getSnapshot().currentSessionId ?? "")).records
+    const recentStart = records.find((record) => record.kind === "turn_started" && record.turnId === recentTurn.turnId)
+    if (!recentStart) throw new Error("缺少保留边界记录")
+    pi.compact = async () => {
+      for (const listener of pi.listeners)
+        listener({
+          type: "compaction",
+          summary: "旧问题摘要",
+          firstKeptRecordId: recentStart.recordId,
+          tokensBefore: 120000,
+        })
+    }
+
+    expect(await core.dispatch({ type: "compact" })).toEqual({ ok: true })
+    expect(
+      core.getSnapshot().transcript.some((entry) => entry.type === "input" && entry.turnId === oldTurn.turnId),
+    ).toBe(false)
+    expect(JSON.stringify(core.getSnapshot().transcript)).toContain("旧问题摘要")
+    expect(JSON.stringify(core.getSnapshot().transcript)).toContain("保留问题")
+    expect(core.getSnapshot().historyTurns).toEqual([
+      expect.objectContaining({ turnId: oldTurn.turnId, compacted: true }),
+      expect.objectContaining({ turnId: recentTurn.turnId, compacted: false }),
+    ])
+
+    expect(await core.dispatch({ type: "rewind", turnId: recentTurn.turnId })).toEqual({ ok: true })
+    expect(JSON.stringify(core.getSnapshot().transcript)).toContain("旧问题")
+    expect(JSON.stringify(core.getSnapshot().transcript)).not.toContain("旧问题摘要")
+    expect(core.getSnapshot().historyTurns).toEqual([
+      expect.objectContaining({ turnId: oldTurn.turnId, compacted: false }),
+    ])
+    await core.dispose()
     await core.dispose()
   })
 
