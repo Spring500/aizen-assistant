@@ -14,13 +14,13 @@ import { builtinModels } from "@earendil-works/pi-ai/providers/all"
 import {
   type AgentSession,
   createAgentSession,
-  createBashTool,
-  createEditTool,
-  createFindTool,
-  createGrepTool,
-  createLsTool,
-  createReadTool,
-  createWriteTool,
+  createBashToolDefinition,
+  createEditToolDefinition,
+  createFindToolDefinition,
+  createGrepToolDefinition,
+  createLsToolDefinition,
+  createReadToolDefinition,
+  createWriteToolDefinition,
   DEFAULT_COMPACTION_SETTINGS,
   DefaultResourceLoader,
   getShellConfig,
@@ -236,20 +236,24 @@ function auditedTools(
   const declaredIntentSchema = Type.String({
     minLength: 1,
     maxLength: 50,
-    description: "用不超过 50 个字符的一句话说明本次工具调用的目的，供用户阅读和审计",
+    description: "One sentence (max 50 characters) stating the purpose of this tool call, for user review and audit.",
   })
   return [
-    createReadTool(cwd),
-    createBashTool(cwd),
-    createEditTool(cwd),
-    createWriteTool(cwd),
-    createGrepTool(cwd),
-    createFindTool(cwd),
-    createLsTool(cwd),
+    createReadToolDefinition(cwd),
+    createBashToolDefinition(cwd),
+    createEditToolDefinition(cwd),
+    createWriteToolDefinition(cwd),
+    createGrepToolDefinition(cwd),
+    createFindToolDefinition(cwd),
+    createLsToolDefinition(cwd),
   ].map((tool) => ({
     name: tool.name,
     label: tool.label,
     description: tool.description,
+    ...(tool.promptSnippet ? { promptSnippet: tool.promptSnippet } : {}),
+    ...(tool.promptGuidelines && tool.promptGuidelines.length > 0
+      ? { promptGuidelines: [...tool.promptGuidelines] }
+      : {}),
     parameters: Type.Object({ ...tool.parameters.properties, declaredIntent: declaredIntentSchema }),
     ...(tool.executionMode ? { executionMode: tool.executionMode } : {}),
     async execute(callId, params, signal, onUpdate) {
@@ -283,7 +287,13 @@ function auditedTools(
           at: new Date().toISOString(),
         })
       try {
-        const result = await tool.execute(callId, authorization.arguments as never, signal, onUpdate)
+        const result = await tool.execute(
+          callId,
+          authorization.arguments as never,
+          signal,
+          onUpdate,
+          undefined as never,
+        )
         if (request)
           await recordExecution?.({
             phase: "executionFinished",
@@ -321,7 +331,7 @@ function registeredTools(
   const declaredIntentSchema = Type.String({
     minLength: 1,
     maxLength: 50,
-    description: "用不超过 50 个字符的一句话说明本次工具调用的目的，供用户阅读和审计",
+    description: "One sentence (max 50 characters) stating the purpose of this tool call, for user review and audit.",
   })
   return registrations.map((registration) => {
     const schema = registration.descriptor.parameters
@@ -343,6 +353,10 @@ function registeredTools(
       name: registration.descriptor.name,
       label: registration.descriptor.label,
       description: registration.descriptor.description,
+      ...(registration.descriptor.promptSnippet ? { promptSnippet: registration.descriptor.promptSnippet } : {}),
+      ...(registration.descriptor.promptGuidelines && registration.descriptor.promptGuidelines.length > 0
+        ? { promptGuidelines: [...registration.descriptor.promptGuidelines] }
+        : {}),
       parameters: parameters as never,
       ...(registration.descriptor.executionMode ? { executionMode: registration.descriptor.executionMode } : {}),
       async execute(callId, params, signal, onUpdate) {
