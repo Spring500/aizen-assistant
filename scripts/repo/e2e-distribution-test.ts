@@ -4,9 +4,9 @@
  * 用法：bun run scripts/repo/e2e-distribution-test.ts [--with-path]
  *
  * 流程：构建产物 → 打包 v0.1.0 / v0.2.0（两包携带内容不同的 launcher，验证自更新换位）→
- * 本地 mock release 服务器 → 以 --install-dir 安装到临时目录（查 latest=v0.1.0）→
+ * 本地 mock release 服务器 → 以 --install-dir 安装到临时目录（跟随网页重定向取得 v0.1.0）→
  * 断言多版本布局（launcher + versions 真实可执行文件 + current）→
- * 切到 latest=v0.2.0 后经 launcher 执行 update --release-api（进程运行中完成更新）→
+ * 切到 v0.2.0 后经 launcher 执行 update --release-api（验证兼容的镜像 API 路径）→
  * 断言版本落位、current 切换与 launcher 自更新 → 执行 uninstall --yes → 断言整个安装根被删除。
  *
  * 默认 --skip-path（不写真实注册表、不依赖环境变量）；--with-path 时真实执行用户 PATH 写入与回滚
@@ -77,7 +77,7 @@ async function startMockServer(assetsDir: string, version: string, port: number)
     stdout: "pipe",
     stderr: "pipe",
   })
-  await waitForServer(`http://localhost:${port}/releases/latest`)
+  await waitForServer(`http://localhost:${port}/Spring500/aizen-assistant/releases/latest`)
   return proc
 }
 
@@ -153,8 +153,8 @@ async function main(): Promise<void> {
       "--install-dir",
       join(tempHome, ".aizen", "bin"),
       ...(withPath ? [] : ["--skip-path"]),
-      "--api-url",
-      `http://localhost:${MOCK_PORT_V1}`,
+      "--latest-url",
+      `http://localhost:${MOCK_PORT_V1}/Spring500/aizen-assistant/releases/latest`,
       "--download-url",
       `http://localhost:${MOCK_PORT_V1}/download`,
     ]

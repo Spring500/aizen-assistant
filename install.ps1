@@ -12,9 +12,11 @@
 $ErrorActionPreference = "Stop"
 
 $Repository = "Spring500/aizen-assistant"
-# 发布 API 与下载基地址；可通过 --api-url / --download-url 覆盖（自建镜像或测试场景）。
+# 发布网页、API 与下载基地址；可通过 --latest-url / --api-url / --download-url 覆盖测试或镜像入口。
+$ReleaseLatest = "https://github.com/$Repository/releases/latest"
 $ReleaseApi = "https://api.github.com/repos/$Repository"
 $ReleaseDownload = "https://github.com/$Repository/releases/download"
+$CustomApi = $false
 # 首版已发布平台（与 release 矩阵保持一致；win/linux arm64 待验证后增补，Intel Mac 暂不支持）。
 $SupportedPlatforms = @("windows-x64", "linux-x64", "darwin-arm64")
 $ConfigDir = Join-Path $env:USERPROFILE ".aizen"
@@ -28,16 +30,17 @@ $SkipPath = $false
 # 资产须经鉴权资产 API 下载；正式安装路径不使用 token，行为不变。
 $Token = if ($env:GITHUB_TOKEN) { $env:GITHUB_TOKEN } else { "" }
 
-# 解析参数：--version / --install-dir / --api-url / --download-url / --token / --skip-path；兼容位置参数形式传入版本号。
+# 解析参数：--version / --install-dir / --latest-url / --api-url / --download-url / --token / --skip-path；兼容位置参数形式传入版本号。
 for ($i = 0; $i -lt $args.Count; $i++) {
   switch ($args[$i]) {
     "--version" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--version 必须提供值" }; $RequestedVersion = $args[$i]; break }
     "--install-dir" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--install-dir 必须提供值" }; $InstallDir = $args[$i]; $ConfigDir = Split-Path $InstallDir -Parent; $VersionsDir = Join-Path $ConfigDir "versions"; $DataDir = Join-Path $ConfigDir "data"; break }
-    "--api-url" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--api-url 必须提供值" }; $ReleaseApi = $args[$i]; break }
+    "--latest-url" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--latest-url 必须提供值" }; $ReleaseLatest = $args[$i]; break }
+    "--api-url" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--api-url 必须提供值" }; $ReleaseApi = $args[$i]; $CustomApi = $true; break }
     "--download-url" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--download-url 必须提供值" }; $ReleaseDownload = $args[$i]; break }
     "--token" { $i++; if ($i -ge $args.Count -or $args[$i].StartsWith("--")) { throw "--token 必须提供值" }; $Token = $args[$i]; break }
     "--skip-path" { $SkipPath = $true; break }
-    "-h" { Write-Host "用法：install.ps1 [版本号] [--version <v>] [--install-dir <目录>] [--api-url <url>] [--download-url <url>] [--token <gh-token>] [--skip-path]"; exit 0 }
+    "-h" { Write-Host "用法：install.ps1 [版本号] [--version <v>] [--install-dir <目录>] [--latest-url <url>] [--api-url <url>] [--download-url <url>] [--token <gh-token>] [--skip-path]"; exit 0 }
     default { if ($RequestedVersion -eq "") { $RequestedVersion = $args[$i] } else { throw "未知参数：$($args[$i])" } }
   }
 }
@@ -52,17 +55,25 @@ function Get-Platform {
   }
 }
 
-# 查询最新发布版本号（去掉 v 前缀）；404 表示仓库尚无发布，其它失败保留原始异常信息便于诊断。
+# 查询最新正式版本号（去掉 v 前缀）。默认跟随 GitHub Releases 网页重定向，避免匿名 REST API 限流；
+# 显式 --api-url 时保留 JSON API 兼容路径，供测试和自建镜像使用。
 function Get-LatestVersion {
   try {
-    $release = Invoke-RestMethod -Uri "$ReleaseApi/releases/latest" -Headers @{ "User-Agent" = "aizen-assistant" }
-    return $release.tag_name.TrimStart("v")
-  } catch {
-    $status = 0
-    if ($_.Exception.Response) { $status = [int]$_.Exception.Response.StatusCode }
-    if ($status -eq 404) {
-      throw "仓库尚无正式发布（releases/latest 返回 404），请稍后重试或指定历史版本"
+    if ($CustomApi) {
+      $release = Invoke-RestMethod -Uri "$ReleaseApi/releases/latest" -Headers @{ "User-Agent" = "aizen-assistant" }
+      $tag = [string]$release.tag_name
+    } else {
+      $response = Invoke-WebRequest -UseBasicParsing -Method Head -Uri $ReleaseLatest -Headers @{ "User-Agent" = "aizen-assistant" }
+      $finalUri = $response.BaseResponse.ResponseUri.AbsoluteUri
+      $escapedRepository = [regex]::Escape($Repository)
+      if ($finalUri -notmatch "/$escapedRepository/releases/tag/(v[^/?#]+)(?:[/?#]|$)") {
+        throw "最新版本地址格式异常：$finalUri"
+      }
+      $tag = [uri]::UnescapeDataString($Matches[1])
     }
+    if (-not $tag.StartsWith("v") -or $tag.Length -lt 2) { throw "最新 release 的 tag 格式异常" }
+    return $tag.Substring(1)
+  } catch {
     throw "无法获取最新版本：$($_.Exception.Message)"
   }
 }

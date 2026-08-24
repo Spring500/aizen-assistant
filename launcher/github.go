@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -24,7 +26,7 @@ type release struct {
 	Assets     []releaseAsset `json:"assets"`
 }
 
-// githubClient 访问 GitHub release API 的最小客户端；token 为空时匿名访问（仅见正式发布）。
+// githubClient 访问 GitHub Release 网页、下载地址与预发布 API 的最小客户端。
 type githubClient struct {
 	apiBase string
 	token   string
@@ -35,14 +37,14 @@ func newGithubClient(apiBase, token string) *githubClient {
 	return &githubClient{apiBase: apiBase, token: token, http: &http.Client{Timeout: 120 * time.Second}}
 }
 
-func (c *githubClient) request(method, url, accept string) (*http.Response, error) {
+func (c *githubClient) request(method, url, accept string, authenticated bool) (*http.Response, error) {
 	req, err := http.NewRequest(method, url, nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("User-Agent", "aizen-assistant")
 	req.Header.Set("Accept", accept)
-	if c.token != "" {
+	if authenticated && c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 	}
 	resp, err := c.http.Do(req)
@@ -56,9 +58,9 @@ func (c *githubClient) request(method, url, accept string) (*http.Response, erro
 	return resp, nil
 }
 
-// latestRelease 查询最新正式发布（releases/latest；GitHub 天然排除 Draft 与 Prerelease）。
-func (c *githubClient) latestRelease() (*release, error) {
-	resp, err := c.request("GET", c.apiBase+"/releases/latest", "application/vnd.github+json")
+// latestReleaseFromAPI 通过 Release API 查询最新正式发布；仅用于显式指定的镜像 API。
+func (c *githubClient) latestReleaseFromAPI() (*release, error) {
+	resp, err := c.request("GET", c.apiBase+"/releases/latest", "application/vnd.github+json", true)
 	if err != nil {
 		return nil, fmt.Errorf("查询最新版本失败：%w", err)
 	}
@@ -70,9 +72,53 @@ func (c *githubClient) latestRelease() (*release, error) {
 	return &r, nil
 }
 
+// releaseTagFromURL 从 GitHub latest 重定向后的 URL 提取 release tag，并拒绝非预期路径。
+func releaseTagFromURL(rawURL, repository string) (string, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "", fmt.Errorf("解析最新版本地址失败：%w", err)
+	}
+	prefix := "/" + strings.Trim(repository, "/") + "/releases/tag/"
+	if !strings.HasPrefix(parsed.EscapedPath(), prefix) {
+		return "", fmt.Errorf("最新版本地址格式异常：%s", rawURL)
+	}
+	escapedTag := strings.TrimPrefix(parsed.EscapedPath(), prefix)
+	if escapedTag == "" || strings.Contains(escapedTag, "/") {
+		return "", fmt.Errorf("最新版本地址格式异常：%s", rawURL)
+	}
+	tag, err := url.PathUnescape(escapedTag)
+	if err != nil || len(tag) < 2 || tag[0] != 'v' {
+		return "", fmt.Errorf("最新 release 的 tag 格式异常")
+	}
+	return tag, nil
+}
+
+// latestStableRelease 通过网页重定向确定最新正式版，并按发布命名约定构造资产地址。
+func (c *githubClient) latestStableRelease(latestURL, repository, releasesBase, platform string) (*release, error) {
+	resp, err := c.request("HEAD", latestURL, "text/html", false)
+	if err != nil {
+		return nil, fmt.Errorf("查询最新版本失败：%w", err)
+	}
+	defer resp.Body.Close()
+	tag, err := releaseTagFromURL(resp.Request.URL.String(), repository)
+	if err != nil {
+		return nil, err
+	}
+	version := strings.TrimPrefix(tag, "v")
+	assetName := fmt.Sprintf("aizen-assistant-%s-%s.zip", version, platform)
+	downloadBase := strings.TrimRight(releasesBase, "/") + "/" + url.PathEscape(tag)
+	return &release{
+		TagName: tag,
+		Assets: []releaseAsset{
+			{Name: assetName, BrowserDownloadURL: downloadBase + "/" + url.PathEscape(assetName)},
+			{Name: "SHA256SUMS", BrowserDownloadURL: downloadBase + "/SHA256SUMS"},
+		},
+	}, nil
+}
+
 // latestIncludingPrereleases 查询含 Draft/Prerelease 的最高版本（--pre 模式；Draft 仅 token 可见）。
 func (c *githubClient) latestIncludingPrereleases() (*release, error) {
-	resp, err := c.request("GET", c.apiBase+"/releases?per_page=100", "application/vnd.github+json")
+	resp, err := c.request("GET", c.apiBase+"/releases?per_page=100", "application/vnd.github+json", true)
 	if err != nil {
 		return nil, fmt.Errorf("查询发布列表失败：%w", err)
 	}
@@ -97,15 +143,17 @@ func (c *githubClient) latestIncludingPrereleases() (*release, error) {
 	return best, nil
 }
 
-// downloadAsset 下载资产到本地路径：token 模式走资产 API（Draft 资产无匿名 URL），匿名模式走 browser_download_url。
+// downloadAsset 下载资产到本地路径：有资产 ID 的 token 模式走资产 API，正式版确定性地址直接下载。
 func (c *githubClient) downloadAsset(asset *releaseAsset, dest string) error {
 	url := asset.BrowserDownloadURL
 	accept := "application/vnd.github+json"
-	if c.token != "" {
+	authenticated := false
+	if c.token != "" && asset.ID > 0 {
 		url = fmt.Sprintf("%s/releases/assets/%d", c.apiBase, asset.ID)
 		accept = "application/octet-stream"
+		authenticated = true
 	}
-	resp, err := c.request("GET", url, accept)
+	resp, err := c.request("GET", url, accept, authenticated)
 	if err != nil {
 		return fmt.Errorf("下载 %s 失败：%w", asset.Name, err)
 	}

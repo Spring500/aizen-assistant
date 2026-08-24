@@ -1,8 +1,27 @@
 import { describe, expect } from "bun:test"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
-import { compareVersions } from "../../apps/tui/self-update.ts"
+import { compareVersions, releaseTagFromUrl } from "../../apps/tui/self-update.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
+
+describe("releaseTagFromUrl", () => {
+  test("提取目标仓库的正式版本 tag", () => {
+    expect(releaseTagFromUrl("https://github.com/Spring500/aizen-assistant/releases/tag/v0.3.0")).toBe("v0.3.0")
+    expect(releaseTagFromUrl("https://github.com/Spring500/aizen-assistant/releases/tag/v0.3.1%2Bbuild.1")).toBe(
+      "v0.3.1+build.1",
+    )
+  })
+
+  test("拒绝错误仓库、路径和 tag", () => {
+    expect(() => releaseTagFromUrl("https://github.com/other/repo/releases/tag/v0.3.0")).toThrow("最新版本地址格式异常")
+    expect(() => releaseTagFromUrl("https://github.com/Spring500/aizen-assistant/releases/latest")).toThrow(
+      "最新版本地址格式异常",
+    )
+    expect(() => releaseTagFromUrl("https://github.com/Spring500/aizen-assistant/releases/tag/0.3.0")).toThrow(
+      "最新 release 的 tag 格式异常",
+    )
+  })
+})
 
 describe("compareVersions", () => {
   test("三段版本号比较", () => {

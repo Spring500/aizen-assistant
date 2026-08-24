@@ -15,16 +15,13 @@ import { chmod, copyFile, mkdir, mkdtemp, readdir, rename, rm } from "node:fs/pr
 import { existsSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { $ } from "bun"
-import {
-  type InstallRecord,
-  installRecordPath,
-  readInstallRecord,
-  writeInstallRecord,
-} from "../../packages/core/install-record.ts"
+import { type InstallRecord, readInstallRecord, writeInstallRecord } from "../../packages/core/install-record.ts"
 import { quotedPowerShell, scheduleDeferredPowerShell } from "./deferred-powershell.ts"
 
-/** 默认 GitHub API 基地址，用于查询最新 release；资产 URL 取自返回 JSON，无需额外配置。 */
-const DEFAULT_RELEASE_API = "https://api.github.com/repos/Spring500/aizen-assistant"
+/** 默认 GitHub Release 网页与下载基地址；正式版不访问匿名 REST API。 */
+const DEFAULT_RELEASE_LATEST = "https://github.com/Spring500/aizen-assistant/releases/latest"
+const DEFAULT_RELEASE_DOWNLOAD = "https://github.com/Spring500/aizen-assistant/releases/download"
+const GITHUB_REPOSITORY = "Spring500/aizen-assistant"
 
 /** 发布包内 launcher 的文件名（全平台附带；Windows 带 .exe 后缀）。 */
 const PACKAGE_LAUNCHER_NAME = process.platform === "win32" ? "launcher.exe" : "launcher"
@@ -83,22 +80,54 @@ type LatestRelease = {
   assets: { name: string; url: string }[]
 }
 
-/** 查询仓库最新 release；releaseApi 为 API 基地址（测试或自建镜像场景传入）。 */
-async function fetchLatestRelease(releaseApi: string): Promise<LatestRelease> {
-  const response = await fetch(`${releaseApi}/releases/latest`, {
-    headers: { Accept: "application/vnd.github+json", "User-Agent": "aizen-assistant" },
+/** 从 GitHub latest 重定向后的 URL 提取目标仓库 release tag。 */
+export function releaseTagFromUrl(rawUrl: string, repository = GITHUB_REPOSITORY): string {
+  const url = new URL(rawUrl)
+  const prefix = `/${repository}/releases/tag/`
+  if (!url.pathname.startsWith(prefix)) throw new Error(`最新版本地址格式异常：${rawUrl}`)
+  const encodedTag = url.pathname.slice(prefix.length)
+  if (!encodedTag || encodedTag.includes("/")) throw new Error(`最新版本地址格式异常：${rawUrl}`)
+  const tag = decodeURIComponent(encodedTag)
+  if (!tag.startsWith("v") || tag.length < 2) throw new Error("最新 release 的 tag 格式异常")
+  return tag
+}
+
+/** 查询最新正式 release；默认走网页重定向，显式 releaseApi 时保留镜像 JSON API 兼容路径。 */
+async function fetchLatestRelease(releaseApi: string | undefined, platform: string): Promise<LatestRelease> {
+  if (releaseApi) {
+    const response = await fetch(`${releaseApi}/releases/latest`, {
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "aizen-assistant" },
+      signal: AbortSignal.timeout(30_000),
+    })
+    if (!response.ok) throw new Error(`查询最新版本失败：HTTP ${response.status}`)
+    const payload = (await response.json()) as {
+      tag_name?: string
+      assets?: { name: string; browser_download_url: string }[]
+    }
+    const tag = payload.tag_name ?? ""
+    if (!tag.startsWith("v")) throw new Error("最新 release 的 tag 格式异常")
+    return {
+      version: tag.slice(1),
+      assets: (payload.assets ?? []).map((asset) => ({ name: asset.name, url: asset.browser_download_url })),
+    }
+  }
+
+  const response = await fetch(DEFAULT_RELEASE_LATEST, {
+    method: "HEAD",
+    headers: { "User-Agent": "aizen-assistant" },
     signal: AbortSignal.timeout(30_000),
   })
   if (!response.ok) throw new Error(`查询最新版本失败：HTTP ${response.status}`)
-  const payload = (await response.json()) as {
-    tag_name?: string
-    assets?: { name: string; browser_download_url: string }[]
-  }
-  const tag = payload.tag_name ?? ""
-  if (!tag.startsWith("v")) throw new Error("最新 release 的 tag 格式异常")
+  const tag = releaseTagFromUrl(response.url)
+  const version = tag.slice(1)
+  const baseUrl = `${DEFAULT_RELEASE_DOWNLOAD}/${encodeURIComponent(tag)}`
+  const assetName = `aizen-assistant-${version}-${platform}.zip`
   return {
-    version: tag.slice(1),
-    assets: (payload.assets ?? []).map((asset) => ({ name: asset.name, url: asset.browser_download_url })),
+    version,
+    assets: [
+      { name: assetName, url: `${baseUrl}/${encodeURIComponent(assetName)}` },
+      { name: "SHA256SUMS", url: `${baseUrl}/SHA256SUMS` },
+    ],
   }
 }
 
@@ -246,7 +275,7 @@ export async function runUpdate(releaseApi?: string): Promise<number> {
 
   let release: LatestRelease
   try {
-    release = await fetchLatestRelease(releaseApi ?? DEFAULT_RELEASE_API)
+    release = await fetchLatestRelease(releaseApi, record.platform)
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error))
     return 1
