@@ -424,6 +424,15 @@ function registeredTools(
   })
 }
 
+function compactionSettings(contextWindow: number) {
+  const proportionalLimit = Math.max(1, Math.floor(contextWindow * 0.25))
+  return {
+    enabled: true,
+    reserveTokens: Math.min(DEFAULT_COMPACTION_SETTINGS.reserveTokens, proportionalLimit),
+    keepRecentTokens: Math.min(DEFAULT_COMPACTION_SETTINGS.keepRecentTokens, proportionalLimit),
+  }
+}
+
 export class PiSessionRuntime implements PiPort {
   readonly #modelRuntime: ModelRuntime
   readonly #customProvidersPath: string | null
@@ -534,11 +543,7 @@ export class PiSessionRuntime implements PiPort {
       throw new PiModelRuntimeError(error instanceof Error ? error.message : String(error))
     }
     const settingsManager = SettingsManager.inMemory({
-      compaction: {
-        enabled: true,
-        reserveTokens: DEFAULT_COMPACTION_SETTINGS.reserveTokens,
-        keepRecentTokens: DEFAULT_COMPACTION_SETTINGS.keepRecentTokens,
-      },
+      compaction: compactionSettings(model.contextWindow),
       retry: { enabled: false },
     })
     const initialLoader = createViewLoader(input.cwd, input.view, settingsManager)
@@ -767,25 +772,41 @@ export class PiSessionRuntime implements PiPort {
     const session = this.#requireSession()
     if (this.#activePrompt || this.#activeCompaction || !session.isIdle)
       throw new Error("生成或执行工具期间不能压缩会话")
-    const running = session.compact(customInstructions).then(() => {})
+    const running = this.#compactSession(session, customInstructions)
     this.#activeCompaction = running
     try {
       await running
     } finally {
-      // pi 的手动压缩无论成功或失败都会重新订阅 Agent；adapter 也必须在 finally
-      // 中重订阅，保证下一轮仍在 pi 完成消息持久化后读取 SessionManager。
-      this.#subscribeAgentMessages(session)
       if (this.#activeCompaction === running) this.#activeCompaction = undefined
+    }
+  }
+
+  /** 执行一次压缩，并在任意结果后恢复 pi 持久化优先的监听器顺序。 */
+  async #compactSession(session: AgentSession, customInstructions?: string): Promise<void> {
+    try {
+      await session.compact(customInstructions)
+    } finally {
+      this.#subscribeAgentMessages(session)
+    }
+  }
+
+  /** 阈值压缩与 pi 原生自动压缩一致：不可压缩或摘要失败时跳过，不阻断普通对话。 */
+  async #tryThresholdCompaction(session: AgentSession): Promise<void> {
+    try {
+      await this.#compactSession(session)
+    } catch {
+      // pi 的自动压缩入口在准备为空或摘要失败时返回 false；这里保持相同的降级语义。
     }
   }
 
   async #compactBeforePrompt(session: AgentSession): Promise<void> {
     const assistant = this.#lastAssistant(session)
     if (!assistant || assistant.stopReason === "aborted") return
-    if (isContextOverflow(assistant, session.model?.contextWindow ?? 0) || this.#overCompactionThreshold(session)) {
-      await session.compact()
-      this.#subscribeAgentMessages(session)
+    if (isContextOverflow(assistant, session.model?.contextWindow ?? 0)) {
+      await this.#compactSession(session)
+      return
     }
+    if (this.#overCompactionThreshold(session)) await this.#tryThresholdCompaction(session)
   }
 
   async #compactAfterPrompt(
@@ -797,22 +818,17 @@ export class PiSessionRuntime implements PiPort {
     if (!assistant) return
     if (isContextOverflow(assistant, session.model?.contextWindow ?? 0)) {
       if (assistant.stopReason === "stop") {
-        await session.compact()
-        this.#subscribeAgentMessages(session)
+        await this.#compactSession(session)
         return
       }
-      await session.compact()
-      this.#subscribeAgentMessages(session)
+      await this.#compactSession(session)
       const messages = session.agent.state.messages
       if (messages.at(-1) === assistant) session.agent.state.messages = messages.slice(0, -1)
       this.#restoreCurrentTurnMessages(session, currentMessages, persistentMessages)
       await session.agent.continue()
       return
     }
-    if (this.#overCompactionThreshold(session)) {
-      await session.compact()
-      this.#subscribeAgentMessages(session)
-    }
+    if (this.#overCompactionThreshold(session)) await this.#tryThresholdCompaction(session)
   }
 
   #restoreCurrentTurnMessages(
@@ -833,7 +849,7 @@ export class PiSessionRuntime implements PiPort {
   #overCompactionThreshold(session: AgentSession): boolean {
     const usage = session.getContextUsage()
     if (usage?.tokens === null || usage === undefined) return false
-    return shouldCompact(usage.tokens, usage.contextWindow, DEFAULT_COMPACTION_SETTINGS)
+    return shouldCompact(usage.tokens, usage.contextWindow, compactionSettings(usage.contextWindow))
   }
 
   #lastAssistant(session: AgentSession): PiAssistantMessage | undefined {

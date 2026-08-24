@@ -424,6 +424,86 @@ describe("pi 内存会话", () => {
     mock.stop()
   })
 
+  test("超过阈值但无可摘要内容时，手动压缩失败后下一轮仍可发送", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aizen-pi-compaction-recovery-"))
+    directories.push(directory)
+    const customProvidersPath = join(directory, "custom-providers.json")
+    await writeFile(
+      customProvidersPath,
+      JSON.stringify({
+        providers: {
+          "mock-anthropic": {
+            baseUrl: "http://127.0.0.1:1",
+            api: "anthropic-messages",
+            authHeader: false,
+            models: [{ id: "mock-recovery", input: ["text"], contextWindow: 32000, maxTokens: 4096 }],
+          },
+        },
+      }),
+    )
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), customProvidersPath })
+    const model = (await runtime.listModels()).find(
+      (item) => item.providerId === "mock-anthropic" && item.modelId === "mock-recovery",
+    )
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } })
+    mock.handle(() => ({ type: "text", text: "压缩失败后恢复成功" }))
+    runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+    const records: SessionRecord[] = [
+      {
+        kind: "turn_started",
+        recordId: "threshold-user",
+        turnId: "threshold-turn",
+        at: "2026-07-23T10:00:00.000Z",
+        viewId: null,
+        items: [
+          {
+            source: "user",
+            role: "user",
+            useLater: true,
+            parts: [{ kind: "text", text: "x".repeat(8000) }],
+          },
+        ],
+      },
+      {
+        kind: "message",
+        recordId: "threshold-assistant",
+        turnId: "threshold-turn",
+        at: "2026-07-23T10:00:01.000Z",
+        message: {
+          role: "assistant",
+          parts: [{ kind: "text", text: "已有回复" }],
+          source: { providerId: model.providerId, modelId: model.modelId, api: "anthropic-messages" },
+          stopReason: "stop",
+          usage: { input: 25000, output: 1, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+      {
+        kind: "turn_finished",
+        recordId: "threshold-finished",
+        turnId: "threshold-turn",
+        at: "2026-07-23T10:00:02.000Z",
+        outcome: "completed",
+      },
+    ]
+    await runtime.restore({ cwd: directory, model, view: emptyView, records })
+
+    await expect(runtime.compact()).rejects.toThrow("Nothing to compact (session too small)")
+    await expect(
+      runtime.prompt({
+        recordId: "recovery-user",
+        turnId: "recovery-turn",
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "继续对话" }] }],
+      }),
+    ).resolves.toBeUndefined()
+    expect(await mock.requests()).toHaveLength(1)
+    await runtime.dispose()
+    mock.stop()
+  })
+
   test("手动压缩因会话过小时失败后仍可继续对话", async () => {
     const { directory, runtime } = await makeRuntime()
     const model = (await runtime.listModels()).find(
