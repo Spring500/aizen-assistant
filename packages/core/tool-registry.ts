@@ -8,6 +8,10 @@ export type AizenToolDescriptor = {
   /** 与 JSON Schema 兼容的工具参数定义。 */
   parameters: JsonValue
   executionMode?: "parallel" | "sequential"
+  /** 工具激活时在默认系统提示词 Available tools 章节展示的一行摘要；未提供时自定义工具不进入该章节。 */
+  promptSnippet?: string
+  /** 工具激活时附加到默认系统提示词 Guidelines 章节的规则要点。 */
+  promptGuidelines?: string[]
 }
 
 export type AizenToolContent = { type: "text"; text: string } | { type: "image"; mimeType: string; data: string }

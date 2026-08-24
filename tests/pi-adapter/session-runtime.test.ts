@@ -113,6 +113,52 @@ describe("pi 内存会话", () => {
       expect(read).toBeDefined()
       expect(read?.description.length).toBeGreaterThan(0)
       expect(read?.parameters).toMatchObject({ type: "object" })
+      // 内置工具的 promptSnippet 与 promptGuidelines 必须保留并进入动态系统提示词。
+      expect(read?.promptGuidelines).toContain("Use read to examine files instead of cat or sed.")
+      expect(report.systemPrompt).toContain("Read file contents")
+      expect(report.systemPrompt).toContain("Use read to examine files instead of cat or sed.")
+    } finally {
+      mock.stop()
+      await runtime.dispose()
+    }
+  })
+
+  test("自定义工具透传 promptSnippet 与 promptGuidelines 到动态系统提示词", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    runtime.setToolRegistrations([
+      {
+        kind: "inProcess",
+        descriptor: {
+          name: "meta_tool",
+          label: "meta",
+          description: "带元数据的自定义工具",
+          parameters: { type: "object", properties: {} },
+          promptSnippet: "演示自定义工具摘要",
+          promptGuidelines: ["只在必要时使用自定义工具。", "调用后应汇报用途。"],
+        },
+        execute: async () => ({ content: [{ type: "text", text: "完成" }], details: undefined }),
+      },
+    ])
+    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } }).then((mock) => {
+      mock.handle(() => ({ type: "text", text: "完成" }))
+      return mock
+    })
+    try {
+      runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+      await runtime.create({ cwd: directory, model, view: emptyView })
+      const report = await runtime.describeRuntime()
+      expect(report.activeToolNames).toContain("meta_tool")
+      const custom = report.tools.find((tool) => tool.name === "meta_tool")
+      expect(custom).toBeDefined()
+      expect(custom?.promptGuidelines).toEqual(["只在必要时使用自定义工具。", "调用后应汇报用途。"])
+      // 自定义工具的摘要与规则必须进入动态系统提示词的 Available tools 与 Guidelines 章节。
+      expect(report.systemPrompt).toContain("演示自定义工具摘要")
+      expect(report.systemPrompt).toContain("只在必要时使用自定义工具。")
+      expect(report.systemPrompt).toContain("调用后应汇报用途。")
     } finally {
       mock.stop()
       await runtime.dispose()
