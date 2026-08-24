@@ -121,8 +121,14 @@ export function normalizeRequest(input: {
   signal: AbortSignal
 }): MockRequestContext {
   const { protocol, body } = input
-  const system = protocol === "anthropic-messages" ? text(body.system) : ""
   const messages = protocol === "anthropic-messages" ? anthropicMessages(body.messages) : openAiMessages(body.messages)
+  const system =
+    protocol === "anthropic-messages"
+      ? text(body.system)
+      : messages
+          .filter((message) => message.role === "system")
+          .map((message) => message.content)
+          .join("\n")
   const tools = protocol === "anthropic-messages" ? anthropicTools(body.tools) : openAiTools(body.tools)
   return {
     ...input,

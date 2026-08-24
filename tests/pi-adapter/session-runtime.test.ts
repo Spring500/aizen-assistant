@@ -368,14 +368,10 @@ describe("pi 内存会话", () => {
     expect(model).toBeDefined()
     if (!model) return
     await runtime.setRuntimeApiKey(model.providerId, "test-key")
-    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } })
-    mock.handle((request) => ({
-      type: "text",
-      text: JSON.stringify(request.system).includes("context summarization assistant") ? "text Mock 压缩摘要" : "完成",
-    }))
+    const mock = await startMockServer()
     runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
     const records: SessionRecord[] = []
-    for (let index = 0; index < 8; index += 1) {
+    for (let index = 0; index < 12; index += 1) {
       const turnId = `mock-turn-${index}`
       records.push(
         {
@@ -419,7 +415,38 @@ describe("pi 内存会话", () => {
     const events: PiPortEvent[] = []
     runtime.subscribe((event) => events.push(event))
     await runtime.compact()
-    expect(events.some((event) => event.type === "compaction" && event.summary.includes("Mock 压缩摘要"))).toBe(true)
+    const compacted = events.find((event) => event.type === "compaction")
+    expect(compacted?.type).toBe("compaction")
+    if (compacted?.type === "compaction") {
+      expect(compacted.summary).toContain("已压缩 18 段（用户 9、助手 9")
+      expect(compacted.summary).toContain("首段（用户）：“第 1 段")
+      expect(compacted.summary).toContain("末段（助手）：“完成”")
+      expect(compacted.summary).not.toContain("第 2 段")
+    }
+
+    await runtime.prompt({
+      recordId: "mock-after-compaction-user",
+      turnId: "mock-after-compaction-turn",
+      viewId: null,
+      items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "text 压缩后继续" }] }],
+    })
+    const requests = await mock.requests()
+    const summaryRequest = requests.find((request) =>
+      JSON.stringify(request.system).includes("context summarization assistant"),
+    )
+    const nextRequest = requests.at(-1)
+    expect(summaryRequest).toBeDefined()
+    expect(nextRequest).toBeDefined()
+    expect(JSON.stringify(nextRequest)).toContain("Mock 压缩摘要")
+    expect(JSON.stringify(nextRequest)).not.toContain("第 2 段：长上下文长上下文")
+    expect(JSON.stringify(nextRequest)).toContain("压缩后继续")
+    expect(JSON.stringify(nextRequest).length).toBeLessThan(JSON.stringify(summaryRequest).length / 2)
+    const reply = [...events].reverse().find((event) => event.type === "message" && event.record.role === "assistant")
+    expect(reply?.type).toBe("message")
+    if (reply?.type === "message" && reply.record.role === "assistant")
+      expect(reply.record.usage.input + reply.record.usage.cacheRead).toBeLessThan(
+        JSON.stringify(summaryRequest?.body).length / 2,
+      )
     await runtime.dispose()
     mock.stop()
   })
