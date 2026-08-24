@@ -1,11 +1,12 @@
+import { isSummarizationRequest, mockSummaryBehavior } from "./mock-server/behaviors/mock-summary.ts"
 import { encodeAnthropicEvents } from "./mock-server/encoders/anthropic-messages.ts"
 import { encodeOpenAiEvents } from "./mock-server/encoders/openai-completions.ts"
 import { normalizeRequest } from "./mock-server/normalize.ts"
 import { builtinMockBehavior, defaultMockModelBehaviors, type MockBehaviorId } from "./mock-server/registry.ts"
 import type { MockBehavior, MockEvent, MockProtocol, MockRequestContext } from "./mock-server/types.ts"
 
-export type { MockBehavior, MockEvent, MockProtocol, MockRequestContext } from "./mock-server/types.ts"
 export type { MockBehaviorId } from "./mock-server/registry.ts"
+export type { MockBehavior, MockEvent, MockProtocol, MockRequestContext } from "./mock-server/types.ts"
 
 export type MockResponse =
   | { type: "text"; text: string; inputTokens?: number; outputTokens?: number }
@@ -259,7 +260,12 @@ export async function startMockServer(options: MockServerOptions = {}): Promise<
           },
           { status: 404 },
         )
-      const behavior = behaviorId === "test-control" ? testControlBehavior : builtinMockBehavior(behaviorId)
+      const behavior =
+        behaviorId !== "test-control" && isSummarizationRequest(context)
+          ? mockSummaryBehavior
+          : behaviorId === "test-control"
+            ? testControlBehavior
+            : builtinMockBehavior(behaviorId)
       return responseForBehavior(behavior(copyContext(context)), context)
     },
   })

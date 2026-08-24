@@ -1,6 +1,6 @@
 import { expect } from "bun:test"
-import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { ModelRuntime } from "@earendil-works/pi-coding-agent"
+import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
 import { startMockServer } from "./mock-server.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
@@ -42,7 +42,7 @@ test("OpenAI 协议归一化请求并输出指定工具调用 ID", async () => {
   }
 })
 
-test("Anthropic Mock 按请求内容报告输入 token", async () => {
+test("Anthropic Mock 按与 pi 一致的字符近似报告输入 token", async () => {
   const mock = await startMockServer({ modelBehaviors: { "anthropic-usage": "test-control" } })
   const runtime = await ModelRuntime.create({ modelsPath: null, allowModelNetwork: false })
   await runtime.setRuntimeApiKey("anthropic", "test-key")
@@ -55,7 +55,8 @@ test("Anthropic Mock 按请求内容报告输入 token", async () => {
       { ...anthropic, id: "anthropic-usage", baseUrl: mock.url },
       { messages: [{ role: "user", content: longChinese, timestamp: Date.now() }] },
     )
-    expect(anthropicResult.usage.input).toBeGreaterThan(20000)
+    expect(anthropicResult.usage.input).toBeGreaterThan(6000)
+    expect(anthropicResult.usage.input).toBeLessThan(8000)
   } finally {
     mock.stop()
   }

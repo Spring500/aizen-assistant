@@ -667,6 +667,9 @@ export class PiSessionRuntime implements PiPort {
           summary: event.result.summary,
           firstKeptRecordId,
           tokensBefore: event.result.tokensBefore,
+          ...(event.result.estimatedTokensAfter === undefined
+            ? {}
+            : { estimatedTokensAfter: event.result.estimatedTokensAfter }),
         })
       }
     })

@@ -110,6 +110,7 @@ export type PiPortEvent =
       summary: string
       firstKeptRecordId: string
       tokensBefore: number
+      estimatedTokensAfter?: number
     }
   | { type: "settled" }
   | {
