@@ -1,3 +1,4 @@
+import { estimateMockTokens } from "../token-estimate.ts"
 import type { MockEvent, MockRequestContext } from "../types.ts"
 
 function sseData(data: unknown): Uint8Array {
@@ -7,13 +8,14 @@ function sseData(data: unknown): Uint8Array {
 /** 将抽象事件流编码为 OpenAI Chat Completions 协议的 SSE 响应。 */
 export function encodeOpenAiEvents(
   events: AsyncIterable<MockEvent>,
-  context: Pick<MockRequestContext, "modelId">,
+  context: Pick<MockRequestContext, "modelId" | "rawBody">,
 ): Response {
   const iterator = events[Symbol.asyncIterator]()
   const id = `chatcmpl_${crypto.randomUUID()}`
   let started = false
   let finished = false
   let toolIndex = 0
+  const estimatedInputTokens = estimateMockTokens(context.rawBody)
   const chunk = (
     delta: Record<string, unknown>,
     finishReason: string | null = null,
@@ -32,7 +34,15 @@ export function encodeOpenAiEvents(
         const next = await iterator.next()
         if (next.done) {
           if (!finished)
-            controller.enqueue(sseData(chunk({}, "stop", { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 })))
+            controller.enqueue(
+              sseData(
+                chunk({}, "stop", {
+                  prompt_tokens: estimatedInputTokens,
+                  completion_tokens: 1,
+                  total_tokens: estimatedInputTokens + 1,
+                }),
+              ),
+            )
           controller.enqueue(sseData("[DONE]"))
           controller.close()
           return
@@ -71,12 +81,13 @@ export function encodeOpenAiEvents(
         } else if (event.type === "finish") {
           finished = true
           const outputTokens = event.outputTokens ?? 1
+          const inputTokens = event.inputTokens ?? estimatedInputTokens
           controller.enqueue(
             sseData(
               chunk({}, event.reason === "toolUse" ? "tool_calls" : "stop", {
-                prompt_tokens: event.inputTokens ?? 1,
+                prompt_tokens: inputTokens,
                 completion_tokens: outputTokens,
-                total_tokens: (event.inputTokens ?? 1) + outputTokens,
+                total_tokens: inputTokens + outputTokens,
               }),
             ),
           )
