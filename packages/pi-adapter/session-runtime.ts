@@ -790,12 +790,14 @@ export class PiSessionRuntime implements PiPort {
     }
   }
 
-  /** 阈值压缩与 pi 原生自动压缩一致：不可压缩或摘要失败时跳过，不阻断普通对话。 */
-  async #tryThresholdCompaction(session: AgentSession): Promise<void> {
+  /** 自动压缩不可执行或摘要失败时返回 false，不以维护性失败覆盖正常对话结果。 */
+  async #tryAutomaticCompaction(session: AgentSession): Promise<boolean> {
     try {
       await this.#compactSession(session)
+      return true
     } catch {
-      // pi 的自动压缩入口在准备为空或摘要失败时返回 false；这里保持相同的降级语义。
+      // 自动压缩失败不得阻断普通对话；手动压缩仍由 compact() 原样报告错误。
+      return false
     }
   }
 
@@ -803,10 +805,11 @@ export class PiSessionRuntime implements PiPort {
     const assistant = this.#lastAssistant(session)
     if (!assistant || assistant.stopReason === "aborted") return
     if (isContextOverflow(assistant, session.model?.contextWindow ?? 0)) {
-      await this.#compactSession(session)
+      const compacted = await this.#tryAutomaticCompaction(session)
+      if (!compacted && assistant.stopReason === "error") this.#removeAssistantMessage(session, assistant)
       return
     }
-    if (this.#overCompactionThreshold(session)) await this.#tryThresholdCompaction(session)
+    if (this.#overCompactionThreshold(session)) await this.#tryAutomaticCompaction(session)
   }
 
   async #compactAfterPrompt(
@@ -817,18 +820,22 @@ export class PiSessionRuntime implements PiPort {
     const assistant = this.#lastAssistant(session)
     if (!assistant) return
     if (isContextOverflow(assistant, session.model?.contextWindow ?? 0)) {
-      if (assistant.stopReason === "stop") {
-        await this.#compactSession(session)
+      const compacted = await this.#tryAutomaticCompaction(session)
+      if (assistant.stopReason === "stop" || !compacted) {
+        if (!compacted && assistant.stopReason === "error") this.#removeAssistantMessage(session, assistant)
         return
       }
-      await this.#compactSession(session)
-      const messages = session.agent.state.messages
-      if (messages.at(-1) === assistant) session.agent.state.messages = messages.slice(0, -1)
+      this.#removeAssistantMessage(session, assistant)
       this.#restoreCurrentTurnMessages(session, currentMessages, persistentMessages)
       await session.agent.continue()
       return
     }
-    if (this.#overCompactionThreshold(session)) await this.#tryThresholdCompaction(session)
+    if (this.#overCompactionThreshold(session)) await this.#tryAutomaticCompaction(session)
+  }
+
+  #removeAssistantMessage(session: AgentSession, assistant: PiAssistantMessage): void {
+    const messages = session.agent.state.messages
+    if (messages.at(-1) === assistant) session.agent.state.messages = messages.slice(0, -1)
   }
 
   #restoreCurrentTurnMessages(

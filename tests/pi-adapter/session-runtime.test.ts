@@ -424,6 +424,183 @@ describe("pi 内存会话", () => {
     mock.stop()
   })
 
+  test("dev mock 连续大文本静默溢出压缩失败后仍可继续对话", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aizen-pi-mock-reproduction-"))
+    directories.push(directory)
+    const customProvidersPath = join(directory, "custom-providers.json")
+    await writeFile(
+      customProvidersPath,
+      JSON.stringify({
+        providers: {
+          "mock-anthropic": {
+            baseUrl: "http://127.0.0.1:1",
+            api: "anthropic-messages",
+            authHeader: false,
+            models: [{ id: "mock-reproduction", input: ["text"], contextWindow: 32000, maxTokens: 4096 }],
+          },
+        },
+      }),
+    )
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), customProvidersPath })
+    const model = (await runtime.listModels()).find(
+      (item) => item.providerId === "mock-anthropic" && item.modelId === "mock-reproduction",
+    )
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } })
+    let conversationRequests = 0
+    mock.handle(() => {
+      conversationRequests++
+      return { type: "text", text: `连续大文本回复-${conversationRequests}` }
+    })
+    runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+    await runtime.create({ cwd: directory, model, view: emptyView })
+    const events: PiPortEvent[] = []
+    runtime.subscribe((event) => events.push(event))
+
+    await runtime.prompt({
+      recordId: "reproduction-initial-record",
+      turnId: "reproduction-initial-turn",
+      viewId: null,
+      items: [
+        {
+          source: "user",
+          role: "user",
+          useLater: true,
+          parts: [{ kind: "text", text: `压缩前一轮\n${"连续大文本".repeat(700)}` }],
+        },
+      ],
+    })
+    await expect(runtime.compact()).rejects.toThrow("Nothing to compact (session too small)")
+
+    const requestsBeforeOverflow = (await mock.requests()).length
+    await expect(
+      runtime.prompt({
+        recordId: "reproduction-overflow-record",
+        turnId: "reproduction-overflow-turn",
+        viewId: null,
+        items: [
+          {
+            source: "user",
+            role: "user",
+            useLater: true,
+            parts: [{ kind: "text", text: `触发静默溢出\n${"继续输入".repeat(6000)}` }],
+          },
+        ],
+      }),
+    ).resolves.toBeUndefined()
+    expect((await mock.requests()).length).toBe(requestsBeforeOverflow + 1)
+    expect(conversationRequests).toBe(2)
+    const overflowReply = [...events]
+      .reverse()
+      .find(
+        (event) =>
+          event.type === "message" &&
+          event.record.role === "assistant" &&
+          event.record.parts.some((part) => part.kind === "text" && part.text === "连续大文本回复-2"),
+      )
+    expect(overflowReply?.type).toBe("message")
+    if (overflowReply?.type === "message" && overflowReply.record.role === "assistant") {
+      expect(overflowReply.record.stopReason).toBe("stop")
+      expect(overflowReply.record.usage.input + overflowReply.record.usage.cacheRead).toBeGreaterThan(32000)
+    }
+
+    await expect(
+      runtime.prompt({
+        recordId: "reproduction-next-record",
+        turnId: "reproduction-next-turn",
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "再次继续" }] }],
+      }),
+    ).resolves.toBeUndefined()
+    expect((await mock.requests()).length).toBe(requestsBeforeOverflow + 2)
+    expect(conversationRequests).toBe(3)
+    await runtime.dispose()
+    mock.stop()
+  })
+
+  test("Provider 溢出且自动压缩失败时保留原始错误并允许下一轮", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "aizen-pi-overflow-failure-"))
+    directories.push(directory)
+    const customProvidersPath = join(directory, "custom-providers.json")
+    await writeFile(
+      customProvidersPath,
+      JSON.stringify({
+        providers: {
+          "mock-anthropic": {
+            baseUrl: "http://127.0.0.1:1",
+            api: "anthropic-messages",
+            authHeader: false,
+            models: [{ id: "mock-overflow-failure", input: ["text"], contextWindow: 32000, maxTokens: 4096 }],
+          },
+        },
+      }),
+    )
+    const runtime = await PiSessionRuntime.create({ authPath: join(directory, "auth.json"), customProvidersPath })
+    const model = (await runtime.listModels()).find(
+      (item) => item.providerId === "mock-anthropic" && item.modelId === "mock-overflow-failure",
+    )
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const mock = await startMockServer({ modelBehaviors: { [model.modelId]: "test-control" } })
+    let conversationRequests = 0
+    mock.handle(() => {
+      conversationRequests++
+      if (conversationRequests === 1)
+        return {
+          type: "http_error",
+          status: 400,
+          body: { type: "error", error: { type: "invalid_request_error", message: "prompt is too long" } },
+        }
+      return { type: "text", text: "溢出失败后的下一轮成功" }
+    })
+    runtime.setModelBaseUrl(model.providerId, model.modelId, mock.url)
+    await runtime.create({ cwd: directory, model, view: emptyView })
+    const events: PiPortEvent[] = []
+    runtime.subscribe((event) => events.push(event))
+
+    await expect(
+      runtime.prompt({
+        recordId: "overflow-failure-record",
+        turnId: "overflow-failure-turn",
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "触发溢出" }] }],
+      }),
+    ).resolves.toBeUndefined()
+    expect(conversationRequests).toBe(1)
+    expect(
+      events.some(
+        (event) =>
+          event.type === "message" &&
+          event.record.role === "assistant" &&
+          event.record.stopReason === "error" &&
+          event.record.errorMessage?.includes("prompt is too long"),
+      ),
+    ).toBe(true)
+
+    await expect(
+      runtime.prompt({
+        recordId: "after-overflow-failure-record",
+        turnId: "after-overflow-failure-turn",
+        viewId: null,
+        items: [{ source: "user", role: "user", useLater: true, parts: [{ kind: "text", text: "继续下一轮" }] }],
+      }),
+    ).resolves.toBeUndefined()
+    expect(conversationRequests).toBe(2)
+    expect(
+      events.some(
+        (event) =>
+          event.type === "message" &&
+          event.record.role === "assistant" &&
+          event.record.parts.some((part) => part.kind === "text" && part.text === "溢出失败后的下一轮成功"),
+      ),
+    ).toBe(true)
+    await runtime.dispose()
+    mock.stop()
+  })
+
   test("超过阈值但无可摘要内容时，手动压缩失败后下一轮仍可发送", async () => {
     const directory = await mkdtemp(join(tmpdir(), "aizen-pi-compaction-recovery-"))
     directories.push(directory)
