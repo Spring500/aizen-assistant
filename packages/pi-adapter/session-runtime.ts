@@ -236,7 +236,7 @@ function auditedTools(
   const declaredIntentSchema = Type.String({
     minLength: 1,
     maxLength: 50,
-    description: "用不超过 50 个字符的一句话说明本次工具调用的目的，供用户阅读和审计",
+    description: "One sentence (max 50 characters) stating the purpose of this tool call, for user review and audit.",
   })
   return [
     createReadToolDefinition(cwd),
@@ -331,7 +331,7 @@ function registeredTools(
   const declaredIntentSchema = Type.String({
     minLength: 1,
     maxLength: 50,
-    description: "用不超过 50 个字符的一句话说明本次工具调用的目的，供用户阅读和审计",
+    description: "One sentence (max 50 characters) stating the purpose of this tool call, for user review and audit.",
   })
   return registrations.map((registration) => {
     const schema = registration.descriptor.parameters
