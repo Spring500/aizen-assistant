@@ -1,6 +1,8 @@
 package main
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -75,6 +77,126 @@ func TestExpectedChecksum(t *testing.T) {
 	}
 	if got := expectedChecksum(sums, "missing.zip"); got != "" {
 		t.Fatalf("缺失文件应返回空，got %q", got)
+	}
+}
+
+// GitHub latest 重定向 URL 仅接受目标仓库的 v 前缀 tag。
+func TestReleaseTagFromURL(t *testing.T) {
+	cases := []struct {
+		name    string
+		url     string
+		want    string
+		wantErr bool
+	}{
+		{"正式版本", "https://github.com/Spring500/aizen-assistant/releases/tag/v0.3.0", "v0.3.0", false},
+		{"编码后的 tag", "https://github.com/Spring500/aizen-assistant/releases/tag/v0.3.1%2Bbuild.1", "v0.3.1+build.1", false},
+		{"仓库不匹配", "https://github.com/other/repo/releases/tag/v0.3.0", "", true},
+		{"缺少版本", "https://github.com/Spring500/aizen-assistant/releases/latest", "", true},
+		{"缺少 v 前缀", "https://github.com/Spring500/aizen-assistant/releases/tag/0.3.0", "", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := releaseTagFromURL(c.url, "Spring500/aizen-assistant")
+			if (err != nil) != c.wantErr || got != c.want {
+				t.Fatalf("releaseTagFromURL() = %q, %v；期望 %q, wantErr=%v", got, err, c.want, c.wantErr)
+			}
+		})
+	}
+}
+
+// 正式版查询跟随网页重定向，并根据版本与平台构造确定性资产 URL，不读取 API JSON。
+func TestLatestStableRelease(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/Spring500/aizen-assistant/releases/latest":
+			http.Redirect(w, r, server.URL+"/Spring500/aizen-assistant/releases/tag/v0.3.0", http.StatusFound)
+		case "/Spring500/aizen-assistant/releases/tag/v0.3.0":
+			w.Header().Set("Content-Type", "text/html")
+			_, _ = w.Write([]byte("不是 JSON"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := newGithubClient("unused", "")
+	release, err := client.latestStableRelease(
+		server.URL+"/Spring500/aizen-assistant/releases/latest",
+		"Spring500/aizen-assistant",
+		server.URL+"/download",
+		"windows-x64",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.TagName != "v0.3.0" {
+		t.Fatalf("TagName = %q, want v0.3.0", release.TagName)
+	}
+	wantAssets := []releaseAsset{
+		{Name: "aizen-assistant-0.3.0-windows-x64.zip", BrowserDownloadURL: server.URL + "/download/v0.3.0/aizen-assistant-0.3.0-windows-x64.zip"},
+		{Name: "SHA256SUMS", BrowserDownloadURL: server.URL + "/download/v0.3.0/SHA256SUMS"},
+	}
+	if !reflect.DeepEqual(release.Assets, wantAssets) {
+		t.Fatalf("Assets = %+v, want %+v", release.Assets, wantAssets)
+	}
+}
+
+// 显式 Release API 保持既有 JSON 兼容行为。
+func TestLatestReleaseFromAPI(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/releases/latest" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"tag_name":"v0.4.0","assets":[{"id":7,"name":"asset.zip","browser_download_url":"https://example.test/asset.zip"}]}`))
+	}))
+	defer server.Close()
+
+	release, err := newGithubClient(server.URL, "").latestReleaseFromAPI()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.TagName != "v0.4.0" || len(release.Assets) != 1 || release.Assets[0].ID != 7 {
+		t.Fatalf("API 响应解析异常：%+v", release)
+	}
+}
+
+// 稳定版确定性下载地址即使环境中存在 token，也不应切换到资产 API。
+func TestDownloadStableAssetDoesNotUseAssetAPI(t *testing.T) {
+	var requestedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestedPath = r.URL.Path
+		_, _ = w.Write([]byte("stable-asset"))
+	}))
+	defer server.Close()
+
+	dest := filepath.Join(t.TempDir(), "asset.zip")
+	client := newGithubClient(server.URL, "secret")
+	asset := &releaseAsset{Name: "asset.zip", BrowserDownloadURL: server.URL + "/download/v0.3.0/asset.zip"}
+	if err := client.downloadAsset(asset, dest); err != nil {
+		t.Fatal(err)
+	}
+	if requestedPath != "/download/v0.3.0/asset.zip" {
+		t.Fatalf("下载地址 = %q，正式版不应切换到资产 API", requestedPath)
+	}
+}
+
+// 默认正式版不标记自定义 API；显式 --release-api 时才保留旧 API 兼容路径。
+func TestDefaultStableUpdateDoesNotUseAPI(t *testing.T) {
+	opts, err := parseUpdateArgs(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.customAPI {
+		t.Fatal("默认正式版不应使用自定义 API 路径")
+	}
+	custom, err := parseUpdateArgs([]string{"--release-api", "http://x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !custom.customAPI {
+		t.Fatal("显式 --release-api 应启用 API 兼容路径")
 	}
 }
 

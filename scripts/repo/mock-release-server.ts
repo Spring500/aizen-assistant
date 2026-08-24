@@ -4,13 +4,15 @@
  * 用法：
  *   bun run scripts/repo/mock-release-server.ts --assets-dir <目录> --version 0.1.0 --port 18081 [--draft]
  *
- * 提供四个端点（与 GitHub API 形状一致）：
- *   GET /releases/latest             最新正式发布；--draft 时返回 404（GitHub 的 latest 不含 Draft/Prerelease）
+ * 提供五个端点（覆盖 GitHub 网页与 API 形状）：
+ *   GET /Spring500/aizen-assistant/releases/latest   最新正式发布网页入口，重定向至 tag 页面
+ *   GET /Spring500/aizen-assistant/releases/tag/...  重定向目标页
+ *   GET /releases/latest             最新正式发布 API；--draft 时返回 404
  *   GET /releases                    发布列表（含 Draft；供 token 模式与 --pre 查询）
  *   GET /releases/assets/<id>        鉴权资产下载（需 Authorization 头；模拟 Draft 资产无匿名通道）
  *   GET /download/<version>/<文件>    匿名静态下载（对应 browser_download_url）
  *
- * 配合 install 脚本的 --api-url / --download-url 参数与 update 的 --release-api 参数即可脱离 GitHub 运行。
+ * 配合 install 脚本的 --latest-url / --api-url / --download-url 参数与 update 的 --release-api 参数即可脱离 GitHub 运行。
  */
 
 import { readdir } from "node:fs/promises"
@@ -45,6 +47,14 @@ async function main(): Promise<void> {
     idleTimeout: 120,
     async fetch(request) {
       const url = new URL(request.url)
+      if (url.pathname === "/Spring500/aizen-assistant/releases/latest") {
+        if (draft) return new Response("Not Found", { status: 404 })
+        return Response.redirect(`http://localhost:${port}/Spring500/aizen-assistant/releases/tag/v${version}`, 302)
+      }
+      if (url.pathname === `/Spring500/aizen-assistant/releases/tag/v${version}`) {
+        if (draft) return new Response("Not Found", { status: 404 })
+        return new Response("mock release page", { headers: { "Content-Type": "text/html" } })
+      }
       if (url.pathname === "/releases/latest") {
         // GitHub 的 releases/latest 不包含 Draft 与 Prerelease
         if (draft) return new Response("Not Found", { status: 404 })

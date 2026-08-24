@@ -26,16 +26,23 @@ func packageLauncherName() string {
 
 // updateOptions update 子命令的选项。
 type updateOptions struct {
-	releaseAPI string // API 基地址（--release-api；测试或自建镜像场景传入）
-	includePre bool   // --pre：查询含 Draft/Prerelease 的最高版本（Draft 需 token）
-	token      string // GITHUB_TOKEN：预发布测试用；空则匿名（仅见正式发布）
+	releaseAPI      string // API 基地址（--release-api；预发布或自建镜像场景传入）
+	customAPI       bool   // 是否显式指定 API；正式版默认路径不访问 GitHub REST API
+	includePre      bool   // --pre：查询含 Draft/Prerelease 的最高版本（Draft 需 token）
+	token           string // GITHUB_TOKEN：预发布测试用；空则匿名（仅见公开发布）
+	repository      string // GitHub 仓库，用于校验默认正式版网页重定向
+	latestURL       string // 最新正式版网页入口
+	releaseDownload string // Release 下载基地址，用于构造确定性资产 URL
 }
 
 // parseUpdateArgs 解析 update 子命令参数；--data-dir 接受并忽略（launcher 对任意调用形态注入默认参数）。
 func parseUpdateArgs(args []string) (*updateOptions, error) {
 	opts := &updateOptions{
-		releaseAPI: "https://api.github.com/repos/Spring500/aizen-assistant",
-		token:      os.Getenv("GITHUB_TOKEN"),
+		releaseAPI:      "https://api.github.com/repos/Spring500/aizen-assistant",
+		token:           os.Getenv("GITHUB_TOKEN"),
+		repository:      "Spring500/aizen-assistant",
+		latestURL:       "https://github.com/Spring500/aizen-assistant/releases/latest",
+		releaseDownload: "https://github.com/Spring500/aizen-assistant/releases/download",
 	}
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -45,6 +52,7 @@ func parseUpdateArgs(args []string) (*updateOptions, error) {
 				return nil, fmt.Errorf("--release-api 必须提供值")
 			}
 			opts.releaseAPI = args[i]
+			opts.customAPI = true
 		case "--pre":
 			opts.includePre = true
 		case "--data-dir":
@@ -74,12 +82,18 @@ func runUpdate(root string, args []string) int {
 		return 0
 	}
 
-	client := newGithubClient(opts.releaseAPI, opts.token)
+	clientToken := opts.token
+	if !opts.includePre {
+		clientToken = ""
+	}
+	client := newGithubClient(opts.releaseAPI, clientToken)
 	var target *release
 	if opts.includePre {
 		target, err = client.latestIncludingPrereleases()
+	} else if opts.customAPI {
+		target, err = client.latestReleaseFromAPI()
 	} else {
-		target, err = client.latestRelease()
+		target, err = client.latestStableRelease(opts.latestURL, opts.repository, opts.releaseDownload, record.Platform)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

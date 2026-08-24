@@ -11,9 +11,11 @@
 set -euo pipefail
 
 REPOSITORY="Spring500/aizen-assistant"
-# 发布 API 与下载基地址；可通过 --api-url / --download-url 覆盖（自建镜像或测试场景）。
+# 发布网页、API 与下载基地址；可通过 --latest-url / --api-url / --download-url 覆盖测试或镜像入口。
+RELEASE_LATEST="https://github.com/${REPOSITORY}/releases/latest"
 RELEASE_API="https://api.github.com/repos/${REPOSITORY}"
 RELEASE_DOWNLOAD="https://github.com/${REPOSITORY}/releases/download"
+CUSTOM_API=0
 # 首版已发布平台（与 release 矩阵保持一致；win/linux arm64 待验证后增补，Intel Mac 暂不支持）。
 SUPPORTED_PLATFORMS="linux-x64 darwin-arm64 windows-x64"
 HOME_DIR="${HOME:-}"
@@ -37,17 +39,18 @@ require_value() {
   fi
 }
 
-# 解析参数：--version / --install-dir / --api-url / --download-url / --token / --skip-path；兼容位置参数形式传入版本号。
+# 解析参数：--version / --install-dir / --latest-url / --api-url / --download-url / --token / --skip-path；兼容位置参数形式传入版本号。
 parse_arguments() {
   while [ $# -gt 0 ]; do
     case "$1" in
       --version) require_value "$1" "${2:-}"; REQUESTED_VERSION="$2"; shift 2 ;;
       --install-dir) require_value "$1" "${2:-}"; INSTALL_DIR="$2"; CONFIG_DIR="$(dirname "$INSTALL_DIR")"; VERSIONS_DIR="$CONFIG_DIR/versions"; DATA_DIR="$CONFIG_DIR/data"; CUSTOM_INSTALL_DIR=1; shift 2 ;;
-      --api-url) require_value "$1" "${2:-}"; RELEASE_API="$2"; shift 2 ;;
+      --latest-url) require_value "$1" "${2:-}"; RELEASE_LATEST="$2"; shift 2 ;;
+      --api-url) require_value "$1" "${2:-}"; RELEASE_API="$2"; CUSTOM_API=1; shift 2 ;;
       --download-url) require_value "$1" "${2:-}"; RELEASE_DOWNLOAD="$2"; shift 2 ;;
       --token) require_value "$1" "${2:-}"; TOKEN="$2"; shift 2 ;;
       --skip-path) SKIP_PATH=1; shift ;;
-      -h | --help) echo "用法：install.sh [版本号] [--version <v>] [--install-dir <目录>] [--api-url <url>] [--download-url <url>] [--token <gh-token>] [--skip-path]"; exit 0 ;;
+      -h | --help) echo "用法：install.sh [版本号] [--version <v>] [--install-dir <目录>] [--latest-url <url>] [--api-url <url>] [--download-url <url>] [--token <gh-token>] [--skip-path]"; exit 0 ;;
       *) if [ -z "$REQUESTED_VERSION" ]; then REQUESTED_VERSION="$1"; shift; else echo "未知参数：$1" >&2; exit 1; fi ;;
     esac
   done
@@ -87,12 +90,25 @@ detect_platform() {
   esac
 }
 
-# 查询最新发布版本号（去掉 v 前缀）。
+# 查询最新正式版本号（去掉 v 前缀）。默认通过 GitHub Releases 网页重定向取最终 tag，
+# 避免匿名 REST API 限流；显式 --api-url 时保留 JSON API 兼容路径。
 fetch_latest_version() {
-  curl -fsSL "${RELEASE_API}/releases/latest" |
-    grep -o '"tag_name"[[:space:]]*:[[:space:]]*"v[^"]*"' |
-    head -1 |
-    sed 's/.*"v\([^"]*\)"/\1/' || true
+  local tag final_url
+  if [ "$CUSTOM_API" -eq 1 ]; then
+    tag="$({ curl -fsSL "${RELEASE_API}/releases/latest" || true; } |
+      grep -o '"tag_name"[[:space:]]*:[[:space:]]*"v[^"]*"' |
+      head -1 |
+      sed 's/.*"\(v[^"]*\)"/\1/' || true)"
+  else
+    final_url="$(curl -fsSL -o /dev/null -w '%{url_effective}' "$RELEASE_LATEST" || true)"
+    case "$final_url" in
+      */"${REPOSITORY}"/releases/tag/v*) tag="${final_url##*/}" ;;
+      *) tag="" ;;
+    esac
+  fi
+  case "$tag" in
+    v?*) printf '%s\n' "${tag#v}" ;;
+  esac
 }
 
 # 计算文件的 SHA256（兼容 macOS 的 shasum 与 Linux 的 sha256sum）。
