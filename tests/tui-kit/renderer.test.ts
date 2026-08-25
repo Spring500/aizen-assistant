@@ -1,6 +1,7 @@
 import { expect } from "bun:test"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
-import { computeFooterHeight, setAizenTerminalTitle } from "../../packages/tui-kit/renderer.ts"
+import { computeFooterHeight } from "../../packages/tui-kit/footer-layout.ts"
+import { setAizenTerminalTitle } from "../../packages/tui-kit/renderer.ts"
 
 const test = createDiagnosticTest({ timeoutMs: 5_000 })
 

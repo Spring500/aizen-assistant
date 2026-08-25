@@ -1,6 +1,6 @@
 import { expect } from "bun:test"
 import { createDiagnosticTest } from "../utils/diagnostic-test.ts"
-import { KeyEvent, parseKeypress } from "@opentui/core"
+import { CliRenderEvents, KeyEvent, parseKeypress } from "@opentui/core"
 import { createTestRenderer } from "@opentui/core/testing"
 import { promptAuthInput } from "../../packages/tui-kit/auth-input.ts"
 import { OverlayManager } from "../../packages/tui-kit/overlay-manager.ts"
@@ -183,6 +183,48 @@ test("resize 会重算统一容器且关闭后不残留", async () => {
     expect(await pending).toBeUndefined()
     expect(setup.renderer.root.getRenderable("resize-selector-overlay")).toBeUndefined()
     expect(setup.renderer.footerHeight).toBe(9)
+  } finally {
+    overlays.dispose()
+    setup.renderer.destroy()
+  }
+})
+
+test("终端视口变化后关闭浮层恢复当前视口高度而非构造时快照", async () => {
+  const setup = await createTestRenderer({
+    width: 80,
+    height: 24,
+    screenMode: "split-footer",
+    footerHeight: 9,
+  })
+  // 模拟 renderer.ts syncFooterHeight：终端行数变化时按视口先更新 footerHeight。
+  // 注册顺序在 OverlayManager 之前，与 createAizenRenderer 的时序一致。
+  const simulateSyncFooterHeight = () => {
+    const terminalHeight = setup.renderer.terminalHeight
+    const next = Math.max(9, Math.min(Math.floor(terminalHeight / 2), terminalHeight - 2))
+    if (next !== setup.renderer.footerHeight) setup.renderer.footerHeight = next
+  }
+  setup.renderer.on(CliRenderEvents.RESIZE, simulateSyncFooterHeight)
+  const overlays = new OverlayManager(setup.renderer)
+  try {
+    const pending = selectItem(
+      overlays,
+      "viewport-resize-selector",
+      [
+        { name: "选项一", description: "", value: "first" },
+        { name: "选项二", description: "", value: "second" },
+      ],
+      { title: "视口变化" },
+    )
+    // 终端视口从 24 行变为 26 行：footerHeight 应更新为 13
+    setup.renderer.resize(80, 26)
+    await Bun.sleep(20)
+    await setup.renderOnce()
+    expect(setup.renderer.footerHeight).toBe(13)
+
+    setup.renderer.keyInput.emit("keypress", key("\x1b"))
+    expect(await pending).toBeUndefined()
+    // 关闭后恢复当前视口高度 13，而不是构造时的快照 9
+    expect(setup.renderer.footerHeight).toBe(13)
   } finally {
     overlays.dispose()
     setup.renderer.destroy()

@@ -11,6 +11,7 @@ import {
   type TextChunk,
   TextRenderable,
 } from "@opentui/core"
+import { computeFooterHeight } from "./footer-layout.ts"
 import { systemColors } from "./theme.ts"
 
 export type OverlayInput = {
@@ -164,16 +165,34 @@ export class OverlayManager {
   private baseFooterHeight: number
   private pendingError = ""
   private disposed = false
+  /** 上次校准 baseFooterHeight 时的终端行数，用于区分真实视口变化与 overlay 自身的高度调整。 */
+  private lastTerminalHeight = -1
 
   constructor(
     readonly renderer: CliRenderer,
     private onCtrlC?: () => void,
   ) {
     this.baseFooterHeight = renderer.footerHeight
+    this.lastTerminalHeight = renderer.terminalHeight
     renderer.keyInput.prependListener("keypress", this.routeKeypress)
     renderer.keyInput.prependListener("paste", this.routePaste)
-    renderer.on(CliRenderEvents.RESIZE, this.layout)
+    renderer.on(CliRenderEvents.RESIZE, this.onResize)
     renderer.once(CliRenderEvents.DESTROY, this.dispose)
+  }
+
+  /**
+   * 终端真实视口变化（行数变化）时，按新视口重新计算 baseFooterHeight；
+   * overlay 自身的 footerHeight 临时调整不改变终端行数，此时只重新布局。
+   * 这样 overlay 关闭后 footer 高度能恢复到与当前视口一致，不会停留在
+   * 构造时快照导致输入区等 footer 内容不可见。
+   */
+  private readonly onResize = (): void => {
+    const terminalHeight = this.renderer.terminalHeight
+    if (terminalHeight !== this.lastTerminalHeight) {
+      this.lastTerminalHeight = terminalHeight
+      this.baseFooterHeight = computeFooterHeight(terminalHeight)
+    }
+    this.layout()
   }
 
   get depth(): number {
@@ -349,7 +368,7 @@ export class OverlayManager {
     this.disposed = true
     this.renderer.keyInput.off("keypress", this.routeKeypress)
     this.renderer.keyInput.off("paste", this.routePaste)
-    this.renderer.off(CliRenderEvents.RESIZE, this.layout)
+    this.renderer.off(CliRenderEvents.RESIZE, this.onResize)
   }
 
   private readonly routeKeypress = (key: KeyEvent): void => {
