@@ -124,7 +124,6 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   const overlays = new OverlayManager(renderer)
   let exiting = false
   let authProviderName: string | undefined
-  let interactionDepth = 0
   let terminalTitle = ""
   let permissionReview: PermissionReviewController | undefined
   /** 等待 context_report 事件的单次回调；同时只会有一个 /context 请求。 */
@@ -324,14 +323,14 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
   })
 
   const beginInteraction = () => {
-    interactionDepth += 1
-    editor.setInputVisible(false)
+    // 不随浮层开关切换输入框显隐：浮层容器以全屏背景覆盖输入框（视觉上隐藏），
+    // 关闭后输入框无需经历可见性切换即可直接呈现，规避 OpenTUI 在
+    // display None→Flex 切换后输入框区域不重绘的原生渲染问题。
   }
   const endInteraction = () => {
-    interactionDepth -= 1
     const snapshot = core.getSnapshot()
-    // 交互菜单结束后恢复输入区；运行中同样保持可见（可输入但不可发送）。
-    editor.setInputVisible(!exiting && interactionDepth === 0 && !!snapshot.currentSessionId)
+    // 仅按会话与退出状态控制输入区；浮层开合不再参与显隐判断。
+    editor.setInputVisible(!exiting && !!snapshot.currentSessionId)
   }
 
   const unsubscribe = core.subscribe((event) => {
@@ -341,8 +340,8 @@ export async function runInteractiveApp(options: InteractiveAppOptions): Promise
       editor.setBusy(event.snapshot.status !== "idle")
 
       // 运行中保持输入区可见可输入（setBusy 负责暗淡与禁止发送）；
-      // 仅交互菜单（overlay）与退出时隐藏输入区。
-      editor.setInputVisible(!exiting && interactionDepth === 0 && !!event.snapshot.currentSessionId)
+      // 仅退出或无会话时隐藏输入区，浮层开合不再参与显隐判断。
+      editor.setInputVisible(!exiting && !!event.snapshot.currentSessionId)
       permissionReview?.update(event.snapshot.pendingPermissionRequests ?? [])
       if ((event.snapshot.pendingPermissionRequests ?? []).length === 0) permissionReview = undefined
     } else if (event.type === "permission_request") {
