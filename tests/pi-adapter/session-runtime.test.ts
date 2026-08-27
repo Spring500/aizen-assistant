@@ -1115,6 +1115,24 @@ describe("pi 内存会话", () => {
     await runtime.dispose()
   })
 
+  test("非法命名的技能不阻塞会话创建，照常加载（对齐 pi 警告仍加载）", async () => {
+    const { directory, runtime } = await makeRuntime()
+    const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
+    expect(model).toBeDefined()
+    if (!model) return
+    await runtime.setRuntimeApiKey(model.providerId, "test-key")
+    const viewDirectory = join(directory, "view")
+    const skillDirectory = join(viewDirectory, "skills", "PDF-Processing")
+    await mkdir(skillDirectory, { recursive: true })
+    await writeFile(join(skillDirectory, "SKILL.md"), "---\nname: PDF-Processing\ndescription: 处理 PDF 文档\n---\n")
+
+    // 技能名含大写字母只产生 pi 命名警告，会话应照常创建且技能照常进入系统提示词。
+    await runtime.create({ cwd: directory, model, view: viewResources(viewDirectory, "invalid-skill") })
+    const request = await captureRequest(runtime, model)
+    expect(request).toContain("PDF-Processing")
+    await runtime.dispose()
+  })
+
   test("空资源视图只加载内建提示词", async () => {
     const { directory, runtime } = await makeRuntime()
     const model = (await runtime.listModels()).find((item) => item.providerId === "anthropic")
