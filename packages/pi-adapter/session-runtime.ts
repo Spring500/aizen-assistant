@@ -562,7 +562,6 @@ export class PiSessionRuntime implements PiPort {
     })
     const initialLoader = createViewLoader(input.cwd, input.view, settingsManager)
     await initialLoader.reload()
-    this.#validateViewLoader(initialLoader, input.view.viewId)
     await this.#disposeSession()
     const resourceLoader = new MutableViewLoader(initialLoader)
     this.#viewLoader = resourceLoader
@@ -705,7 +704,6 @@ export class PiSessionRuntime implements PiPort {
     if (!this.#settingsManager || !this.#viewLoader || !this.#cwd) throw new Error("视图加载器尚未初始化")
     const loader = createViewLoader(this.#cwd, view, this.#settingsManager)
     await loader.reload()
-    this.#validateViewLoader(loader, view.viewId)
     this.#viewLoader.replace(loader)
     session.setActiveToolsByName(session.getActiveToolNames())
   }
@@ -1318,14 +1316,6 @@ export class PiSessionRuntime implements PiPort {
     } catch {
       return "other"
     }
-  }
-
-  #validateViewLoader(loader: ResourceLoader, viewId: ResolvedViewResources["viewId"]): void {
-    // 同名碰撞是三层技能（视图 > 用户 > 项目）的既定优先级，先到先得，不视为错误。
-    const diagnostics = loader.getSkills().diagnostics.filter((item) => item.type !== "collision")
-    if (viewId === null || diagnostics.length === 0) return
-    const details = diagnostics.map((item) => `${item.path ?? "Skill"}: ${item.message}`).join("；")
-    throw new Error(`视图 ${viewId} 的 Skill 无效：${details}`)
   }
 
   #requestAuthAnswer(prompt: AuthPrompt, signal: AbortSignal): Promise<string> {
